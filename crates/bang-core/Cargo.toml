@@ -6,7 +6,7 @@ license.workspace = true
 description = "Bang mail engine: IMAP/SMTP, OAuth2, sync, and SQLite store. No UI dependencies."
 
 [dependencies]
-bitflags = "2.13.2"
+bitflags = { version = "2.13.2", features = ["serde"] }
 chrono = "0.4.45"
 directories = "6.0.0"
 imap = "2.4.1"
