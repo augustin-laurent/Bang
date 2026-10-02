@@ -9,6 +9,9 @@ pub mod account;
 pub mod error;
 pub mod events;
 pub mod message;
+pub mod store;
+
+pub use store::Store;
 
 pub use account::{
     AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode,
