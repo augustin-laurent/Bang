@@ -8,9 +8,11 @@
 pub mod account;
 pub mod error;
 pub mod events;
+pub mod imap;
 pub mod message;
 pub mod store;
 
+pub use imap::{ImapConn, ImapSession, MailboxStatus, MetaMessage};
 pub use store::Store;
 
 pub use account::{
