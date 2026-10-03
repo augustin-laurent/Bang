@@ -1,0 +1,14 @@
+import { Theme } from "theme.slint";
+
+// Right pane: message reading area (filled in by later commits).
+export component ReadingPane inherits Rectangle {
+    background: Theme.reading-bg;
+
+    Text {
+        text: "Select a message to read it";
+        x: 16px;
+        y: 16px;
+        color: Theme.text-secondary;
+        font-size: 13px;
+    }
+}

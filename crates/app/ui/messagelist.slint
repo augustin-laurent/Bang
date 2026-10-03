@@ -1,0 +1,14 @@
+import { Theme } from "theme.slint";
+
+// Center pane: message list (filled in by later commits).
+export component MessageList inherits Rectangle {
+    background: Theme.bg;
+
+    Text {
+        text: "Select a folder to see messages";
+        x: 16px;
+        y: 16px;
+        color: Theme.text-secondary;
+        font-size: 13px;
+    }
+}

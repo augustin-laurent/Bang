@@ -1,0 +1,22 @@
+// Theme tokens for Bang (Spark-like palette, light and dark).
+export global Theme {
+    /// Whether the dark theme is active.
+    in property <bool> dark: false;
+
+    /// Window / message list background.
+    out property <color> bg: dark ? #1e1f22 : #ffffff;
+    /// Sidebar background.
+    out property <color> sidebar-bg: dark ? #17181a : #f5f6f8;
+    /// Reading pane background.
+    out property <color> reading-bg: dark ? #26272b : #ffffff;
+    /// Primary text.
+    out property <color> text: dark ? #e8e8e8 : #1a1a1a;
+    /// Secondary text.
+    out property <color> text-secondary: dark ? #9a9a9a : #6b6b6b;
+    /// Accent color.
+    out property <color> accent: #4c8bf5;
+    /// Hover / selection background.
+    out property <color> hover: dark ? #2a2b30 : #eef1f5;
+    /// Border color.
+    out property <color> border: dark ? #33343a : #e2e4e8;
+}

@@ -1,0 +1,23 @@
+import { Theme } from "theme.slint";
+
+// Left sidebar: account and folder list (filled in by later commits).
+export component Sidebar inherits Rectangle {
+    background: Theme.sidebar-bg;
+
+    Text {
+        text: "Bang";
+        x: 12px;
+        y: 12px;
+        color: Theme.accent;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    Text {
+        text: "No accounts yet";
+        x: 12px;
+        y: 44px;
+        color: Theme.text-secondary;
+        font-size: 12px;
+    }
+}

@@ -1,15 +1,59 @@
-// Bang main window (stub — layout arrives in later commits).
+import { Theme } from "theme.slint";
+import { Sidebar } from "sidebar.slint";
+import { MessageList } from "messagelist.slint";
+import { ReadingPane } from "readingpane.slint";
+
+// Bang main window: three-pane layout (sidebar, message list, reading pane).
 export component BangApp inherits Window {
     title: "Bang";
-    preferred-width: 1024px;
-    preferred-height: 640px;
+    preferred-width: 1100px;
+    preferred-height: 680px;
+    min-width: 720px;
+    min-height: 420px;
 
-    Rectangle {
-        background: #ffffff;
-        Text {
-            text: "Bang";
-            x: 16px;
-            y: 16px;
+    HorizontalLayout {
+        padding: 0;
+        spacing: 0;
+
+        Sidebar {
+            width: 220px;
+        }
+
+        VerticalLayout {
+            spacing: 0;
+
+            // Toolbar (search bar and actions arrive in later commits).
+            Rectangle {
+                height: 48px;
+                background: Theme.bg;
+
+                Text {
+                    text: "Inbox";
+                    x: 16px;
+                    y: 14px;
+                    color: Theme.text;
+                    font-size: 15px;
+                    font-weight: 600;
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            MessageList {
+                min-width: 280px;
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+
+        ReadingPane {
+            min-width: 320px;
         }
     }
 }
