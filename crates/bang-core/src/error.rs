@@ -11,7 +11,7 @@ pub enum Error {
 
     /// SMTP protocol or connection error.
     #[error("SMTP error: {0}")]
-    Smtp(#[from] lettre::error::Error),
+    Smtp(#[from] lettre::transport::smtp::Error),
 
     /// MIME parsing error.
     #[error("MIME parse error: {0}")]

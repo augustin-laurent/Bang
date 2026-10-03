@@ -11,6 +11,7 @@ pub mod events;
 pub mod imap;
 pub mod message;
 pub mod oauth;
+pub mod smtp;
 pub mod store;
 
 pub use imap::{ImapConn, ImapSession, MailboxStatus, MetaMessage};

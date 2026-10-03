@@ -11,7 +11,7 @@ chrono = "0.4.45"
 directories = "6.0.0"
 imap = "2.4.1"
 imap-proto = "0.10.2"
-lettre = { version = "0.11.23", features = ["tokio1", "tokio1-rustls-tls", "builder"], default-features = false }
+lettre = { version = "0.11.23", features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"], default-features = false }
 mail-parser = "1.0.0"
 native-tls = "0.2.18"
 oauth2 = "5.0.0"
