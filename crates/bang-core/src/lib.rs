@@ -10,6 +10,7 @@ pub mod error;
 pub mod events;
 pub mod imap;
 pub mod message;
+pub mod mime;
 pub mod oauth;
 pub mod smtp;
 pub mod store;
