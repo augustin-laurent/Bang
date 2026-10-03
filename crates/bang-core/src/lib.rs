@@ -14,6 +14,9 @@ pub mod mime;
 pub mod oauth;
 pub mod smtp;
 pub mod store;
+pub mod sync;
+
+pub use sync::{start_syncer, SyncerCommand};
 
 pub use imap::{ImapConn, ImapSession, MailboxStatus, MetaMessage};
 pub use store::Store;

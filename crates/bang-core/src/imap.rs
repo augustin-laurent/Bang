@@ -229,6 +229,94 @@ pub enum ImapConn {
 }
 
 impl ImapConn {
+    /// List all folder paths (selectable mailboxes only).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn list_folders(&mut self) -> Result<Vec<String>> {
+        match self {
+            ImapConn::Tls(s) => s.list_folders(),
+            ImapConn::Plain(s) => s.list_folders(),
+        }
+    }
+
+    /// Select a folder and return its status.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn select(&mut self, path: &str) -> Result<MailboxStatus> {
+        match self {
+            ImapConn::Tls(s) => s.select(path),
+            ImapConn::Plain(s) => s.select(path),
+        }
+    }
+
+    /// Fetch metadata for a UID set.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_meta(&mut self, uid_set: &str) -> Result<Vec<MetaMessage>> {
+        match self {
+            ImapConn::Tls(s) => s.fetch_meta(uid_set),
+            ImapConn::Plain(s) => s.fetch_meta(uid_set),
+        }
+    }
+
+    /// Fetch the full raw message for a UID.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_body(&mut self, uid: u32) -> Result<Vec<u8>> {
+        match self {
+            ImapConn::Tls(s) => s.fetch_body(uid),
+            ImapConn::Plain(s) => s.fetch_body(uid),
+        }
+    }
+
+    /// Add or remove flags on a UID set.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn set_flags(&mut self, uid_set: &str, flags: &str, add: bool) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.set_flags(uid_set, flags, add),
+            ImapConn::Plain(s) => s.set_flags(uid_set, flags, add),
+        }
+    }
+
+    /// Wait for mailbox changes (IMAP IDLE), up to `timeout`.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn idle_wait(&mut self, timeout: Duration) -> Result<bool> {
+        match self {
+            ImapConn::Tls(s) => s.idle_wait(timeout),
+            ImapConn::Plain(s) => s.idle_wait(timeout),
+        }
+    }
+
+    /// Close the selected mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn close(&mut self) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.close(),
+            ImapConn::Plain(s) => s.close(),
+        }
+    }
+
+    /// Log out.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn logout(&mut self) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.logout(),
+            ImapConn::Plain(s) => s.logout(),
+        }
+    }
+
     /// Connect and authenticate to an IMAP server.
     ///
     /// # Errors

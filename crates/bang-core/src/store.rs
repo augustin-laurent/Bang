@@ -378,9 +378,12 @@ impl Store {
 
     /// Insert or update a message summary (matched on account + folder + UID).
     ///
+    /// # Returns
+    /// The local store id of the message.
+    ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
-    pub fn upsert_message(&self, msg: &MessageSummary) -> Result<()> {
+    pub fn upsert_message(&self, msg: &MessageSummary) -> Result<i64> {
         let conn = self.lock()?;
         let to = serde_json::to_string(&msg.to).map_err(|e| Error::Store(e.to_string()))?;
         let cc = serde_json::to_string(&msg.cc).map_err(|e| Error::Store(e.to_string()))?;
@@ -417,7 +420,63 @@ impl Store {
             ],
         )
         .map_err(|e| Error::Store(e.to_string()))?;
-        Ok(())
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM messages WHERE account_id = ?1 AND folder_id = ?2 AND uid = ?3",
+                params![msg.account_id, msg.folder_id, msg.uid],
+                |r| r.get(0),
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(id)
+    }
+
+    /// Get a message summary by account, folder, and IMAP UID.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn get_message_by_uid(
+        &self,
+        account_id: &str,
+        folder_id: i64,
+        uid: u32,
+    ) -> Result<Option<MessageSummary>> {
+        let conn = self.lock()?;
+        let row: Option<MessageSummary> = conn
+            .query_row(
+                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, to, cc,
+                        subject, date, flags, preview, has_attachments
+                 FROM messages WHERE account_id = ?1 AND folder_id = ?2 AND uid = ?3",
+                params![account_id, folder_id, uid],
+                Self::row_to_summary,
+            )
+            .optional()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(row)
+    }
+
+    /// Get a folder by its local store id.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn get_folder_by_id(&self, id: i64) -> Result<Option<Folder>> {
+        let conn = self.lock()?;
+        let row: Option<Folder> = conn
+            .query_row(
+                "SELECT id, account_id, name, path, unread FROM folders WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(Folder {
+                        id: r.get(0)?,
+                        account_id: r.get(1)?,
+                        name: r.get(2)?,
+                        path: r.get(3)?,
+                        unread: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(row)
     }
 
     /// List the most recent messages of a folder (newest first).
