@@ -12,10 +12,12 @@ pub mod imap;
 pub mod message;
 pub mod mime;
 pub mod oauth;
+pub mod service;
 pub mod smtp;
 pub mod store;
 pub mod sync;
 
+pub use service::MailService;
 pub use sync::{start_syncer, SyncerCommand};
 
 pub use imap::{ImapConn, ImapSession, MailboxStatus, MetaMessage};

@@ -1,0 +1,17 @@
+// Row types shared between the panes.
+export struct FolderRow {
+    id: int,
+    name: string,
+    unread: int,
+}
+
+export struct MessageRow {
+    id: int,
+    sender: string,
+    subject: string,
+    date: string,
+    preview: string,
+    unread: bool,
+    starred: bool,
+    has-attachments: bool,
+}

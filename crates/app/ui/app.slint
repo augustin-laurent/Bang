@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { FolderRow, MessageRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
@@ -11,12 +12,28 @@ export component BangApp inherits Window {
     min-width: 720px;
     min-height: 420px;
 
+    // Data, set from Rust.
+    in property <[FolderRow]> folders;
+    in-out property <[MessageRow]> messages;
+    in property <int> selected-folder: -1;
+    in property <int> selected-message: -1;
+    in property <string> folder-name: "";
+    in property <string> account-status: "";
+    in property <string> status-message: "";
+    in property <string> message-sender: "";
+    in property <string> message-subject: "";
+    in property <string> message-date: "";
+    in property <string> message-body: "";
+
     HorizontalLayout {
         padding: 0;
         spacing: 0;
 
         Sidebar {
             width: 220px;
+            folders: root.folders;
+            selected-folder: root.selected-folder;
+            account-status: root.account-status;
         }
 
         VerticalLayout {
@@ -28,12 +45,21 @@ export component BangApp inherits Window {
                 background: Theme.bg;
 
                 Text {
-                    text: "Inbox";
+                    text: root.folder-name == "" ? "Inbox" : root.folder-name;
                     x: 16px;
                     y: 14px;
                     color: Theme.text;
                     font-size: 15px;
                     font-weight: 600;
+                }
+
+                Text {
+                    visible: root.status-message != "";
+                    text: root.status-message;
+                    x: 16px;
+                    y: 30px;
+                    color: Theme.text-secondary;
+                    font-size: 11px;
                 }
             }
 
@@ -44,6 +70,8 @@ export component BangApp inherits Window {
 
             MessageList {
                 min-width: 280px;
+                messages: root.messages;
+                selected-message: root.selected-message;
             }
         }
 
@@ -54,6 +82,10 @@ export component BangApp inherits Window {
 
         ReadingPane {
             min-width: 320px;
+            sender: root.message-sender;
+            subject: root.message-subject;
+            date: root.message-date;
+            body: root.message-body;
         }
     }
 }

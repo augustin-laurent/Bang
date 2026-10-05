@@ -1,14 +1,67 @@
+import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { MessageRow } from "models.slint";
 
-// Center pane: message list (filled in by later commits).
+// Center pane: message list.
 export component MessageList inherits Rectangle {
     background: Theme.bg;
 
-    Text {
-        text: "Select a folder to see messages";
+    in property <[MessageRow]> messages;
+    in property <int> selected-message: -1;
+
+    if root.messages.length == 0: Text {
+        text: "No messages";
         x: 16px;
         y: 16px;
         color: Theme.text-secondary;
         font-size: 13px;
+    }
+
+    ListView {
+        for msg in root.messages: Rectangle {
+            height: 56px;
+            background: msg.id == root.selected-message ? Theme.hover : transparent;
+
+            Text {
+                text: msg.sender;
+                x: 12px;
+                y: 8px;
+                width: parent.width - 120px;
+                color: msg.unread ? Theme.text : Theme.text-secondary;
+                font-size: 13px;
+                font-weight: msg.unread ? 600 : 400;
+                overflow: elide;
+            }
+
+            Text {
+                text: msg.date;
+                x: parent.width - 90px;
+                y: 8px;
+                width: 78px;
+                color: Theme.text-secondary;
+                font-size: 11px;
+                overflow: elide;
+            }
+
+            Text {
+                text: msg.subject;
+                x: 12px;
+                y: 28px;
+                width: parent.width - 120px;
+                color: Theme.text;
+                font-size: 13px;
+                overflow: elide;
+            }
+
+            Text {
+                text: msg.preview;
+                x: 12px;
+                y: 42px;
+                width: parent.width - 120px;
+                color: Theme.text-secondary;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
     }
 }

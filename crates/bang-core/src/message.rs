@@ -129,3 +129,15 @@ pub enum AccountStatus {
     /// Connection failed; retrying with backoff.
     Reconnecting,
 }
+
+impl std::fmt::Display for AccountStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Disconnected => "disconnected",
+            Self::Syncing => "syncing…",
+            Self::Connected => "connected",
+            Self::Reconnecting => "reconnecting…",
+        };
+        f.write_str(s)
+    }
+}
