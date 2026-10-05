@@ -1,4 +1,4 @@
-import { ListView } from "std-widgets.slint";
+import { Button, ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { FolderRow } from "models.slint";
 
@@ -9,6 +9,8 @@ export component Sidebar inherits Rectangle {
     in property <[FolderRow]> folders;
     in property <int> selected-folder: -1;
     in property <string> account-status: "";
+
+    callback add-account;
 
     VerticalLayout {
         padding: 8px;
@@ -50,6 +52,13 @@ export component Sidebar inherits Rectangle {
                     color: Theme.accent;
                     font-size: 12px;
                 }
+            }
+        }
+
+        Button {
+            text: "+ Add account";
+            clicked => {
+                root.add-account();
             }
         }
     }

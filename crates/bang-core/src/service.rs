@@ -10,19 +10,21 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::account::{AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode};
 use crate::error::Error;
 use crate::events::{MailEvent, UiCommand};
+use crate::message::AccountStatus;
 use crate::store::Store;
 use crate::sync::{start_syncer, SyncerCommand};
 
 /// Owns the store and one syncer per account.
 ///
-/// Commands are handled synchronously; long-running work (SMTP sends) is
-/// spawned on the ambient tokio runtime.
+/// Commands are handled synchronously; long-running work (SMTP sends and
+/// OAuth logins) is spawned on the ambient tokio runtime.
 pub struct MailService {
     store: Arc<Store>,
     events_tx: UnboundedSender<MailEvent>,
-    syncers: Mutex<HashMap<String, std_mpsc::Sender<SyncerCommand>>>,
+    syncers: Arc<Mutex<HashMap<String, std_mpsc::Sender<SyncerCommand>>>>,
 }
 
 impl MailService {
@@ -35,8 +37,15 @@ impl MailService {
         Self {
             store,
             events_tx,
-            syncers: Mutex::new(HashMap::new()),
+            syncers: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Register a new account and start its syncer.
+    fn add_account(&self, config: AccountConfig) {
+        let _ = self.store.save_account(&config);
+        let tx = start_syncer(config.clone(), self.store.clone(), self.events_tx.clone());
+        self.syncers.lock().unwrap().insert(config.id.0.clone(), tx);
     }
 
     /// Handle a command from the UI.
@@ -45,12 +54,60 @@ impl MailService {
     pub fn handle_command(&self, cmd: UiCommand) {
         match cmd {
             UiCommand::AddAccount(config) => {
-                let _ = self.store.save_account(&config);
-                let tx = start_syncer(config.clone(), self.store.clone(), self.events_tx.clone());
-                self.syncers
-                    .lock()
-                    .unwrap()
-                    .insert(config.id.0.clone(), tx);
+                self.add_account(config);
+            }
+            UiCommand::OAuthLogin {
+                provider,
+                client_id,
+            } => {
+                let store = self.store.clone();
+                let events_tx = self.events_tx.clone();
+                let syncers = self.syncers.clone();
+                tokio::spawn(async move {
+                    let result = async {
+                        let tokens = crate::oauth::start_flow(provider, &client_id).await?;
+                        let email =
+                            crate::oauth::fetch_email(provider, &tokens.access_token).await?;
+                        Ok::<_, Error>((tokens, email))
+                    }
+                    .await;
+                    match result {
+                        Ok((tokens, email)) => {
+                            let config = AccountConfig {
+                                id: AccountId(email.clone()),
+                                email: email.clone(),
+                                imap: default_imap(provider),
+                                smtp: default_smtp(provider),
+                                auth: AuthMethod::OAuth2 {
+                                    provider,
+                                    access_token: tokens.access_token,
+                                    refresh_token: tokens.refresh_token,
+                                    expires_at: tokens.expires_at,
+                                },
+                            };
+                            let tx = start_syncer(
+                                config.clone(),
+                                store.clone(),
+                                events_tx.clone(),
+                            );
+                            syncers
+                                .lock()
+                                .unwrap()
+                                .insert(config.id.0.clone(), tx);
+                            let _ = store.save_account(&config);
+                            let _ = events_tx.send(MailEvent::AccountStatus {
+                                account: config.id,
+                                status: AccountStatus::Syncing,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = events_tx.send(MailEvent::Error {
+                                account: None,
+                                message: format!("Sign-in failed: {e}"),
+                            });
+                        }
+                    }
+                });
             }
             UiCommand::RemoveAccount(id) => {
                 if let Some(tx) = self.syncers.lock().unwrap().remove(&id.0) {
@@ -155,5 +212,37 @@ impl MailService {
                 }
             }
         }
+    }
+}
+
+/// Default IMAP endpoint for an OAuth provider.
+fn default_imap(provider: OAuthProvider) -> ImapConfig {
+    match provider {
+        OAuthProvider::Google => ImapConfig {
+            host: "imap-mail.google.com".into(),
+            port: 993,
+            tls: TlsMode::Tls,
+        },
+        OAuthProvider::Microsoft => ImapConfig {
+            host: "outlook.office365.com".into(),
+            port: 993,
+            tls: TlsMode::Tls,
+        },
+    }
+}
+
+/// Default SMTP endpoint for an OAuth provider.
+fn default_smtp(provider: OAuthProvider) -> SmtpConfig {
+    match provider {
+        OAuthProvider::Google => SmtpConfig {
+            host: "smtp-mail.google.com".into(),
+            port: 465,
+            tls: TlsMode::Tls,
+        },
+        OAuthProvider::Microsoft => SmtpConfig {
+            host: "smtp.office365.com".into(),
+            port: 587,
+            tls: TlsMode::Starttls,
+        },
     }
 }

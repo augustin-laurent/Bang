@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 pub enum UiCommand {
     /// Add an account and start syncing it.
     AddAccount(AccountConfig),
+    /// Run an interactive OAuth2 login and add the resulting account.
+    OAuthLogin {
+        /// Provider to authenticate against.
+        provider: crate::account::OAuthProvider,
+        /// OAuth2 client id from the local config.
+        client_id: String,
+    },
     /// Remove an account and stop its syncer.
     RemoveAccount(AccountId),
     /// Select a folder (loads its messages).

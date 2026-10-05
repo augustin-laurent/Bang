@@ -18,6 +18,7 @@ use crate::state::UiState;
 use crate::BangApp;
 
 /// Handle to the mail core running on the background tokio runtime.
+#[derive(Clone)]
 pub struct Bridge {
     cmd_tx: UnboundedSender<UiCommand>,
 }

@@ -1,0 +1,152 @@
+import { Button, CheckBox, LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// Account wizard overlay: OAuth sign-in or a generic IMAP/SMTP form.
+export component AccountWizard inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> status: "";
+
+    // Generic form fields (read from Rust on submit).
+    in-out property <string> email;
+    in-out property <string> imap-host;
+    in-out property <string> imap-port: "993";
+    in-out property <string> smtp-host;
+    in-out property <string> smtp-port: "465";
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <bool> starttls: false;
+
+    callback oauth-clicked(provider: string);
+    callback add-generic();
+    callback cancel();
+
+    visible: root.open;
+    background: #00000080;
+    width: 100%;
+    height: 100%;
+
+    Rectangle {
+        width: 440px;
+        height: 520px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.bg;
+        border-radius: 12px;
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 8px;
+
+            Text {
+                text: "Add account";
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "Sign in with";
+                color: Theme.text-secondary;
+                font-size: 12px;
+            }
+
+            Button {
+                text: "Google (Gmail)";
+                clicked => {
+                    root.oauth-clicked("google");
+                }
+            }
+
+            Button {
+                text: "Microsoft (Outlook)";
+                clicked => {
+                    root.oauth-clicked("microsoft");
+                }
+            }
+
+            Text {
+                text: "— or add a generic IMAP/SMTP account —";
+                color: Theme.text-secondary;
+                font-size: 12px;
+            }
+
+            LineEdit {
+                text <=> root.email;
+                placeholder-text: "Email address";
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                LineEdit {
+                    text <=> root.imap-host;
+                    placeholder-text: "IMAP host";
+                }
+
+                LineEdit {
+                    text <=> root.imap-port;
+                    placeholder-text: "993";
+                    width: 70px;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                LineEdit {
+                    text <=> root.smtp-host;
+                    placeholder-text: "SMTP host";
+                }
+
+                LineEdit {
+                    text <=> root.smtp-port;
+                    placeholder-text: "465";
+                    width: 70px;
+                }
+            }
+
+            CheckBox {
+                text: "Use STARTTLS instead of direct TLS";
+                checked <=> root.starttls;
+            }
+
+            LineEdit {
+                text <=> root.username;
+                placeholder-text: "Username";
+            }
+
+            LineEdit {
+                text <=> root.password;
+                placeholder-text: "Password";
+            }
+
+            Text {
+                visible: root.status != "";
+                text: root.status;
+                color: Theme.accent;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+
+                Button {
+                    text: "Cancel";
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    text: "Add account";
+                    primary: true;
+                    clicked => {
+                        root.add-generic();
+                    }
+                }
+            }
+        }
+    }
+}

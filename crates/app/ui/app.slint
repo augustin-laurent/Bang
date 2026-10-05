@@ -3,6 +3,7 @@ import { FolderRow, MessageRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
+import { AccountWizard } from "accountwizard.slint";
 
 // Bang main window: three-pane layout (sidebar, message list, reading pane).
 export component BangApp inherits Window {
@@ -25,6 +26,24 @@ export component BangApp inherits Window {
     in property <string> message-date: "";
     in property <string> message-body: "";
 
+    // Account wizard.
+    in-out property <bool> wizard-open: false;
+    in property <string> wizard-status: "";
+
+    // Generic account form (read from Rust on submit).
+    in-out property <string> email;
+    in-out property <string> imap-host;
+    in-out property <string> imap-port: "993";
+    in-out property <string> smtp-host;
+    in-out property <string> smtp-port: "465";
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <bool> starttls: false;
+
+    callback wizard-oauth-clicked(provider: string);
+    callback wizard-add-generic();
+    callback wizard-cancel();
+
     HorizontalLayout {
         padding: 0;
         spacing: 0;
@@ -34,6 +53,9 @@ export component BangApp inherits Window {
             folders: root.folders;
             selected-folder: root.selected-folder;
             account-status: root.account-status;
+            add-account => {
+                root.wizard-open = true;
+            }
         }
 
         VerticalLayout {
@@ -86,6 +108,28 @@ export component BangApp inherits Window {
             subject: root.message-subject;
             date: root.message-date;
             body: root.message-body;
+        }
+    }
+
+    AccountWizard {
+        open: root.wizard-open;
+        status: root.wizard-status;
+        email <=> root.email;
+        imap-host <=> root.imap-host;
+        imap-port <=> root.imap-port;
+        smtp-host <=> root.smtp-host;
+        smtp-port <=> root.smtp-port;
+        username <=> root.username;
+        password <=> root.password;
+        starttls <=> root.starttls;
+        oauth-clicked(provider) => {
+            root.wizard-oauth-clicked(provider);
+        }
+        add-generic => {
+            root.wizard-add-generic();
+        }
+        cancel => {
+            root.wizard-cancel();
         }
     }
 }

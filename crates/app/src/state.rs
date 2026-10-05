@@ -93,7 +93,9 @@ impl UiState {
                 });
             }
             MailEvent::Error { message, .. } => {
-                ui.set_status_message(message.into());
+                ui.set_status_message(message.clone().into());
+                // The wizard stays open during OAuth; show failures there too.
+                ui.set_wizard_status(message.into());
             }
         }
     }
