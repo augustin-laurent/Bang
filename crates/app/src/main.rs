@@ -101,7 +101,8 @@ fn wire_selection(
                 ui.set_message_sender(state::display_name(&summary.from).into());
                 ui.set_message_subject(summary.subject.clone().into());
                 ui.set_message_date(state::format_date(summary.date).into());
-                ui.set_message_body("".into());
+                // The body arrives via MessageLoaded (store cache or IMAP fetch).
+                ui.set_message_body("Loading…".into());
                 bridge.send(bang_core::UiCommand::OpenMessage {
                     account: bang_core::AccountId(summary.account_id),
                     message_id: id,
