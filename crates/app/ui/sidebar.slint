@@ -11,6 +11,7 @@ export component Sidebar inherits Rectangle {
     in property <string> account-status: "";
 
     callback add-account;
+    callback folder-clicked(id: int);
 
     VerticalLayout {
         padding: 8px;
@@ -36,6 +37,12 @@ export component Sidebar inherits Rectangle {
                 height: 28px;
                 border-radius: 6px;
                 background: folder.id == root.selected-folder ? Theme.hover : transparent;
+
+                TouchArea {
+                    clicked => {
+                        root.folder-clicked(folder.id);
+                    }
+                }
 
                 Text {
                     text: folder.name;

@@ -44,6 +44,9 @@ export component BangApp inherits Window {
     callback wizard-add-generic();
     callback wizard-cancel();
 
+    callback folder-selected(id: int);
+    callback message-selected(id: int);
+
     HorizontalLayout {
         padding: 0;
         spacing: 0;
@@ -55,6 +58,9 @@ export component BangApp inherits Window {
             account-status: root.account-status;
             add-account => {
                 root.wizard-open = true;
+            }
+            folder-clicked(id) => {
+                root.folder-selected(id);
             }
         }
 
@@ -94,6 +100,9 @@ export component BangApp inherits Window {
                 min-width: 280px;
                 messages: root.messages;
                 selected-message: root.selected-message;
+                message-clicked(id) => {
+                    root.message-selected(id);
+                }
             }
         }
 

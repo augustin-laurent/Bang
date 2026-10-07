@@ -9,6 +9,8 @@ export component MessageList inherits Rectangle {
     in property <[MessageRow]> messages;
     in property <int> selected-message: -1;
 
+    callback message-clicked(id: int);
+
     if root.messages.length == 0: Text {
         text: "No messages";
         x: 16px;
@@ -21,6 +23,12 @@ export component MessageList inherits Rectangle {
         for msg in root.messages: Rectangle {
             height: 56px;
             background: msg.id == root.selected-message ? Theme.hover : transparent;
+
+            TouchArea {
+                clicked => {
+                    root.message-clicked(msg.id);
+                }
+            }
 
             Text {
                 text: msg.sender;

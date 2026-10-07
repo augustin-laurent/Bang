@@ -102,7 +102,7 @@ impl UiState {
 }
 
 /// Convert a message summary to a list row.
-fn to_row(m: &MessageSummary) -> MessageRow {
+pub(crate) fn to_row(m: &MessageSummary) -> MessageRow {
     MessageRow {
         id: m.id as i32,
         sender: display_name(&m.from).into(),
@@ -116,7 +116,7 @@ fn to_row(m: &MessageSummary) -> MessageRow {
 }
 
 /// Display name of an address (name if set, else the address).
-fn display_name(addr: &EmailAddress) -> String {
+pub(crate) fn display_name(addr: &EmailAddress) -> String {
     if addr.name.is_empty() {
         addr.address.clone()
     } else {
@@ -125,7 +125,7 @@ fn display_name(addr: &EmailAddress) -> String {
 }
 
 /// Format a Unix timestamp as a short local date.
-fn format_date(ts: i64) -> String {
+pub(crate) fn format_date(ts: i64) -> String {
     chrono::Local
         .timestamp_opt(ts, 0)
         .single()

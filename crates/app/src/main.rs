@@ -34,12 +34,81 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }
 
-    wire_wizard(&ui, bridge, config::Config::load());
+    wire_wizard(&ui, bridge.clone(), config::Config::load());
+    wire_selection(&ui, &store, &state, bridge);
 
     // When the window closes, `run` returns and the process exits, which
     // terminates the syncer threads (IMAP servers notice the TCP drop).
-    // `bridge` must stay alive until then: it owns the command channel.
+    // The command channel stays open because the UI closures hold senders.
     ui.run()
+}
+
+/// Connect folder and message selection to the store and the mail core.
+fn wire_selection(
+    ui: &BangApp,
+    store: &Arc<bang_core::Store>,
+    state: &Arc<state::UiState>,
+    bridge: bridge::Bridge,
+) {
+    ui.on_folder_selected({
+        let store = store.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |id: i32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let id = i64::from(id);
+            state.selected_folder.store(id, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selected_folder(id as i32);
+            ui.set_selected_message(-1);
+            // Clear the reading pane.
+            ui.set_message_sender("".into());
+            ui.set_message_subject("".into());
+            ui.set_message_date("".into());
+            ui.set_message_body("".into());
+            match store.get_folder_by_id(id) {
+                Ok(Some(folder)) => ui.set_folder_name(folder.name.into()),
+                _ => ui.set_folder_name("".into()),
+            }
+            // Folder contents come straight from the local store.
+            match store.get_messages(id, 200) {
+                Ok(messages) => {
+                    let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
+                    ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));
+                }
+                Err(e) => {
+                    ui.set_status_message(format!("Folder load failed: {e}").into());
+                }
+            }
+        }
+    });
+
+    ui.on_message_selected({
+        let store = store.clone();
+        let state = state.clone();
+        let bridge = bridge.clone();
+        let weak = ui.as_weak();
+        move |id: i32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let id = i64::from(id);
+            state.selected_message.store(id, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selected_message(id as i32);
+            // Show the header now; the body arrives via MessageLoaded.
+            if let Ok(Some(summary)) = store.get_message(id) {
+                ui.set_message_sender(state::display_name(&summary.from).into());
+                ui.set_message_subject(summary.subject.clone().into());
+                ui.set_message_date(state::format_date(summary.date).into());
+                ui.set_message_body("".into());
+                bridge.send(bang_core::UiCommand::OpenMessage {
+                    account: bang_core::AccountId(summary.account_id),
+                    message_id: id,
+                });
+            }
+        }
+    });
 }
 
 /// Connect the account wizard's callbacks to the mail core.
