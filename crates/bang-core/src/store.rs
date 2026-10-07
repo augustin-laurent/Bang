@@ -45,7 +45,7 @@ CREATE TABLE messages (
     message_id TEXT NOT NULL DEFAULT '',
     from_name TEXT NOT NULL DEFAULT '',
     from_email TEXT NOT NULL DEFAULT '',
-    to TEXT NOT NULL DEFAULT '[]',
+    "to" TEXT NOT NULL DEFAULT '[]',
     cc TEXT NOT NULL DEFAULT '[]',
     subject TEXT NOT NULL DEFAULT '',
     date INTEGER NOT NULL DEFAULT 0,
@@ -389,14 +389,14 @@ impl Store {
         let cc = serde_json::to_string(&msg.cc).map_err(|e| Error::Store(e.to_string()))?;
         conn.execute(
             "INSERT INTO messages
-                (account_id, folder_id, uid, message_id, from_name, from_email, to, cc,
+                (account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
                  subject, date, flags, preview, has_attachments)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(account_id, folder_id, uid) DO UPDATE SET
                 message_id = excluded.message_id,
                 from_name = excluded.from_name,
                 from_email = excluded.from_email,
-                to = excluded.to,
+                \"to\" = excluded.\"to\",
                 cc = excluded.cc,
                 subject = excluded.subject,
                 date = excluded.date,
@@ -443,7 +443,7 @@ impl Store {
         let conn = self.lock()?;
         let row: Option<MessageSummary> = conn
             .query_row(
-                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, to, cc,
+                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
                         subject, date, flags, preview, has_attachments
                  FROM messages WHERE account_id = ?1 AND folder_id = ?2 AND uid = ?3",
                 params![account_id, folder_id, uid],
@@ -487,7 +487,7 @@ impl Store {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, to, cc,
+                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
                         subject, date, flags, preview, has_attachments
                  FROM messages WHERE folder_id = ?1 ORDER BY date DESC, id DESC LIMIT ?2",
             )
@@ -510,7 +510,7 @@ impl Store {
         let conn = self.lock()?;
         let row: Option<MessageSummary> = conn
             .query_row(
-                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, to, cc,
+                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
                         subject, date, flags, preview, has_attachments
                  FROM messages WHERE id = ?1",
                 params![id],
@@ -608,18 +608,25 @@ impl Store {
     /// # Errors
     /// Returns `Error::Store` on database failure.
     pub fn get_message_full(&self, id: i64) -> Result<Option<MessageFull>> {
-        let conn = self.lock()?;
+        // Fetch the summary before locking: calling `self.get_message` while
+        // holding the mutex would deadlock (the mutex is not reentrant).
         let summary = match self.get_message(id)? {
             Some(s) => s,
             None => return Ok(None),
         };
-        let (body_text, body_html): (Option<String>, Option<String>) = conn
+        let conn = self.lock()?;
+        let Some((body_text, body_html)): Option<(Option<String>, Option<String>)> = conn
             .query_row(
                 "SELECT body_text, body_html FROM messages WHERE id = ?1",
                 params![id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .map_err(|e| Error::Store(e.to_string()))?;
+            .optional()
+            .map_err(|e| Error::Store(e.to_string()))?
+        else {
+            // Deleted between the two reads.
+            return Ok(None);
+        };
         let mut stmt = conn
             .prepare(
                 "SELECT id, message_id, filename, content_type, size, path
@@ -663,7 +670,7 @@ impl Store {
         let mut stmt = conn
             .prepare(
                 "SELECT m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.from_name,
-                        m.from_email, m.to, m.cc, m.subject, m.date, m.flags, m.preview,
+                        m.from_email, m.\"to\", m.cc, m.subject, m.date, m.flags, m.preview,
                         m.has_attachments
                  FROM messages_fts f
                  JOIN messages m ON m.id = f.rowid
@@ -679,6 +686,174 @@ impl Store {
             out.push(row.map_err(|e| Error::Store(e.to_string()))?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account::{AccountId, AuthMethod, ImapConfig, SmtpConfig, TlsMode};
+
+    fn test_account(id: &str) -> AccountConfig {
+        AccountConfig {
+            id: AccountId(id.into()),
+            email: format!("{id}@example.com"),
+            imap: ImapConfig {
+                host: "imap.example.com".into(),
+                port: 993,
+                tls: TlsMode::Tls,
+            },
+            smtp: SmtpConfig {
+                host: "smtp.example.com".into(),
+                port: 465,
+                tls: TlsMode::Tls,
+            },
+            auth: AuthMethod::Password {
+                username: id.into(),
+                password: "secret".into(),
+            },
+        }
+    }
+
+    fn test_folder(account: &str, path: &str) -> Folder {
+        Folder {
+            id: 0,
+            account_id: account.into(),
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            path: path.into(),
+            unread: 0,
+        }
+    }
+
+    fn test_summary(account: &str, folder_id: i64, uid: u32, subject: &str) -> MessageSummary {
+        MessageSummary {
+            id: 0,
+            account_id: account.into(),
+            folder_id,
+            uid,
+            message_id: format!("<{uid}@example.com>"),
+            from: EmailAddress {
+                name: "Alice".into(),
+                address: "alice@example.com".into(),
+            },
+            to: Vec::new(),
+            cc: Vec::new(),
+            subject: subject.into(),
+            date: 1_700_000_000,
+            flags: MessageFlags::empty(),
+            preview: String::new(),
+            has_attachments: false,
+        }
+    }
+
+    #[test]
+    fn account_roundtrip() {
+        let store = Store::open_in_memory().unwrap();
+        let account = test_account("alice");
+        store.save_account(&account).unwrap();
+
+        let accounts = store.get_accounts().unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id.0, "alice");
+        assert_eq!(accounts[0].email, "alice@example.com");
+
+        let got = store.get_account("alice").unwrap().unwrap();
+        assert_eq!(got.imap.host, "imap.example.com");
+
+        store.delete_account("alice").unwrap();
+        assert!(store.get_account("alice").unwrap().is_none());
+    }
+
+    #[test]
+    fn folder_upsert_and_sync_state() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+
+        let folders = store.get_folders("alice").unwrap();
+        assert_eq!(folders.len(), 1);
+        let id = folders[0].id;
+        assert!(id > 0);
+        assert_eq!(folders[0].path, "INBOX");
+
+        // Sync state: (last uid, uid validity). A fresh folder starts at
+        // (0, None) — the syncer treats last_uid == 0 as "full sync".
+        assert_eq!(
+            store.get_folder_sync_state(id).unwrap(),
+            Some((0, None))
+        );
+        store
+            .set_folder_sync_state(id, 42, Some(7))
+            .unwrap();
+        assert_eq!(
+            store.get_folder_sync_state(id).unwrap(),
+            Some((42, Some(7)))
+        );
+
+        store.set_folder_unread(id, 5).unwrap();
+        let folders = store.get_folders("alice").unwrap();
+        assert_eq!(folders[0].unread, 5);
+    }
+
+    #[test]
+    fn message_upsert_flags_and_bodies() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+
+        let msg = test_summary("alice", folder_id, 1, "Hello");
+        let id = store.upsert_message(&msg).unwrap();
+        assert!(id > 0);
+
+        // Upserting the same (account, folder, uid) keeps the same id.
+        let id2 = store.upsert_message(&msg).unwrap();
+        assert_eq!(id, id2);
+
+        let got = store.get_message_by_uid("alice", folder_id, 1).unwrap().unwrap();
+        assert_eq!(got.subject, "Hello");
+        assert_eq!(got.from.address, "alice@example.com");
+
+        // Flags: add then remove.
+        store
+            .set_message_flags(&[id], MessageFlags::SEEN, true)
+            .unwrap();
+        let got = store.get_message(id).unwrap().unwrap();
+        assert!(got.flags.contains(MessageFlags::SEEN));
+        store
+            .set_message_flags(&[id], MessageFlags::SEEN, false)
+            .unwrap();
+        let got = store.get_message(id).unwrap().unwrap();
+        assert!(!got.flags.contains(MessageFlags::SEEN));
+
+        // Bodies round-trip through get_message_full.
+        store
+            .save_message_bodies(id, "plain body", "<b>html</b>", &[])
+            .unwrap();
+        let full = store.get_message_full(id).unwrap().unwrap();
+        assert_eq!(full.body_text, "plain body");
+        assert_eq!(full.body_html, "<b>html</b>");
+    }
+
+    #[test]
+    fn search_matches_subject_and_body() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+
+        let msg = test_summary("alice", folder_id, 1, "Quarterly invoice");
+        let id = store.upsert_message(&msg).unwrap();
+        store
+            .save_message_bodies(id, "The total is 42 euros.", "", &[])
+            .unwrap();
+
+        assert_eq!(store.search("alice", "invoice", 10).unwrap().len(), 1);
+        assert_eq!(store.search("alice", "euros", 10).unwrap().len(), 1);
+        assert_eq!(store.search("alice", "nonexistent", 10).unwrap().len(), 0);
     }
 }
 

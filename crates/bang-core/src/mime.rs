@@ -162,3 +162,96 @@ pub fn to_attachment_records(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_text_message() {
+        let raw = b"From: Alice <alice@example.com>\r\n\
+                    To: bob@example.com\r\n\
+                    Subject: Hello\r\n\
+                    Message-ID: <1@example.com>\r\n\
+                    \r\n\
+                    Hi there!\r\n";
+        let msg = parse(raw).unwrap();
+        assert_eq!(msg.from.name, "Alice");
+        assert_eq!(msg.from.address, "alice@example.com");
+        assert_eq!(msg.to.len(), 1);
+        assert_eq!(msg.to[0].address, "bob@example.com");
+        assert_eq!(msg.subject, "Hello");
+        // mail-parser strips the angle brackets from Message-ID.
+        assert_eq!(msg.message_id, "1@example.com");
+        assert!(msg.body_text.contains("Hi there!"));
+        // mail-parser converts text parts to HTML, so body_html holds the
+        // converted markup; the UI prefers body_text when it is non-empty.
+        assert!(msg.attachments.is_empty());
+    }
+
+    #[test]
+    fn parse_multipart_alternative() {
+        let raw = b"From: alice@example.com\r\n\
+                    To: bob@example.com\r\n\
+                    Subject: Multi\r\n\
+                    MIME-Version: 1.0\r\n\
+                    Content-Type: multipart/alternative; boundary=\"bnd\"\r\n\
+                    \r\n\
+                    --bnd\r\n\
+                    Content-Type: text/plain\r\n\
+                    \r\n\
+                    Plain body\r\n\
+                    --bnd\r\n\
+                    Content-Type: text/html\r\n\
+                    \r\n\
+                    <html><body>HTML body</body></html>\r\n\
+                    --bnd--\r\n";
+        let msg = parse(raw).unwrap();
+        assert!(msg.body_text.contains("Plain body"));
+        assert!(msg.body_html.contains("HTML body"));
+        assert!(msg.attachments.is_empty());
+    }
+
+    #[test]
+    fn parse_attachment() {
+        // "hello" base64-encoded.
+        let raw = b"From: alice@example.com\r\n\
+                    To: bob@example.com\r\n\
+                    Subject: File\r\n\
+                    MIME-Version: 1.0\r\n\
+                    Content-Type: multipart/mixed; boundary=\"bnd\"\r\n\
+                    \r\n\
+                    --bnd\r\n\
+                    Content-Type: text/plain\r\n\
+                    \r\n\
+                    Body\r\n\
+                    --bnd\r\n\
+                    Content-Type: application/octet-stream\r\n\
+                    Content-Disposition: attachment; filename=\"note.txt\"\r\n\
+                    Content-Transfer-Encoding: base64\r\n\
+                    \r\n\
+                    aGVsbG8=\r\n\
+                    --bnd--\r\n";
+        let msg = parse(raw).unwrap();
+        assert_eq!(msg.attachments.len(), 1);
+        let att = &msg.attachments[0];
+        assert_eq!(att.filename, "note.txt");
+        assert_eq!(att.content_type, "application/octet-stream");
+        assert_eq!(att.data, b"hello");
+        assert_eq!(att.size, 5);
+
+        let records = to_attachment_records(7, &msg.attachments);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].message_id, 7);
+        assert_eq!(records[0].filename, "note.txt");
+    }
+
+    #[test]
+    fn extract_preview_collapses_and_truncates() {
+        let preview = extract_preview("Hello\n\nworld   foo", 11);
+        assert_eq!(preview, "Hello world");
+        // Truncation respects char boundaries ("héllo" is 6 bytes).
+        let preview = extract_preview("héllo wörld", 6);
+        assert_eq!(preview, "héllo");
+    }
+}
