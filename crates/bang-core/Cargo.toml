@@ -26,4 +26,9 @@ tracing = "0.1.44"
 url = "2.5.8"
 webbrowser = "1.2.6"
 
+[features]
+# Enables the IMAP integration tests (in-process test server).
+integration = []
+
 [dev-dependencies]
+tokio = { version = "1.54.1", features = ["sync"] }

@@ -125,7 +125,7 @@ impl Store {
     ///
     /// # Errors
     /// Returns `Error::Store` on failure.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration"))]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(|e| Error::Store(e.to_string()))?;
         let store = Self {
