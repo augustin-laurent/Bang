@@ -1,0 +1,205 @@
+# Bang — Architecture
+
+Bang is a desktop mail client for Linux. This document describes how the
+current code is organized and how data flows through it. For the product
+roadmap see [../PLAN.md](../PLAN.md); for build/test instructions see
+[DEVELOPMENT.md](DEVELOPMENT.md).
+
+## Workspace layout
+
+```
+crates/
+  bang-core/   # Mail engine. No UI dependencies.
+    src/
+      account.rs   # AccountConfig, ImapConfig, SmtpConfig, AuthMethod, TlsMode
+      message.rs   # MessageSummary, MessageFull, Folder, EmailAddress, flags
+      error.rs     # Error / Result types
+      events.rs    # UiCommand (UI -> core) and MailEvent (core -> UI)
+      store.rs     # SQLite store (accounts, folders, messages, FTS5 search)
+      imap.rs      # Synchronous IMAP client wrapper (login, fetch, IDLE)
+      oauth.rs     # OAuth2 PKCE flow for Google and Microsoft
+      smtp.rs      # SMTP sending via lettre
+      mime.rs      # MIME parsing and text/HTML extraction
+      sync.rs      # Per-account sync engine (connect, sync, idle, reconnect)
+      service.rs   # MailService: owns the store + one syncer per account
+  app/           # Slint UI + the bridge to bang-core.
+    src/
+      main.rs      # Entry point, wiring, selection handlers
+      bridge.rs    # tokio runtime thread + event forwarder
+      state.rs     # Applies MailEvents to the window
+      config.rs    # Loads ~/.config/bang/config.toml
+    ui/            # .slint files (window, panes, theme, wizard)
+```
+
+`bang-core` is a library with **no UI dependencies**; everything that could
+run headless lives there. `app` is the only crate that touches Slint.
+
+## Threading model
+
+There are three kinds of threads:
+
+1. **Slint event loop** (main thread). Owns the window. All UI mutation
+   happens here.
+2. **`bang-core` thread** (one OS thread). Hosts a multi-thread tokio runtime
+   (2 workers). Runs the `MailService` command loop and the event forwarder.
+   Long-running async work (SMTP sends, OAuth logins) is spawned on this
+   runtime.
+3. **Syncer threads** (one per account). The IMAP client is synchronous and
+   `IDLE` blocks, so each account's syncer runs on its own OS thread.
+
+The reason for the split: Slint must stay responsive, and IMAP `IDLE` must be
+able to block without stalling anything else.
+
+## The bridge (UI <-> core)
+
+`app/src/bridge.rs` owns the two channels that cross the thread boundary:
+
+- **Commands** (`UiCommand`): UI -> core, over a tokio `UnboundedSender`.
+  The `bang-core` thread's command loop calls
+  `MailService::handle_command` for each one.
+- **Events** (`MailEvent`): core -> UI, over a tokio `UnboundedSender`. A
+  `forward_events` task receives them and hops onto the Slint event loop via
+  `slint::invoke_from_event_loop`, where `UiState::apply` mutates the window.
+
+`Bridge` holds the command sender and **must stay alive** until the window
+closes; the UI closures also hold senders, which keeps the command channel
+open for the process lifetime.
+
+### Command and event surface
+
+`UiCommand` (UI -> core):
+
+| Variant | Purpose |
+|---|---|
+| `AddAccount(config)` | Save account, start its syncer |
+| `OAuthLogin { provider, client_id }` | Run OAuth2, then add the account |
+| `RemoveAccount(id)` | Stop syncer, delete account |
+| `SelectFolder { .. }` | (No-op: the UI reads the store directly) |
+| `OpenMessage { account, message_id }` | Load body from cache or fetch via syncer |
+| `SetFlags { .. }` | Add/remove IMAP flags |
+| `SendEmail(req)` | Send via SMTP (spawned task) |
+| `Search { account, query }` | FTS5 search |
+| `Quit` | Stop all syncers |
+
+`MailEvent` (core -> UI): `AccountStatus`, `FoldersUpdated`,
+`MessagesAppended`, `MessagesUpdated`, `MessageLoaded`, `SearchResults`,
+`SendResult`, `Error`.
+
+## The store
+
+`store.rs` is a single `rusqlite` connection (bundled SQLite) guarded by a
+`std::sync::Mutex`, in WAL mode. One connection is enough at this scale; no
+pool is needed.
+
+Tables:
+
+- `accounts` — id, email, serialized `AccountConfig`, created_at.
+- `folders` — id, account_id (FK), name, path, unread, last_uid, uidvalidity.
+- `messages` — id, account_id (FK), folder_id (FK), uid, message_id,
+  from/to/cc, subject, date, flags, preview, has_attachments, body_text,
+  body_html. Unique on `(account_id, folder_id, uid)`.
+- `attachments` — id, message_id (FK), filename, content_type, size, path.
+- `messages_fts` — FTS5 virtual table over `subject, from_name, from_email,
+  preview, body_text`, kept in sync by `AFTER INSERT/UPDATE/DELETE` triggers.
+
+Notes:
+
+- The `to` column is a SQLite reserved word and is quoted in all SQL.
+- `get_message_full` fetches the summary **before** locking the connection;
+  calling `get_message` while holding the mutex would deadlock (the mutex is
+  not reentrant).
+- `open_in_memory()` is available under `#[cfg(any(test, feature =
+  "integration"))]` for tests.
+
+## The sync engine
+
+`sync.rs` runs one loop per account (`run_syncer`):
+
+1. `connect_and_sync` — connect, then `sync_folders`.
+2. `sync_folders` — `LIST` folders, reconcile with the store (upsert + delete
+   missing), then `sync_folder` for each.
+3. `sync_folder` — `SELECT`, read the stored sync state `(last_uid,
+   uidvalidity)`, decide full vs. incremental, `UID FETCH` metadata for the
+   relevant UID range, upsert messages, record the new sync state, and emit
+   `MessagesAppended` / `MessagesUpdated`.
+4. `idle_loop` — `SELECT` the INBOX (or first folder), then repeatedly:
+   process pending commands (`SetFlags`, `FetchBody`, `Quit`), then `IDLE`
+   for up to 10 s. On a mailbox change, re-sync that folder; on timeout, loop
+   back to check commands.
+5. On any error, emit `Reconnecting` and retry with exponential backoff
+   (1 s .. 60 s).
+
+A fresh folder has sync state `(0, None)`; the syncer treats `last_uid == 0`
+(or a changed UIDVALIDITY) as a full sync of the most recent `SYNC_WINDOW`
+(200) messages.
+
+## IMAP client
+
+`imap.rs` wraps the synchronous `imap` crate. `ImapSession<T>` is generic over
+the stream (`TlsStream<TcpStream>` for TLS, `TcpStream` for plaintext);
+`ImapConn` is an enum over the two. It exposes `list_folders`, `select`,
+`fetch_meta`, `fetch_body`, `set_flags`, `idle_wait`, `close`, `logout`, and
+`connect` (which branches on `TlsMode`: implicit TLS, STARTTLS, or
+plaintext). XOAUTH2 is supported via an `Authenticator`.
+
+## OAuth2
+
+`oauth.rs` implements the authorization-code + PKCE flow for Google and
+Microsoft. It opens the system browser, runs a `tiny_http` server on
+localhost to catch the redirect, exchanges the code for tokens, and returns
+them. The app stores the resulting tokens in the account's `AuthMethod::OAuth2`
+and uses them as XOAUTH2 credentials for IMAP/SMTP. Client IDs come from
+`~/.config/bang/config.toml`.
+
+## SMTP
+
+`smtp.rs` sends via `lettre` on the tokio runtime. It builds a transport from
+the account's `SmtpConfig` + `AuthMethod` (password or XOAUTH2) and sends the
+message, reporting a `SendResult` event.
+
+## MIME
+
+`mime.rs` parses raw messages with `mail-parser`, extracting the plain-text
+body, HTML body, and attachments. `extract_preview` collapses whitespace and
+truncates for list previews. Note that `mail-parser` converts text parts to
+HTML (and vice versa), so `body_html` may hold converted markup; the UI
+prefers `body_text` when it is non-empty.
+
+## The UI
+
+The window (`ui/app.slint`) is a three-pane layout:
+
+- **Sidebar** (`sidebar.slint`) — account status, folder list, "Add account".
+- **Message list** (`messagelist.slint`) — rows for the selected folder.
+- **Reading pane** (`readingpane.slint`) — the selected message.
+
+`theme.slint` is a global holding the color tokens for light/dark. `models.slint`
+defines the `FolderRow` and `MessageRow` structs used by the list views.
+`accountwizard.slint` is the add-account overlay (OAuth buttons + a generic
+IMAP/SMTP form).
+
+`state.rs` (`UiState`) holds the current selection and applies each
+`MailEvent` to the window. `main.rs` wires the window callbacks (folder
+selection, message selection, the wizard) to the store and the `Bridge`.
+
+### Reading the store directly
+
+For folder contents the UI reads the local store directly (no
+`SelectFolder` round-trip through the core). This is an intentional
+relaxation of the "all data flows through events" convention, limited to
+local-cache reads.
+
+## Configuration
+
+`app/src/config.rs` loads `~/.config/bang/config.toml`:
+
+```toml
+[oauth.google]
+client_id = "..."
+[oauth.microsoft]
+client_id = "..."
+```
+
+A missing file or missing keys simply yields defaults (empty client IDs), in
+which case the OAuth buttons report an error and the generic IMAP/SMTP path
+remains available.

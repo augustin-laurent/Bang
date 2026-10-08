@@ -6,6 +6,11 @@ A desktop mail client for Linux, written in Rust, with a UI inspired by Spark.
 - **Engine**: IMAP (async, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
 - **Status**: early development — see [PLAN.md](PLAN.md) for the roadmap
 
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organized and how data flows
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — build, test, conventions, and Slint gotchas
+
 ## Build
 
 ```sh
