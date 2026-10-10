@@ -31,23 +31,23 @@ export component AccountWizard inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.bg;
-        border-radius: 12px;
+        border-radius: Theme.radius-md;
 
         VerticalLayout {
             padding: 20px;
-            spacing: 8px;
+            spacing: Theme.space-sm;
 
             Text {
                 text: "Add account";
                 color: Theme.text;
-                font-size: 18px;
-                font-weight: 700;
+                font-size: Theme.font-size-xxl;
+                font-weight: Theme.font-weight-bold;
             }
 
             Text {
                 text: "Sign in with";
                 color: Theme.text-secondary;
-                font-size: 12px;
+                font-size: Theme.font-size-sm;
             }
 
             Button {
@@ -67,7 +67,7 @@ export component AccountWizard inherits Rectangle {
             Text {
                 text: "— or add a generic IMAP/SMTP account —";
                 color: Theme.text-secondary;
-                font-size: 12px;
+                font-size: Theme.font-size-sm;
             }
 
             LineEdit {
@@ -76,7 +76,7 @@ export component AccountWizard inherits Rectangle {
             }
 
             HorizontalLayout {
-                spacing: 8px;
+                spacing: Theme.space-sm;
 
                 LineEdit {
                     text <=> root.imap-host;
@@ -91,7 +91,7 @@ export component AccountWizard inherits Rectangle {
             }
 
             HorizontalLayout {
-                spacing: 8px;
+                spacing: Theme.space-sm;
 
                 LineEdit {
                     text <=> root.smtp-host;
@@ -124,12 +124,12 @@ export component AccountWizard inherits Rectangle {
                 visible: root.status != "";
                 text: root.status;
                 color: Theme.accent;
-                font-size: 12px;
+                font-size: Theme.font-size-sm;
                 wrap: word-wrap;
             }
 
             HorizontalLayout {
-                spacing: 8px;
+                spacing: Theme.space-sm;
                 alignment: end;
 
                 Button {

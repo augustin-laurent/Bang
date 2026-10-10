@@ -13,10 +13,10 @@ export component MessageList inherits Rectangle {
 
     if root.messages.length == 0: Text {
         text: "No messages";
-        x: 16px;
-        y: 16px;
+        x: Theme.space-lg;
+        y: Theme.space-lg;
         color: Theme.text-secondary;
-        font-size: 13px;
+        font-size: Theme.font-size-md;
     }
 
     ListView {
@@ -32,42 +32,42 @@ export component MessageList inherits Rectangle {
 
             Text {
                 text: msg.sender;
-                x: 12px;
-                y: 8px;
+                x: Theme.space-md;
+                y: Theme.space-sm;
                 width: parent.width - 120px;
                 color: msg.unread ? Theme.text : Theme.text-secondary;
-                font-size: 13px;
-                font-weight: msg.unread ? 600 : 400;
+                font-size: Theme.font-size-md;
+                font-weight: msg.unread ? Theme.font-weight-semibold : Theme.font-weight-regular;
                 overflow: elide;
             }
 
             Text {
                 text: msg.date;
                 x: parent.width - 90px;
-                y: 8px;
+                y: Theme.space-sm;
                 width: 78px;
                 color: Theme.text-secondary;
-                font-size: 11px;
+                font-size: Theme.font-size-xs;
                 overflow: elide;
             }
 
             Text {
                 text: msg.subject;
-                x: 12px;
+                x: Theme.space-md;
                 y: 28px;
                 width: parent.width - 120px;
                 color: Theme.text;
-                font-size: 13px;
+                font-size: Theme.font-size-md;
                 overflow: elide;
             }
 
             Text {
                 text: msg.preview;
-                x: 12px;
+                x: Theme.space-md;
                 y: 42px;
                 width: parent.width - 120px;
                 color: Theme.text-secondary;
-                font-size: 11px;
+                font-size: Theme.font-size-xs;
                 overflow: elide;
             }
         }

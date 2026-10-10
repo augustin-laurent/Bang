@@ -74,20 +74,20 @@ export component BangApp inherits Window {
 
                 Text {
                     text: root.folder-name == "" ? "Inbox" : root.folder-name;
-                    x: 16px;
+                    x: Theme.space-lg;
                     y: 14px;
                     color: Theme.text;
-                    font-size: 15px;
-                    font-weight: 600;
+                    font-size: Theme.font-size-xl;
+                    font-weight: Theme.font-weight-semibold;
                 }
 
                 Text {
                     visible: root.status-message != "";
                     text: root.status-message;
-                    x: 16px;
+                    x: Theme.space-lg;
                     y: 30px;
                     color: Theme.text-secondary;
-                    font-size: 11px;
+                    font-size: Theme.font-size-xs;
                 }
             }
 

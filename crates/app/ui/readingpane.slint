@@ -11,28 +11,28 @@ export component ReadingPane inherits Rectangle {
 
     if root.subject == "": Text {
         text: "Select a message to read it";
-        x: 16px;
-        y: 16px;
+        x: Theme.space-lg;
+        y: Theme.space-lg;
         color: Theme.text-secondary;
-        font-size: 13px;
+        font-size: Theme.font-size-md;
     }
 
     VerticalLayout {
-        padding: 16px;
-        spacing: 8px;
+        padding: Theme.space-lg;
+        spacing: Theme.space-sm;
 
         Text {
             text: root.subject;
             color: Theme.text;
-            font-size: 16px;
-            font-weight: 600;
+            font-size: Theme.font-size-xl;
+            font-weight: Theme.font-weight-semibold;
             wrap: word-wrap;
         }
 
         Text {
             text: root.sender + " — " + root.date;
             color: Theme.text-secondary;
-            font-size: 12px;
+            font-size: Theme.font-size-sm;
         }
 
         Rectangle {
@@ -43,7 +43,7 @@ export component ReadingPane inherits Rectangle {
         Text {
             text: root.body;
             color: Theme.text;
-            font-size: 14px;
+            font-size: Theme.font-size-lg;
             wrap: word-wrap;
         }
     }

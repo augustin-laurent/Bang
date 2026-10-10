@@ -14,28 +14,28 @@ export component Sidebar inherits Rectangle {
     callback folder-clicked(id: int);
 
     VerticalLayout {
-        padding: 8px;
-        spacing: 4px;
+        padding: Theme.space-sm;
+        spacing: Theme.space-xs;
         alignment: start;
 
         Text {
             text: "Bang";
             color: Theme.accent;
-            font-size: 18px;
-            font-weight: 700;
+            font-size: Theme.font-size-xxl;
+            font-weight: Theme.font-weight-bold;
         }
 
         Text {
             visible: root.account-status != "";
             text: root.account-status;
             color: Theme.text-secondary;
-            font-size: 11px;
+            font-size: Theme.font-size-xs;
         }
 
         ListView {
             for folder in root.folders: Rectangle {
                 height: 28px;
-                border-radius: 6px;
+                border-radius: Theme.radius-sm;
                 background: folder.id == root.selected-folder ? Theme.hover : transparent;
 
                 TouchArea {
@@ -46,10 +46,10 @@ export component Sidebar inherits Rectangle {
 
                 Text {
                     text: folder.name;
-                    x: 8px;
+                    x: Theme.space-sm;
                     y: 7px;
                     color: Theme.text;
-                    font-size: 13px;
+                    font-size: Theme.font-size-md;
                 }
 
                 if folder.unread > 0: Text {
@@ -57,7 +57,7 @@ export component Sidebar inherits Rectangle {
                     x: 180px;
                     y: 7px;
                     color: Theme.accent;
-                    font-size: 12px;
+                    font-size: Theme.font-size-sm;
                 }
             }
         }

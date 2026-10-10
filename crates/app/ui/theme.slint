@@ -3,6 +3,7 @@ export global Theme {
     /// Whether the dark theme is active.
     in property <bool> dark: false;
 
+    // Colors.
     /// Window / message list background.
     out property <color> bg: dark ? #1e1f22 : #ffffff;
     /// Sidebar background.
@@ -19,4 +20,27 @@ export global Theme {
     out property <color> hover: dark ? #2a2b30 : #eef1f5;
     /// Border color.
     out property <color> border: dark ? #33343a : #e2e4e8;
+
+    // Typography.
+    out property <length> font-size-xs: 11px;
+    out property <length> font-size-sm: 12px;
+    out property <length> font-size-md: 13px;
+    out property <length> font-size-lg: 14px;
+    out property <length> font-size-xl: 16px;
+    out property <length> font-size-xxl: 18px;
+    out property <int> font-weight-regular: 400;
+    out property <int> font-weight-medium: 500;
+    out property <int> font-weight-semibold: 600;
+    out property <int> font-weight-bold: 700;
+
+    // Spacing.
+    out property <length> space-xs: 4px;
+    out property <length> space-sm: 8px;
+    out property <length> space-md: 12px;
+    out property <length> space-lg: 16px;
+    out property <length> space-xl: 24px;
+
+    // Shape.
+    out property <length> radius-sm: 6px;
+    out property <length> radius-md: 12px;
 }
