@@ -17,6 +17,11 @@ use crate::message::{
 /// Current schema version.
 const SCHEMA_VERSION: i64 = 1;
 
+/// Special folder id for the unified inbox (all accounts' INBOXes).
+///
+/// It is negative so it can never collide with a real store id.
+pub const UNIFIED_INBOX_ID: i64 = -1;
+
 /// V1 schema: initial tables.
 const MIGRATION_V1: &str = r#"
 CREATE TABLE accounts (
@@ -502,6 +507,35 @@ impl Store {
         Ok(out)
     }
 
+    /// List the most recent messages of every account's INBOX (newest first).
+    ///
+    /// The unified inbox is a smart folder: it is not stored, only queried.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn get_unified_inbox(&self, limit: usize) -> Result<Vec<MessageSummary>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.from_name,
+                        m.from_email, m.\"to\", m.cc, m.subject, m.date, m.flags, m.preview,
+                        m.has_attachments
+                 FROM messages m
+                 JOIN folders f ON f.id = m.folder_id
+                 WHERE UPPER(f.path) = 'INBOX'
+                 ORDER BY m.date DESC, m.id DESC LIMIT ?1",
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![limit as i64], Self::row_to_summary)
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
     /// Get a single message summary by local id.
     ///
     /// # Errors
@@ -835,6 +869,44 @@ mod tests {
         let full = store.get_message_full(id).unwrap().unwrap();
         assert_eq!(full.body_text, "plain body");
         assert_eq!(full.body_html, "<b>html</b>");
+    }
+
+    #[test]
+    fn unified_inbox_spans_accounts_and_excludes_other_folders() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        store.save_account(&test_account("bob")).unwrap();
+
+        let inbox_a = test_folder("alice", "INBOX");
+        let inbox_b = test_folder("bob", "INBOX");
+        let sent_a = test_folder("alice", "Sent");
+        for f in [&inbox_a, &inbox_b, &sent_a] {
+            store.upsert_folder(f).unwrap();
+        }
+        let folders = store.get_folders("alice").unwrap();
+        let inbox_a_id = folders.iter().find(|f| f.path == "INBOX").unwrap().id;
+        let sent_a_id = folders.iter().find(|f| f.path == "Sent").unwrap().id;
+        let inbox_b_id = store.get_folders("bob").unwrap()[0].id;
+
+        // Older message in alice's INBOX, newer in bob's INBOX, and one in Sent.
+        let m1 = test_summary("alice", inbox_a_id, 1, "Alice inbox");
+        let m2 = test_summary("bob", inbox_b_id, 1, "Bob inbox");
+        let m3 = test_summary("alice", sent_a_id, 1, "Alice sent");
+        let id1 = store.upsert_message(&m1).unwrap();
+        let m2_newer = {
+            let mut m = m2;
+            m.date += 1000;
+            m
+        };
+        let id2 = store.upsert_message(&m2_newer).unwrap();
+        let id3 = store.upsert_message(&m3).unwrap();
+
+        let unified = store.get_unified_inbox(10).unwrap();
+        assert_eq!(unified.len(), 2);
+        // Newest first: bob's message, then alice's. Sent is excluded.
+        assert_eq!(unified[0].id, id2);
+        assert_eq!(unified[1].id, id1);
+        assert!(!unified.iter().any(|m| m.id == id3));
     }
 
     #[test]

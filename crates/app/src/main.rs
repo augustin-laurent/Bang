@@ -67,12 +67,18 @@ fn wire_selection(
             ui.set_message_subject("".into());
             ui.set_message_date("".into());
             ui.set_message_body("".into());
-            match store.get_folder_by_id(id) {
-                Ok(Some(folder)) => ui.set_folder_name(folder.name.into()),
-                _ => ui.set_folder_name("".into()),
-            }
             // Folder contents come straight from the local store.
-            match store.get_messages(id, 200) {
+            let messages = if id == bang_core::UNIFIED_INBOX_ID {
+                ui.set_folder_name("Unified Inbox".into());
+                store.get_unified_inbox(200)
+            } else {
+                match store.get_folder_by_id(id) {
+                    Ok(Some(folder)) => ui.set_folder_name(folder.name.into()),
+                    _ => ui.set_folder_name("".into()),
+                }
+                store.get_messages(id, 200)
+            };
+            match messages {
                 Ok(messages) => {
                     let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
                     ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));

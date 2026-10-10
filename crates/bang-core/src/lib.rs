@@ -21,7 +21,7 @@ pub use service::MailService;
 pub use sync::{start_syncer, SyncerCommand};
 
 pub use imap::{ImapConn, ImapSession, MailboxStatus, MetaMessage};
-pub use store::Store;
+pub use store::{Store, UNIFIED_INBOX_ID};
 
 pub use account::{
     AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode,

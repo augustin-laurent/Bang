@@ -7,7 +7,7 @@ use slint::{Model, VecModel};
 
 use bang_core::events::MailEvent;
 use bang_core::message::{EmailAddress, MessageSummary};
-use bang_core::store::Store;
+use bang_core::store::{Store, UNIFIED_INBOX_ID};
 
 use crate::{BangApp, FolderRow, MessageRow};
 
@@ -28,6 +28,22 @@ impl UiState {
         }
     }
 
+    /// Rebuild the message list for the currently selected folder.
+    ///
+    /// Local-cache read: the unified inbox is a query, not a stored folder.
+    fn reload_messages(&self, ui: &BangApp, store: &Store) {
+        let folder_id = self.selected_folder.load(Ordering::SeqCst);
+        let messages = if folder_id == UNIFIED_INBOX_ID {
+            store.get_unified_inbox(200)
+        } else {
+            store.get_messages(folder_id, 200)
+        };
+        if let Ok(messages) = messages {
+            let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
+            ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
+        }
+    }
+
     /// Apply a core event to the window.
     ///
     /// Must be called on the Slint event loop thread.
@@ -37,20 +53,30 @@ impl UiState {
                 ui.set_account_status(status.to_string().into());
             }
             MailEvent::FoldersUpdated { folders, .. } => {
-                let rows: Vec<FolderRow> = folders
-                    .iter()
-                    .map(|f| FolderRow {
-                        id: f.id as i32,
-                        name: f.name.clone().into(),
-                        unread: f.unread as i32,
-                    })
-                    .collect();
+                let mut rows: Vec<FolderRow> = Vec::with_capacity(folders.len() + 1);
+                // The unified inbox is a smart folder, always on top.
+                rows.push(FolderRow {
+                    id: UNIFIED_INBOX_ID as i32,
+                    name: "Unified Inbox".into(),
+                    unread: 0,
+                });
+                rows.extend(folders.iter().map(|f| FolderRow {
+                    id: f.id as i32,
+                    name: f.name.clone().into(),
+                    unread: f.unread as i32,
+                }));
                 ui.set_folders(slint::ModelRc::new(VecModel::from(rows)));
             }
             MailEvent::MessagesAppended {
                 folder_id, messages, ..
             } => {
-                if self.selected_folder.load(Ordering::SeqCst) != folder_id {
+                let selected = self.selected_folder.load(Ordering::SeqCst);
+                if selected == UNIFIED_INBOX_ID {
+                    // It spans every account's INBOX, so append is not enough.
+                    self.reload_messages(ui, store);
+                    return;
+                }
+                if selected != folder_id {
                     return;
                 }
                 // Newest first: insert at the front.
@@ -60,7 +86,12 @@ impl UiState {
                 }
             }
             MailEvent::MessagesUpdated { folder_id, .. } => {
-                if self.selected_folder.load(Ordering::SeqCst) != folder_id {
+                let selected = self.selected_folder.load(Ordering::SeqCst);
+                if selected == UNIFIED_INBOX_ID {
+                    self.reload_messages(ui, store);
+                    return;
+                }
+                if selected != folder_id {
                     return;
                 }
                 if let Ok(messages) = store.get_messages(folder_id, 200) {
