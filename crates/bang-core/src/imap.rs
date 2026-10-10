@@ -49,6 +49,8 @@ impl Authenticator for XOAuth2 {
 pub struct MailboxStatus {
     /// Total messages in the mailbox.
     pub exists: u32,
+    /// Unread message count, if the server reports it.
+    pub unseen: Option<u32>,
     /// Next UID (one past the highest UID), if the server reports it.
     pub uid_next: Option<u32>,
     /// UIDVALIDITY, if the server reports it.
@@ -124,6 +126,7 @@ impl<T: Read + Write> ImapSession<T> {
         let mb: Mailbox = self.session.select(path)?;
         Ok(MailboxStatus {
             exists: mb.exists,
+            unseen: mb.unseen,
             uid_next: mb.uid_next,
             uid_validity: mb.uid_validity,
         })

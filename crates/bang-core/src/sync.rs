@@ -158,6 +158,9 @@ fn sync_folder(
     folder: &Folder,
 ) -> Result<()> {
     let status = conn.select(&folder.path)?;
+    if let Some(unseen) = status.unseen {
+        store.set_folder_unread(folder.id, unseen)?;
+    }
     let (last_uid, last_validity) = store
         .get_folder_sync_state(folder.id)?
         .unwrap_or((0, None));

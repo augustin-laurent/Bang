@@ -10,6 +10,7 @@ export component MessageList inherits Rectangle {
     in property <int> selected-message: -1;
 
     callback message-clicked(id: int);
+    callback message-action(id: int, action: string);
 
     if root.messages.length == 0: Text {
         text: "No messages";
@@ -30,11 +31,22 @@ export component MessageList inherits Rectangle {
                 }
             }
 
+            // Unread indicator.
+            Rectangle {
+                visible: msg.unread;
+                x: 6px;
+                y: 14px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.accent;
+            }
+
             Text {
                 text: msg.sender;
-                x: Theme.space-md;
+                x: 20px;
                 y: Theme.space-sm;
-                width: parent.width - 120px;
+                width: parent.width - 108px;
                 color: msg.unread ? Theme.text : Theme.text-secondary;
                 font-size: Theme.font-size-md;
                 font-weight: msg.unread ? Theme.font-weight-semibold : Theme.font-weight-regular;
@@ -43,9 +55,9 @@ export component MessageList inherits Rectangle {
 
             Text {
                 text: msg.date;
-                x: parent.width - 90px;
+                x: parent.width - 96px;
                 y: Theme.space-sm;
-                width: 78px;
+                width: 72px;
                 color: Theme.text-secondary;
                 font-size: Theme.font-size-xs;
                 overflow: elide;
@@ -53,9 +65,9 @@ export component MessageList inherits Rectangle {
 
             Text {
                 text: msg.subject;
-                x: Theme.space-md;
+                x: 20px;
                 y: 28px;
-                width: parent.width - 120px;
+                width: parent.width - 108px;
                 color: Theme.text;
                 font-size: Theme.font-size-md;
                 overflow: elide;
@@ -63,12 +75,76 @@ export component MessageList inherits Rectangle {
 
             Text {
                 text: msg.preview;
-                x: Theme.space-md;
+                x: 20px;
                 y: 42px;
-                width: parent.width - 120px;
+                width: parent.width - 108px;
                 color: Theme.text-secondary;
                 font-size: Theme.font-size-xs;
                 overflow: elide;
+            }
+
+            // Row actions: star, mark read/unread, delete.
+            Rectangle {
+                x: parent.width - 78px;
+                y: 28px;
+                width: 24px;
+                height: 24px;
+                TouchArea {
+                    clicked => {
+                        root.message-action(msg.id, "star");
+                    }
+                }
+                Text {
+                    text: msg.starred ? "★" : "☆";
+                    width: 24px;
+                    height: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: msg.starred ? Theme.accent : Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                }
+            }
+
+            Rectangle {
+                x: parent.width - 50px;
+                y: 28px;
+                width: 24px;
+                height: 24px;
+                TouchArea {
+                    clicked => {
+                        root.message-action(msg.id, "read");
+                    }
+                }
+                Text {
+                    text: msg.unread ? "●" : "○";
+                    width: 24px;
+                    height: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: msg.unread ? Theme.accent : Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                }
+            }
+
+            Rectangle {
+                x: parent.width - 22px;
+                y: 28px;
+                width: 24px;
+                height: 24px;
+                TouchArea {
+                    clicked => {
+                        root.message-action(msg.id, "delete");
+                    }
+                }
+                Text {
+                    text: "✕";
+                    width: 24px;
+                    height: 24px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                }
             }
         }
     }

@@ -46,6 +46,7 @@ export component BangApp inherits Window {
 
     callback folder-selected(id: int);
     callback message-selected(id: int);
+    callback message-action(id: int, action: string);
 
     HorizontalLayout {
         padding: 0;
@@ -102,6 +103,9 @@ export component BangApp inherits Window {
                 selected-message: root.selected-message;
                 message-clicked(id) => {
                     root.message-selected(id);
+                }
+                message-action(id, action) => {
+                    root.message-action(id, action);
                 }
             }
         }

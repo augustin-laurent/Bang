@@ -536,6 +536,24 @@ impl Store {
         Ok(out)
     }
 
+    /// Count unread messages across every account's INBOX.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn unified_inbox_unread(&self) -> Result<u32> {
+        let conn = self.lock()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages m
+                 JOIN folders f ON f.id = m.folder_id
+                 WHERE UPPER(f.path) = 'INBOX' AND (m.flags & 1) = 0",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(count as u32)
+    }
+
     /// Get a single message summary by local id.
     ///
     /// # Errors
@@ -920,6 +938,13 @@ mod tests {
         assert_eq!(unified[0].id, id2);
         assert_eq!(unified[1].id, id1);
         assert!(!unified.iter().any(|m| m.id == id3));
+
+        // Both inbox messages are unread; marking one read drops the count.
+        assert_eq!(store.unified_inbox_unread().unwrap(), 2);
+        store
+            .set_message_flags(&[id1], MessageFlags::SEEN, true)
+            .unwrap();
+        assert_eq!(store.unified_inbox_unread().unwrap(), 1);
     }
 
     #[test]

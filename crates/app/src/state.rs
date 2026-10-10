@@ -44,6 +44,28 @@ impl UiState {
         }
     }
 
+    /// Rebuild the folder list from the store (all accounts, unified inbox on top).
+    fn refresh_folders(&self, ui: &BangApp, store: &Store) {
+        let mut rows: Vec<FolderRow> = Vec::new();
+        rows.push(FolderRow {
+            id: UNIFIED_INBOX_ID as i32,
+            name: "Unified Inbox".into(),
+            unread: store.unified_inbox_unread().unwrap_or(0) as i32,
+        });
+        if let Ok(accounts) = store.get_accounts() {
+            for account in &accounts {
+                if let Ok(folders) = store.get_folders(&account.id.0) {
+                    rows.extend(folders.iter().map(|f| FolderRow {
+                        id: f.id as i32,
+                        name: f.name.clone().into(),
+                        unread: f.unread as i32,
+                    }));
+                }
+            }
+        }
+        ui.set_folders(slint::ModelRc::new(VecModel::from(rows)));
+    }
+
     /// Apply a core event to the window.
     ///
     /// Must be called on the Slint event loop thread.
@@ -52,24 +74,14 @@ impl UiState {
             MailEvent::AccountStatus { status, .. } => {
                 ui.set_account_status(status.to_string().into());
             }
-            MailEvent::FoldersUpdated { folders, .. } => {
-                let mut rows: Vec<FolderRow> = Vec::with_capacity(folders.len() + 1);
-                // The unified inbox is a smart folder, always on top.
-                rows.push(FolderRow {
-                    id: UNIFIED_INBOX_ID as i32,
-                    name: "Unified Inbox".into(),
-                    unread: 0,
-                });
-                rows.extend(folders.iter().map(|f| FolderRow {
-                    id: f.id as i32,
-                    name: f.name.clone().into(),
-                    unread: f.unread as i32,
-                }));
-                ui.set_folders(slint::ModelRc::new(VecModel::from(rows)));
+            MailEvent::FoldersUpdated { .. } => {
+                self.refresh_folders(ui, store);
             }
             MailEvent::MessagesAppended {
                 folder_id, messages, ..
             } => {
+                // Keep the unread badges fresh.
+                self.refresh_folders(ui, store);
                 let selected = self.selected_folder.load(Ordering::SeqCst);
                 if selected == UNIFIED_INBOX_ID {
                     // It spans every account's INBOX, so append is not enough.
@@ -86,6 +98,8 @@ impl UiState {
                 }
             }
             MailEvent::MessagesUpdated { folder_id, .. } => {
+                // Keep the unread badges fresh.
+                self.refresh_folders(ui, store);
                 let selected = self.selected_folder.load(Ordering::SeqCst);
                 if selected == UNIFIED_INBOX_ID {
                     self.reload_messages(ui, store);

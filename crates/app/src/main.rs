@@ -116,6 +116,39 @@ fn wire_selection(
             }
         }
     });
+
+    ui.on_message_action({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        move |id: i32, action: slint::SharedString| {
+            let id = i64::from(id);
+            // The row does not carry the account; look it up locally.
+            let Ok(Some(summary)) = store.get_message(id) else {
+                return;
+            };
+            let account = bang_core::AccountId(summary.account_id);
+            let command = match action.as_str() {
+                "star" => bang_core::UiCommand::SetFlags {
+                    account,
+                    message_ids: vec![id],
+                    flags: bang_core::MessageFlags::FLAGGED,
+                    add: !summary.flags.is_flagged(),
+                },
+                "read" => bang_core::UiCommand::SetFlags {
+                    account,
+                    message_ids: vec![id],
+                    flags: bang_core::MessageFlags::SEEN,
+                    add: summary.flags.is_unread(),
+                },
+                "delete" => bang_core::UiCommand::Delete {
+                    account,
+                    message_ids: vec![id],
+                },
+                _ => return,
+            };
+            bridge.send(command);
+        }
+    });
 }
 
 /// Connect the account wizard's callbacks to the mail core.
