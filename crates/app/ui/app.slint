@@ -1,3 +1,4 @@
+import { Button, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { FolderRow, MessageRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
@@ -47,6 +48,7 @@ export component BangApp inherits Window {
     callback folder-selected(id: int);
     callback message-selected(id: int);
     callback message-action(id: int, action: string);
+    callback compose-clicked();
 
     HorizontalLayout {
         padding: 0;
@@ -89,6 +91,16 @@ export component BangApp inherits Window {
                     y: 30px;
                     color: Theme.text-secondary;
                     font-size: Theme.font-size-xs;
+                }
+
+                Button {
+                    text: "Compose";
+                    x: parent.width - 104px;
+                    y: 10px;
+                    width: 92px;
+                    clicked => {
+                        root.compose-clicked();
+                    }
                 }
             }
 
@@ -143,6 +155,96 @@ export component BangApp inherits Window {
         }
         cancel => {
             root.wizard-cancel();
+        }
+    }
+}
+
+// Compose window: to/cc/bcc/subject/body and send/cancel.
+// A second exported component so Rust can instantiate it as its own window.
+export component ComposeWindow inherits Window {
+    title: "New message";
+    preferred-width: 640px;
+    preferred-height: 520px;
+    min-width: 420px;
+    min-height: 320px;
+
+    /// Sender (the selected account's email).
+    in property <string> from: "";
+
+    in-out property <string> to;
+    in-out property <string> cc;
+    in-out property <string> bcc;
+    in-out property <string> subject;
+    in-out property <string> body;
+
+    callback send();
+    callback cancel();
+
+    VerticalLayout {
+        padding: Theme.space-lg;
+        spacing: Theme.space-sm;
+
+        Text {
+            text: "From: " + root.from;
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+        }
+
+        LineEdit {
+            text <=> root.to;
+            placeholder-text: "To";
+        }
+
+        LineEdit {
+            text <=> root.cc;
+            placeholder-text: "Cc";
+        }
+
+        LineEdit {
+            text <=> root.bcc;
+            placeholder-text: "Bcc";
+        }
+
+        LineEdit {
+            text <=> root.subject;
+            placeholder-text: "Subject";
+        }
+
+        Rectangle {
+            background: Theme.reading-bg;
+            border-radius: Theme.radius-sm;
+
+            TextInput {
+                x: Theme.space-sm;
+                y: Theme.space-sm;
+                width: parent.width - 2 * Theme.space-sm;
+                height: parent.height - 2 * Theme.space-sm;
+                text <=> root.body;
+                single-line: false;
+                wrap: word-wrap;
+                color: Theme.text;
+                font-size: Theme.font-size-lg;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: end;
+
+            Button {
+                text: "Cancel";
+                clicked => {
+                    root.cancel();
+                }
+            }
+
+            Button {
+                text: "Send";
+                primary: true;
+                clicked => {
+                    root.send();
+                }
+            }
         }
     }
 }

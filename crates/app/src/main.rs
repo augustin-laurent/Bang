@@ -35,7 +35,8 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     wire_wizard(&ui, bridge.clone(), config::Config::load());
-    wire_selection(&ui, &store, &state, bridge);
+    wire_selection(&ui, &store, &state, bridge.clone());
+    wire_compose(&ui, &store, bridge);
 
     // When the window closes, `run` returns and the process exits, which
     // terminates the syncer threads (IMAP servers notice the TCP drop).
@@ -147,6 +148,88 @@ fn wire_selection(
                 _ => return,
             };
             bridge.send(command);
+        }
+    });
+}
+
+// The open compose window, kept alive until it is replaced.
+// Thread-local because Slint components are not `Sync`; every access
+// happens on the Slint event loop thread.
+std::thread_local! {
+    static COMPOSE: std::cell::RefCell<Option<ComposeWindow>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Connect the compose button to a compose window and the mail core.
+fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bridge) {
+    ui.on_compose_clicked({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let weak = ui.as_weak();
+        move || {
+            // The first saved account sends the message.
+            let Ok(Some(account)) = store.get_accounts().map(|a| a.into_iter().next()) else {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_status_message("Add an account before composing".into());
+                }
+                return;
+            };
+            let Ok(compose) = ComposeWindow::new() else {
+                return;
+            };
+            compose.set_from(account.email.clone().into());
+            let weak_compose = compose.as_weak();
+
+            compose.on_send({
+                let bridge = bridge.clone();
+                let account_id = account.id.clone();
+                let from = account.email.clone();
+                move || {
+                    let Some(compose) = weak_compose.upgrade() else {
+                        return;
+                    };
+                    let to = compose.get_to().to_string();
+                    if to.trim().is_empty() {
+                        return;
+                    }
+                    // Comma-separated address lists.
+                    let addrs = |s: &str| {
+                        s.split(',')
+                            .map(|a| a.trim().to_string())
+                            .filter(|a| !a.is_empty())
+                            .collect()
+                    };
+                    let request = bang_core::SendRequest {
+                        account: account_id.clone(),
+                        from: from.clone(),
+                        to: addrs(&to),
+                        cc: addrs(&compose.get_cc().to_string()),
+                        bcc: addrs(&compose.get_bcc().to_string()),
+                        subject: compose.get_subject().to_string(),
+                        body_text: compose.get_body().to_string(),
+                        in_reply_to: None,
+                        references: None,
+                    };
+                    bridge.send(bang_core::UiCommand::SendEmail(request));
+                    // Dropping the handle closes the window.
+                    COMPOSE.with(|c| {
+                        c.take();
+                    });
+                }
+            });
+
+            compose.on_cancel({
+                move || {
+                    // Dropping the handle closes the window.
+                    COMPOSE.with(|c| {
+                        c.take();
+                    });
+                }
+            });
+
+            // Keep the window alive: the handle owns it. Send feedback
+            // arrives in the main window via SendResult.
+            COMPOSE.with(|c| *c.borrow_mut() = Some(compose));
         }
     });
 }
