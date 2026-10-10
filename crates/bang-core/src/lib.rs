@@ -27,7 +27,7 @@ pub use account::{
     AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode,
 };
 pub use error::{Error, Result};
-pub use events::{MailEvent, SendRequest, UiCommand};
+pub use events::{MailEvent, OutgoingAttachment, SendRequest, UiCommand};
 pub use message::{
     AccountStatus, Attachment, EmailAddress, Folder, MessageFlags, MessageFull, MessageSummary,
 };

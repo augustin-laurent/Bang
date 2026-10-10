@@ -177,8 +177,14 @@ export component ComposeWindow inherits Window {
     in-out property <string> subject;
     in-out property <string> body;
 
+    /// File path to attach (read from Rust on attach).
+    in-out property <string> attach-path;
+    /// Names of the staged attachments (set from Rust).
+    in property <string> attachments: "";
+
     callback send();
     callback cancel();
+    callback attach-clicked();
 
     VerticalLayout {
         padding: Theme.space-lg;
@@ -208,6 +214,30 @@ export component ComposeWindow inherits Window {
         LineEdit {
             text <=> root.subject;
             placeholder-text: "Subject";
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+
+            LineEdit {
+                text <=> root.attach-path;
+                placeholder-text: "Attachment file path";
+            }
+
+            Button {
+                text: "Attach";
+                clicked => {
+                    root.attach-clicked();
+                }
+            }
+        }
+
+        Text {
+            visible: root.attachments != "";
+            text: "Attached: " + root.attachments;
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-xs;
+            wrap: word-wrap;
         }
 
         Rectangle {

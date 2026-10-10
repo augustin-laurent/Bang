@@ -182,6 +182,7 @@ impl MailService {
                             &req.bcc,
                             &req.subject,
                             &req.body_text,
+                            &req.attachments,
                             req.in_reply_to.as_deref(),
                             req.references.as_deref(),
                         )

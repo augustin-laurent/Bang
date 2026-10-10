@@ -63,6 +63,17 @@ pub enum UiCommand {
     Quit,
 }
 
+/// An attachment to include in an outgoing email.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutgoingAttachment {
+    /// File name (used for the Content-Disposition header).
+    pub filename: String,
+    /// MIME content type (e.g. `application/pdf`).
+    pub content_type: String,
+    /// File content.
+    pub data: Vec<u8>,
+}
+
 /// Request to send an email.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendRequest {
@@ -80,6 +91,8 @@ pub struct SendRequest {
     pub subject: String,
     /// Plain-text body.
     pub body_text: String,
+    /// Attachments.
+    pub attachments: Vec<OutgoingAttachment>,
     /// Message-ID being replied to, if any.
     pub in_reply_to: Option<String>,
     /// References header value, if any.

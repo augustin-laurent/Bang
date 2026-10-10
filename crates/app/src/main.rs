@@ -158,6 +158,29 @@ fn wire_selection(
 std::thread_local! {
     static COMPOSE: std::cell::RefCell<Option<ComposeWindow>> =
         const { std::cell::RefCell::new(None) };
+    /// Attachments staged for the open compose window.
+    static COMPOSE_ATTACHMENTS: std::cell::RefCell<Vec<bang_core::OutgoingAttachment>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Guess a MIME content type from a file extension.
+fn content_type_for(path: &str) -> String {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "txt" | "md" => "text/plain",
+        "html" | "htm" => "text/html",
+        "csv" => "text/csv",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 /// Connect the compose button to a compose window and the mail core.
@@ -184,6 +207,7 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
                 let bridge = bridge.clone();
                 let account_id = account.id.clone();
                 let from = account.email.clone();
+                let weak_compose = weak_compose.clone();
                 move || {
                     let Some(compose) = weak_compose.upgrade() else {
                         return;
@@ -207,6 +231,7 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
                         bcc: addrs(&compose.get_bcc().to_string()),
                         subject: compose.get_subject().to_string(),
                         body_text: compose.get_body().to_string(),
+                        attachments: COMPOSE_ATTACHMENTS.with(|a| std::mem::take(&mut *a.borrow_mut())),
                         in_reply_to: None,
                         references: None,
                     };
@@ -227,9 +252,46 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
                 }
             });
 
+            compose.on_attach_clicked({
+                let weak_compose = weak_compose.clone();
+                move || {
+                    let Some(compose) = weak_compose.upgrade() else {
+                        return;
+                    };
+                    let path = compose.get_attach_path().to_string();
+                    if path.trim().is_empty() {
+                        return;
+                    }
+                    let Ok(data) = std::fs::read(&path) else {
+                        return;
+                    };
+                    let filename = path
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(&path)
+                        .to_string();
+                    let attachment = bang_core::OutgoingAttachment {
+                        filename,
+                        content_type: content_type_for(&path),
+                        data,
+                    };
+                    let names = COMPOSE_ATTACHMENTS.with(|a| {
+                        a.borrow_mut().push(attachment);
+                        a.borrow()
+                            .iter()
+                            .map(|x| x.filename.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    });
+                    compose.set_attachments(names.into());
+                    compose.set_attach_path("".into());
+                }
+            });
+
             // Keep the window alive: the handle owns it. Send feedback
             // arrives in the main window via SendResult.
             COMPOSE.with(|c| *c.borrow_mut() = Some(compose));
+            COMPOSE_ATTACHMENTS.with(|a| a.borrow_mut().clear());
         }
     });
 }

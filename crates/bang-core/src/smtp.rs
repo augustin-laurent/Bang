@@ -1,13 +1,15 @@
 //! SMTP sending via lettre.
 
 use lettre::address::Address;
-use lettre::message::Mailbox;
+use lettre::message::header::ContentType;
+use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message};
 
 use crate::account::{AuthMethod, SmtpConfig, TlsMode};
 use crate::error::{Error, Result};
+use crate::events::OutgoingAttachment;
 
 /// Send an email over SMTP.
 ///
@@ -18,6 +20,7 @@ use crate::error::{Error, Result};
 /// * `to`, `cc`, `bcc` — recipient lists.
 /// * `subject` — subject line.
 /// * `body` — plain-text body.
+/// * `attachments` — files to attach (multipart/mixed when non-empty).
 /// * `in_reply_to` — Message-ID being replied to, if any.
 /// * `references` — References header value, if any.
 ///
@@ -32,6 +35,7 @@ pub async fn send(
     bcc: &[String],
     subject: &str,
     body: &str,
+    attachments: &[OutgoingAttachment],
     in_reply_to: Option<&str>,
     references: Option<&str>,
 ) -> Result<()> {
@@ -58,6 +62,29 @@ pub async fn send(
     }
     let transport: AsyncSmtpTransport<lettre::Tokio1Executor> = builder.build();
 
+    let mail = build_message(
+        from, to, cc, bcc, subject, body, attachments, in_reply_to, references,
+    )?;
+    transport.send(mail).await?;
+    Ok(())
+}
+
+/// Build the outgoing message: a plain body, or multipart/mixed when
+/// attachments are present.
+///
+/// # Errors
+/// Returns `Error::Config` on a bad From address or body build failure.
+fn build_message(
+    from: &str,
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
+    subject: &str,
+    body: &str,
+    attachments: &[OutgoingAttachment],
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+) -> Result<Message> {
     let from_addr: Address = from
         .parse()
         .map_err(|e| Error::Config(format!("bad From address: {e}")))?;
@@ -85,12 +112,22 @@ pub async fn send(
     if let Some(refs) = references {
         mail = mail.references(refs.to_string());
     }
-    let mail = mail
-        .body(body.to_string())
-        .map_err(|e| Error::Config(format!("build message: {e}")))?;
-
-    transport.send(mail).await?;
-    Ok(())
+    Ok(if attachments.is_empty() {
+        mail.body(body.to_string())
+            .map_err(|e| Error::Config(format!("build message: {e}")))?
+    } else {
+        // multipart/mixed: the text body plus one part per attachment.
+        let mut part = MultiPart::mixed().singlepart(SinglePart::plain(body.to_string()));
+        for att in attachments {
+            let content_type = ContentType::parse(&att.content_type)
+                .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
+            part = part.singlepart(
+                Attachment::new(att.filename.clone()).body(att.data.clone(), content_type),
+            );
+        }
+        mail.multipart(part)
+            .map_err(|e| Error::Config(format!("build message: {e}")))?
+    })
 }
 
 /// Map a `TlsMode` to a lettre `Tls` value.
@@ -109,4 +146,76 @@ fn tls_mode(config: &SmtpConfig) -> Result<Tls> {
         ),
         TlsMode::Plaintext => Tls::None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attachment(filename: &str, content_type: &str) -> OutgoingAttachment {
+        OutgoingAttachment {
+            filename: filename.into(),
+            content_type: content_type.into(),
+            data: b"file content".to_vec(),
+        }
+    }
+
+    #[test]
+    fn build_message_without_attachments_is_plain() {
+        let mail = build_message(
+            "alice@example.com",
+            &["bob@example.com".into()],
+            &[],
+            &[],
+            "Hi",
+            "Hello",
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        let raw = String::from_utf8(mail.formatted()).unwrap();
+        // No Content-Type header: the RFC 5322 default is text/plain.
+        assert!(!raw.contains("multipart"));
+        assert!(raw.contains("Hello"));
+    }
+
+    #[test]
+    fn build_message_with_attachments_is_multipart_mixed() {
+        let mail = build_message(
+            "alice@example.com",
+            &["bob@example.com".into()],
+            &[],
+            &[],
+            "Hi",
+            "Hello",
+            &[attachment("report.pdf", "application/pdf")],
+            None,
+            None,
+        )
+        .unwrap();
+        let raw = String::from_utf8(mail.formatted()).unwrap();
+        assert!(raw.contains("multipart/mixed"));
+        assert!(raw.contains("report.pdf"));
+        assert!(raw.contains("application/pdf"));
+        assert!(raw.contains("Hello"));
+    }
+
+    #[test]
+    fn build_message_falls_back_to_octet_stream_on_bad_type() {
+        let mail = build_message(
+            "alice@example.com",
+            &["bob@example.com".into()],
+            &[],
+            &[],
+            "Hi",
+            "Hello",
+            &[attachment("blob.bin", "not a valid type")],
+            None,
+            None,
+        )
+        .unwrap();
+        let raw = String::from_utf8(mail.formatted()).unwrap();
+        assert!(raw.contains("application/octet-stream"));
+    }
 }
