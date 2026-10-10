@@ -183,6 +183,15 @@ impl<T: Read + Write> ImapSession<T> {
         Ok(())
     }
 
+    /// Permanently remove a UID set from the selected mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn expunge(&mut self, uid_set: &str) -> Result<()> {
+        self.session.uid_expunge(uid_set)?;
+        Ok(())
+    }
+
     /// Wait for mailbox changes (IMAP IDLE), up to `timeout`.
     ///
     /// Returns `true` if the mailbox changed, `false` on timeout.
@@ -281,6 +290,17 @@ impl ImapConn {
         match self {
             ImapConn::Tls(s) => s.set_flags(uid_set, flags, add),
             ImapConn::Plain(s) => s.set_flags(uid_set, flags, add),
+        }
+    }
+
+    /// Permanently remove a UID set from the selected mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn expunge(&mut self, uid_set: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.expunge(uid_set),
+            ImapConn::Plain(s) => s.expunge(uid_set),
         }
     }
 

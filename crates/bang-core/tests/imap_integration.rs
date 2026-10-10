@@ -202,6 +202,8 @@ fn handle_conn(
             handle_uid_fetch(&mut writer, tag, &state, &selected, rest)?;
         } else if upper.starts_with("UID STORE") {
             handle_uid_store(&mut writer, tag, &state, &selected, rest);
+        } else if upper.starts_with("UID EXPUNGE") {
+            handle_uid_expunge(&mut writer, tag, &state, &selected, rest);
         } else if upper.starts_with("IDLE") {
             write_line(&mut writer, "+ idling");
             writer.set_read_timeout(Some(Duration::from_millis(200))).ok();
@@ -394,6 +396,25 @@ fn handle_uid_store(
     write_line(writer, &format!("{tag} OK UID STORE completed"));
 }
 
+/// Respond to `UID EXPUNGE <set>`: remove the messages from the folder.
+fn handle_uid_expunge(
+    writer: &mut TcpStream,
+    tag: &str,
+    state: &Arc<Mutex<ServerState>>,
+    selected: &Option<String>,
+    rest: &str,
+) {
+    let set = rest.trim().strip_prefix("UID EXPUNGE").unwrap_or("").trim();
+    let name = selected.clone().unwrap_or_default();
+    let mut st = state.lock().unwrap();
+    if let Some((_, msgs)) = st.folders.iter_mut().find(|(n, _)| *n == name) {
+        let uids = expand_uid_set(set, msgs);
+        msgs.retain(|m| !uids.contains(&m.uid));
+    }
+    drop(st);
+    write_line(writer, &format!("{tag} OK UID EXPUNGE completed"));
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -557,6 +578,58 @@ fn idle_push_delivers_new_message() {
 
     let messages = store.get_messages(inbox.id, 100).unwrap();
     assert_eq!(messages.len(), 2);
+
+    cmd_tx.send(SyncerCommand::Quit).unwrap();
+}
+
+#[test]
+fn delete_removes_message_from_server_and_store() {
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        vec![
+            msg(1, "Keep me", MessageFlags::empty()),
+            msg(2, "Delete me", MessageFlags::empty()),
+        ],
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (cmd_tx, mut rx) = start_and_connect(&server, store.clone());
+
+    let inbox = store.get_folders("test@bang.test").unwrap()[0].clone();
+    let messages = store.get_messages(inbox.id, 100).unwrap();
+    assert_eq!(messages.len(), 2);
+    let doomed = messages
+        .iter()
+        .find(|m| m.subject == "Delete me")
+        .unwrap()
+        .id;
+
+    cmd_tx
+        .send(SyncerCommand::Delete {
+            message_ids: vec![doomed],
+        })
+        .unwrap();
+
+    // The syncer expunges on the server and removes the local row.
+    let gone = wait_for_event(&mut rx, Duration::from_secs(10), |e| {
+        matches!(e, MailEvent::MessagesUpdated { .. })
+            && store.get_message(doomed).map(|m| m.is_none()).unwrap_or(false)
+    });
+    assert!(gone.is_some(), "deletion was not applied");
+
+    let messages = store.get_messages(inbox.id, 100).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].subject, "Keep me");
+
+    // The server lost the message too.
+    let st = server.state.lock().unwrap();
+    let server_msgs = st
+        .folders
+        .iter()
+        .find(|(n, _)| n == "INBOX")
+        .map(|(_, m)| m.clone())
+        .unwrap_or_default();
+    assert_eq!(server_msgs.len(), 1);
+    assert_eq!(server_msgs[0].subject, "Keep me");
 
     cmd_tx.send(SyncerCommand::Quit).unwrap();
 }

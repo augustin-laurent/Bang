@@ -43,6 +43,13 @@ pub enum UiCommand {
         /// `true` to add the flags, `false` to remove them.
         add: bool,
     },
+    /// Delete messages (expunge on the server, remove from the local store).
+    Delete {
+        /// Account the messages belong to.
+        account: AccountId,
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+    },
     /// Send an email.
     SendEmail(SendRequest),
     /// Search messages in an account.

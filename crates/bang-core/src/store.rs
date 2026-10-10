@@ -607,6 +607,19 @@ impl Store {
         Ok(())
     }
 
+    /// Delete messages from the local store (attachments are removed too).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn delete_messages(&self, ids: &[i64]) -> Result<()> {
+        let conn = self.lock()?;
+        for id in ids {
+            conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
+                .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Save the full body of a message (text and HTML).
     ///
     /// # Errors

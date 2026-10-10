@@ -160,6 +160,14 @@ impl MailService {
                     });
                 }
             }
+            UiCommand::Delete {
+                account,
+                message_ids,
+            } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::Delete { message_ids });
+                }
+            }
             UiCommand::SendEmail(req) => {
                 let store = self.store.clone();
                 let events_tx = self.events_tx.clone();

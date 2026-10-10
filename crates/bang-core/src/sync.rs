@@ -35,6 +35,11 @@ pub enum SyncerCommand {
         /// Local store id of the message.
         message_id: i64,
     },
+    /// Delete messages (expunge on the server, remove from the local store).
+    Delete {
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+    },
     /// Stop the syncer.
     Quit,
 }
@@ -270,6 +275,13 @@ fn idle_loop(
                         tracing::warn!("fetch_body failed: {e}");
                     }
                 }
+                Ok(SyncerCommand::Delete { message_ids }) => {
+                    handled = true;
+                    if let Err(e) = handle_delete(&mut conn, config, store, events_tx, &message_ids)
+                    {
+                        tracing::warn!("delete failed: {e}");
+                    }
+                }
                 Err(_) => break,
             }
         }
@@ -324,7 +336,40 @@ fn handle_set_flags(
     flags: MessageFlags,
     add: bool,
 ) -> Result<()> {
-    // Group messages by folder: (folder path, uids).
+    let by_folder = group_by_folder(store, message_ids)?;
+
+    let flag_str = flags_to_imap(flags);
+    let mut folder_ids = Vec::new();
+    for (folder_id, (path, uids)) in &by_folder {
+        if uids.is_empty() {
+            continue;
+        }
+        conn.select(&path)?;
+        let uid_set = uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        conn.set_flags(&uid_set, &flag_str, add)?;
+        folder_ids.push(*folder_id);
+    }
+    // Update the store before emitting: the UI reloads on the event.
+    store.set_message_flags(message_ids, flags, add)?;
+    for folder_id in folder_ids {
+        let _ = events_tx.send(MailEvent::MessagesUpdated {
+            account: config.id.clone(),
+            folder_id,
+            message_ids: message_ids.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+/// Group local message ids by their folder: `folder_id -> (path, uids)`.
+fn group_by_folder(
+    store: &Store,
+    message_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, (String, Vec<u32>)>> {
     let mut by_folder: std::collections::HashMap<i64, (String, Vec<u32>)> =
         std::collections::HashMap::new();
     for id in message_ids {
@@ -339,9 +384,20 @@ fn handle_set_flags(
         }
         entry.1.push(msg.uid);
     }
+    Ok(by_folder)
+}
 
-    let flag_str = flags_to_imap(flags);
-    for (folder_id, (path, uids)) in by_folder {
+/// Delete messages: expunge on the server, remove from the local store.
+fn handle_delete(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    message_ids: &[i64],
+) -> Result<()> {
+    let by_folder = group_by_folder(store, message_ids)?;
+    let mut folder_ids = Vec::new();
+    for (folder_id, (path, uids)) in &by_folder {
         if uids.is_empty() {
             continue;
         }
@@ -351,14 +407,18 @@ fn handle_set_flags(
             .map(|u| u.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        conn.set_flags(&uid_set, &flag_str, add)?;
+        conn.expunge(&uid_set)?;
+        folder_ids.push(*folder_id);
+    }
+    // Remove from the store before emitting: the UI reloads on the event.
+    store.delete_messages(message_ids)?;
+    for folder_id in folder_ids {
         let _ = events_tx.send(MailEvent::MessagesUpdated {
             account: config.id.clone(),
             folder_id,
             message_ids: message_ids.to_vec(),
         });
     }
-    store.set_message_flags(message_ids, flags, add)?;
     Ok(())
 }
 
