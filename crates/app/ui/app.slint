@@ -20,6 +20,8 @@ export component BangApp inherits Window {
     in property <int> selected-folder: -1;
     in property <int> selected-message: -1;
     in property <string> folder-name: "";
+    /// Search box content (cleared from Rust when a folder is selected).
+    in-out property <string> search-text;
     in property <string> account-status: "";
     in property <string> status-message: "";
     in property <string> message-sender: "";
@@ -49,6 +51,7 @@ export component BangApp inherits Window {
     callback message-selected(id: int);
     callback message-action(id: int, action: string);
     callback compose-clicked();
+    callback search-edited(text: string);
 
     HorizontalLayout {
         padding: 0;
@@ -70,7 +73,7 @@ export component BangApp inherits Window {
         VerticalLayout {
             spacing: 0;
 
-            // Toolbar (search bar and actions arrive in later commits).
+            // Toolbar: folder title, search box, compose button.
             Rectangle {
                 height: 48px;
                 background: Theme.bg;
@@ -79,9 +82,11 @@ export component BangApp inherits Window {
                     text: root.folder-name == "" ? "Inbox" : root.folder-name;
                     x: Theme.space-lg;
                     y: 14px;
+                    width: 180px;
                     color: Theme.text;
                     font-size: Theme.font-size-xl;
                     font-weight: Theme.font-weight-semibold;
+                    overflow: elide;
                 }
 
                 Text {
@@ -91,6 +96,18 @@ export component BangApp inherits Window {
                     y: 30px;
                     color: Theme.text-secondary;
                     font-size: Theme.font-size-xs;
+                }
+
+                LineEdit {
+                    x: 200px;
+                    y: 10px;
+                    width: 220px;
+                    height: 28px;
+                    text <=> root.search-text;
+                    placeholder-text: "Search";
+                    edited(text) => {
+                        root.search-edited(text);
+                    }
                 }
 
                 Button {

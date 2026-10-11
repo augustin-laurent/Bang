@@ -61,31 +61,46 @@ fn wire_selection(
             };
             let id = i64::from(id);
             state.selected_folder.store(id, std::sync::atomic::Ordering::SeqCst);
-            ui.set_selected_folder(id as i32);
+            // Selecting a folder leaves search mode.
+            ui.set_search_text("".into());
+            state.search_active.store(false, std::sync::atomic::Ordering::SeqCst);
+            load_folder_view(&ui, &store, id);
+        }
+    });
+
+    ui.on_search_edited({
+        let store = store.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |text: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let query = text.to_string();
+            if query.trim().is_empty() {
+                // Leaving search mode: restore the folder view.
+                state.search_active.store(false, std::sync::atomic::Ordering::SeqCst);
+                let id = state.selected_folder.load(std::sync::atomic::Ordering::SeqCst);
+                if id >= 0 {
+                    load_folder_view(&ui, &store, id);
+                }
+                return;
+            }
+            // Live results straight from the local store (FTS5).
+            state.search_active.store(true, std::sync::atomic::Ordering::SeqCst);
             ui.set_selected_message(-1);
-            // Clear the reading pane.
             ui.set_message_sender("".into());
             ui.set_message_subject("".into());
             ui.set_message_date("".into());
             ui.set_message_body("".into());
-            // Folder contents come straight from the local store.
-            let messages = if id == bang_core::UNIFIED_INBOX_ID {
-                ui.set_folder_name("Unified Inbox".into());
-                store.get_unified_inbox(200)
-            } else {
-                match store.get_folder_by_id(id) {
-                    Ok(Some(folder)) => ui.set_folder_name(folder.name.into()),
-                    _ => ui.set_folder_name("".into()),
-                }
-                store.get_messages(id, 200)
-            };
-            match messages {
+            match store.search_all(&fts_query(&query), 100) {
                 Ok(messages) => {
+                    ui.set_folder_name(format!("Search: {query}").into());
                     let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
                     ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));
                 }
                 Err(e) => {
-                    ui.set_status_message(format!("Folder load failed: {e}").into());
+                    ui.set_status_message(format!("Search failed: {e}").into());
                 }
             }
         }
@@ -150,6 +165,45 @@ fn wire_selection(
             bridge.send(command);
         }
     });
+}
+
+/// Load a folder's contents into the message list (local-cache read).
+fn load_folder_view(ui: &BangApp, store: &Arc<bang_core::Store>, id: i64) {
+    ui.set_selected_folder(id as i32);
+    ui.set_selected_message(-1);
+    // Clear the reading pane.
+    ui.set_message_sender("".into());
+    ui.set_message_subject("".into());
+    ui.set_message_date("".into());
+    ui.set_message_body("".into());
+    let messages = if id == bang_core::UNIFIED_INBOX_ID {
+        ui.set_folder_name("Unified Inbox".into());
+        store.get_unified_inbox(200)
+    } else {
+        match store.get_folder_by_id(id) {
+            Ok(Some(folder)) => ui.set_folder_name(folder.name.into()),
+            _ => ui.set_folder_name("".into()),
+        }
+        store.get_messages(id, 200)
+    };
+    match messages {
+        Ok(messages) => {
+            let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
+            ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));
+        }
+        Err(e) => {
+            ui.set_status_message(format!("Folder load failed: {e}").into());
+        }
+    }
+}
+
+/// Turn free text into a safe FTS5 MATCH expression: each word becomes a
+/// quoted token, joined as an implicit AND.
+fn fts_query(raw: &str) -> String {
+    raw.split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // The open compose window, kept alive until it is replaced.

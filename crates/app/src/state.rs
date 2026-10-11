@@ -1,6 +1,6 @@
 //! UI state: selection and application of core events to the window.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use chrono::TimeZone;
 use slint::{Model, VecModel};
@@ -17,6 +17,8 @@ pub struct UiState {
     pub selected_folder: AtomicI64,
     /// Id of the currently selected message (-1 = none).
     pub selected_message: AtomicI64,
+    /// Whether the message list currently shows search results.
+    pub search_active: AtomicBool,
 }
 
 impl UiState {
@@ -25,13 +27,14 @@ impl UiState {
         Self {
             selected_folder: AtomicI64::new(-1),
             selected_message: AtomicI64::new(-1),
+            search_active: AtomicBool::new(false),
         }
     }
 
     /// Rebuild the message list for the currently selected folder.
     ///
     /// Local-cache read: the unified inbox is a query, not a stored folder.
-    fn reload_messages(&self, ui: &BangApp, store: &Store) {
+    pub fn reload_messages(&self, ui: &BangApp, store: &Store) {
         let folder_id = self.selected_folder.load(Ordering::SeqCst);
         let messages = if folder_id == UNIFIED_INBOX_ID {
             store.get_unified_inbox(200)
@@ -82,6 +85,10 @@ impl UiState {
             } => {
                 // Keep the unread badges fresh.
                 self.refresh_folders(ui, store);
+                // Search results are a snapshot; leave them alone.
+                if self.search_active.load(Ordering::SeqCst) {
+                    return;
+                }
                 let selected = self.selected_folder.load(Ordering::SeqCst);
                 if selected == UNIFIED_INBOX_ID {
                     // It spans every account's INBOX, so append is not enough.
@@ -100,6 +107,10 @@ impl UiState {
             MailEvent::MessagesUpdated { folder_id, .. } => {
                 // Keep the unread badges fresh.
                 self.refresh_folders(ui, store);
+                // Search results are a snapshot; leave them alone.
+                if self.search_active.load(Ordering::SeqCst) {
+                    return;
+                }
                 let selected = self.selected_folder.load(Ordering::SeqCst);
                 if selected == UNIFIED_INBOX_ID {
                     self.reload_messages(ui, store);
