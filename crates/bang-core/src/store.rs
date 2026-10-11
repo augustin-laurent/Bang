@@ -752,6 +752,35 @@ impl Store {
         }
         Ok(out)
     }
+
+    /// Full-text search over every account's messages.
+    ///
+    /// The query is an FTS5 MATCH expression (e.g. `"invoice" OR "tax"`).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn search_all(&self, query: &str, limit: usize) -> Result<Vec<MessageSummary>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.from_name,
+                        m.from_email, m.\"to\", m.cc, m.subject, m.date, m.flags, m.preview,
+                        m.has_attachments
+                 FROM messages_fts f
+                 JOIN messages m ON m.id = f.rowid
+                 WHERE messages_fts MATCH ?1
+                 ORDER BY rank LIMIT ?2",
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![query, limit as i64], Self::row_to_summary)
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(e.to_string()))?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -964,6 +993,18 @@ mod tests {
         assert_eq!(store.search("alice", "invoice", 10).unwrap().len(), 1);
         assert_eq!(store.search("alice", "euros", 10).unwrap().len(), 1);
         assert_eq!(store.search("alice", "nonexistent", 10).unwrap().len(), 0);
+
+        // A second account with a matching message: search_all spans both.
+        store.save_account(&test_account("bob")).unwrap();
+        let bob_folder = test_folder("bob", "INBOX");
+        store.upsert_folder(&bob_folder).unwrap();
+        let bob_folder_id = store.get_folders("bob").unwrap()[0].id;
+        let bob_msg = test_summary("bob", bob_folder_id, 1, "Another invoice");
+        store.upsert_message(&bob_msg).unwrap();
+
+        assert_eq!(store.search("bob", "invoice", 10).unwrap().len(), 1);
+        assert_eq!(store.search_all("invoice", 10).unwrap().len(), 2);
+        assert_eq!(store.search_all("nonexistent", 10).unwrap().len(), 0);
     }
 }
 
