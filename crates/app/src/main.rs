@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use slint::{include_modules, ComponentHandle};
+use slint::{include_modules, ComponentHandle, Global};
 
 include_modules!();
 
@@ -27,6 +27,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let state = Arc::new(state::UiState::new());
     let bridge = bridge::Bridge::start(&ui, store.clone(), state.clone());
 
+    // Apply the saved theme (light / dark / system).
+    let config = config::Config::load();
+    apply_theme(&ui, &config.theme);
+    ui.set_theme_label(theme_label(&config.theme).into());
+
     // Resume syncing any saved accounts.
     if let Ok(accounts) = store.get_accounts() {
         for account in accounts {
@@ -34,9 +39,10 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }
 
-    wire_wizard(&ui, bridge.clone(), config::Config::load());
+    wire_wizard(&ui, bridge.clone(), config);
     wire_selection(&ui, &store, &state, bridge.clone());
-    wire_compose(&ui, &store, bridge);
+    wire_compose(&ui, &store, bridge.clone());
+    wire_theme(&ui);
 
     // When the window closes, `run` returns and the process exits, which
     // terminates the syncer threads (IMAP servers notice the TCP drop).
@@ -206,6 +212,51 @@ fn fts_query(raw: &str) -> String {
         .join(" ")
 }
 
+/// Whether the desktop environment is in dark mode (GNOME or KDE).
+///
+/// Falls back to `false` (light) when the desktop is unknown or the query
+/// tool is missing.
+fn system_dark_mode() -> bool {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if desktop.contains("GNOME") {
+        if let Ok(out) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .output()
+        {
+            return String::from_utf8_lossy(&out.stdout).contains("dark");
+        }
+    } else if desktop.contains("KDE") {
+        if let Ok(out) = std::process::Command::new("kreadconfig5")
+            .args(["--hierarchical", "false", "General", "ColorScheme"])
+            .output()
+        {
+            return String::from_utf8_lossy(&out.stdout)
+                .to_ascii_lowercase()
+                .contains("dark");
+        }
+    }
+    false
+}
+
+/// Apply a theme mode (`"light"`, `"dark"`, or `"system"`) to the UI.
+fn apply_theme(ui: &BangApp, mode: &str) {
+    let dark = match mode {
+        "dark" => true,
+        "light" => false,
+        _ => system_dark_mode(),
+    };
+    Theme::get(ui).set_dark(dark);
+}
+
+/// Short label for the theme toggle button.
+fn theme_label(mode: &str) -> &'static str {
+    match mode {
+        "light" => "☀",
+        "dark" => "☾",
+        _ => "⚙",
+    }
+}
+
 // The open compose window, kept alive until it is replaced.
 // Thread-local because Slint components are not `Sync`; every access
 // happens on the Slint event loop thread.
@@ -215,6 +266,29 @@ std::thread_local! {
     /// Attachments staged for the open compose window.
     static COMPOSE_ATTACHMENTS: std::cell::RefCell<Vec<bang_core::OutgoingAttachment>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Connect the theme toggle button: cycle light → dark → system, persist, apply.
+fn wire_theme(ui: &BangApp) {
+    ui.on_theme_clicked({
+        let weak = ui.as_weak();
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let config = config::Config::load();
+            let next = match config.theme.as_str() {
+                "light" => "dark",
+                "dark" => "system",
+                _ => "light",
+            };
+            let mut config = config;
+            config.theme = next.into();
+            config.save();
+            apply_theme(&ui, next);
+            ui.set_theme_label(theme_label(next).into());
+        }
+    });
 }
 
 /// Guess a MIME content type from a file extension.

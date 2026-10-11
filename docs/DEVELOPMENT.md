@@ -109,6 +109,13 @@ source.
 - **`include_modules!()`** re-exports the components and exported structs at the
   crate root (there is no `crate::ui` module): `BangApp`, `FolderRow`,
   `MessageRow`.
+- **Globals must be exported from the entry file** to be reachable from Rust.
+  Only the entry file's exports get public-API treatment; a global defined in an
+  imported file (e.g. `theme.slint`) is constant-folded away — its `in`
+  properties are treated as never-set, so `dark ? a : b` collapses to a literal
+  and the global is dropped from the generated code. Fix: re-export it from the
+  entry file with `export { Theme } from "theme.slint";`. Access it from Rust
+  with `Theme::get(&ui)` (1.18 has no `Theme::local()`).
 - **Property visibility from Rust**: an `in` property is write-only from Rust
   (setter only). Use `in-out` to also get a getter, named `get_<name>()`.
 - **Types**: Slint `int` is Rust `i32`; strings are `SharedString` (use

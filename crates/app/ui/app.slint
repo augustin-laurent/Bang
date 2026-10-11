@@ -1,5 +1,8 @@
 import { Button, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+// Re-export so Rust can reach the global: only the entry file's exports
+// get public-API treatment (otherwise its properties are constant-folded).
+export { Theme } from "theme.slint";
 import { FolderRow, MessageRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
@@ -22,6 +25,8 @@ export component BangApp inherits Window {
     in property <string> folder-name: "";
     /// Search box content (cleared from Rust when a folder is selected).
     in-out property <string> search-text;
+    /// Theme toggle button label (set from Rust).
+    in property <string> theme-label: "⚙";
     in property <string> account-status: "";
     in property <string> status-message: "";
     in property <string> message-sender: "";
@@ -52,6 +57,7 @@ export component BangApp inherits Window {
     callback message-action(id: int, action: string);
     callback compose-clicked();
     callback search-edited(text: string);
+    callback theme-clicked();
 
     HorizontalLayout {
         padding: 0;
@@ -107,6 +113,17 @@ export component BangApp inherits Window {
                     placeholder-text: "Search";
                     edited(text) => {
                         root.search-edited(text);
+                    }
+                }
+
+                Button {
+                    text: root.theme-label;
+                    x: parent.width - 140px;
+                    y: 10px;
+                    width: 28px;
+                    height: 28px;
+                    clicked => {
+                        root.theme-clicked();
                     }
                 }
 
