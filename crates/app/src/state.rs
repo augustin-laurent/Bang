@@ -85,11 +85,17 @@ impl UiState {
             } => {
                 // Keep the unread badges fresh.
                 self.refresh_folders(ui, store);
+                let selected = self.selected_folder.load(Ordering::SeqCst);
+                // Notify about new mail unless the user is already viewing it.
+                if selected != folder_id && selected != UNIFIED_INBOX_ID {
+                    if let Some(latest) = messages.first() {
+                        notify_new_message(&display_name(&latest.from), &latest.subject);
+                    }
+                }
                 // Search results are a snapshot; leave them alone.
                 if self.search_active.load(Ordering::SeqCst) {
                     return;
                 }
-                let selected = self.selected_folder.load(Ordering::SeqCst);
                 if selected == UNIFIED_INBOX_ID {
                     // It spans every account's INBOX, so append is not enough.
                     self.reload_messages(ui, store);
@@ -178,6 +184,17 @@ pub(crate) fn display_name(addr: &EmailAddress) -> String {
     } else {
         addr.name.clone()
     }
+}
+
+/// Show a desktop notification for a new message (best effort).
+///
+/// Uses `notify-send` (libnotify), present on most Linux desktops. Fails
+/// silently when it is missing (e.g. headless).
+pub(crate) fn notify_new_message(sender: &str, subject: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .arg(format!("New message from {sender}"))
+        .arg(subject)
+        .spawn();
 }
 
 /// Format a Unix timestamp as a short local date.
