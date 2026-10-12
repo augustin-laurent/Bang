@@ -30,7 +30,6 @@ fn main() -> Result<(), slint::PlatformError> {
     // Apply the saved theme (light / dark / system).
     let config = config::Config::load();
     apply_theme(&ui, &config.theme);
-    ui.set_theme_label(theme_label(&config.theme).into());
 
     // Resume syncing any saved accounts.
     if let Ok(accounts) = store.get_accounts() {
@@ -42,7 +41,7 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_wizard(&ui, bridge.clone(), config);
     wire_selection(&ui, &store, &state, bridge.clone());
     wire_compose(&ui, &store, bridge.clone());
-    wire_theme(&ui);
+    wire_settings(&ui, &store, bridge);
 
     // When the window closes, `run` returns and the process exits, which
     // terminates the syncer threads (IMAP servers notice the TCP drop).
@@ -248,14 +247,7 @@ fn apply_theme(ui: &BangApp, mode: &str) {
     Theme::get(ui).set_dark(dark);
 }
 
-/// Short label for the theme toggle button.
-fn theme_label(mode: &str) -> &'static str {
-    match mode {
-        "light" => "☀",
-        "dark" => "☾",
-        _ => "⚙",
-    }
-}
+
 
 // The open compose window, kept alive until it is replaced.
 // Thread-local because Slint components are not `Sync`; every access
@@ -268,25 +260,76 @@ std::thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Connect the theme toggle button: cycle light → dark → system, persist, apply.
-fn wire_theme(ui: &BangApp) {
-    ui.on_theme_clicked({
+/// Build the settings dialog's account list from the store.
+fn account_rows(store: &Arc<bang_core::Store>) -> Vec<AccountRow> {
+    store
+        .get_accounts()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| AccountRow {
+            id: a.id.0.clone().into(),
+            email: a.email.clone().into(),
+        })
+        .collect()
+}
+
+/// Connect the settings dialog: theme selection and account management.
+fn wire_settings(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bridge) {
+    ui.on_settings_opened({
+        let store = store.clone();
         let weak = ui.as_weak();
         move || {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
-            let config = config::Config::load();
-            let next = match config.theme.as_str() {
-                "light" => "dark",
-                "dark" => "system",
-                _ => "light",
+            let rows = account_rows(&store);
+            ui.set_settings_accounts(slint::ModelRc::new(slint::VecModel::from(rows)));
+            ui.set_settings_theme(config::Config::load().theme.into());
+            ui.set_settings_open(true);
+        }
+    });
+
+    ui.on_settings_theme_selected({
+        let weak = ui.as_weak();
+        move |mode: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
             };
-            let mut config = config;
-            config.theme = next.into();
+            let mode = mode.to_string();
+            let mut config = config::Config::load();
+            config.theme = mode.clone();
             config.save();
-            apply_theme(&ui, next);
-            ui.set_theme_label(theme_label(next).into());
+            apply_theme(&ui, &mode);
+            ui.set_settings_theme(mode.into());
+        }
+    });
+
+    ui.on_settings_account_remove({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let weak = ui.as_weak();
+        move |id: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let id = id.to_string();
+            // Delete from the store synchronously so the list refresh is
+            // correct; the command below stops the account's syncer.
+            let _ = store.delete_account(&id);
+            bridge.send(bang_core::UiCommand::RemoveAccount(bang_core::AccountId(
+                id,
+            )));
+            let rows = account_rows(&store);
+            ui.set_settings_accounts(slint::ModelRc::new(slint::VecModel::from(rows)));
+        }
+    });
+
+    ui.on_settings_close({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_settings_open(false);
+            }
         }
     });
 }

@@ -3,8 +3,18 @@
 A desktop mail client for Linux, written in Rust, with a UI inspired by Spark.
 
 - **UI**: [Slint](https://slint.dev) (native, no webview)
-- **Engine**: IMAP (async, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
+- **Engine**: IMAP (per-account syncer thread, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
 - **Status**: early development — see [PLAN.md](PLAN.md) for the roadmap
+
+## Features
+
+- Three-pane layout (folders, message list, reading pane) with a unified inbox
+  across all accounts.
+- Multiple accounts: OAuth2 (Gmail/Microsoft) or generic IMAP/SMTP.
+- Read/unread, star, and delete, with per-folder unread badges.
+- Compose with attachments; full-text search across all accounts.
+- Light/dark/system theme, desktop notifications for new mail, and a settings
+  dialog for theme and account management.
 
 ## Documentation
 
@@ -36,6 +46,6 @@ Until then, use the manual IMAP/SMTP account type.
 
 ## Layout
 
-- `crates/mail-core` — mail engine (IMAP, SMTP, OAuth, sync, SQLite store). No UI dependencies.
+- `crates/bang-core` — mail engine (IMAP, SMTP, OAuth, sync, SQLite store). No UI dependencies.
 - `crates/app` — Slint UI + tokio/Slint bridge.
 - `docs/` — architecture and development notes.

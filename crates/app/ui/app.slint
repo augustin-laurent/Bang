@@ -3,11 +3,12 @@ import { Theme } from "theme.slint";
 // Re-export so Rust can reach the global: only the entry file's exports
 // get public-API treatment (otherwise its properties are constant-folded).
 export { Theme } from "theme.slint";
-import { FolderRow, MessageRow } from "models.slint";
+import { FolderRow, MessageRow, AccountRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
 import { AccountWizard } from "accountwizard.slint";
+import { SettingsDialog } from "settingsdialog.slint";
 
 // Bang main window: three-pane layout (sidebar, message list, reading pane).
 export component BangApp inherits Window {
@@ -25,8 +26,6 @@ export component BangApp inherits Window {
     in property <string> folder-name: "";
     /// Search box content (cleared from Rust when a folder is selected).
     in-out property <string> search-text;
-    /// Theme toggle button label (set from Rust).
-    in property <string> theme-label: "⚙";
     in property <string> account-status: "";
     in property <string> status-message: "";
     in property <string> message-sender: "";
@@ -37,6 +36,11 @@ export component BangApp inherits Window {
     // Account wizard.
     in-out property <bool> wizard-open: false;
     in property <string> wizard-status: "";
+
+    // Settings dialog.
+    in-out property <bool> settings-open: false;
+    in property <[AccountRow]> settings-accounts;
+    in property <string> settings-theme: "system";
 
     // Generic account form (read from Rust on submit).
     in-out property <string> email;
@@ -57,7 +61,10 @@ export component BangApp inherits Window {
     callback message-action(id: int, action: string);
     callback compose-clicked();
     callback search-edited(text: string);
-    callback theme-clicked();
+    callback settings-opened();
+    callback settings-theme-selected(mode: string);
+    callback settings-account-remove(id: string);
+    callback settings-close();
 
     HorizontalLayout {
         padding: 0;
@@ -117,13 +124,13 @@ export component BangApp inherits Window {
                 }
 
                 Button {
-                    text: root.theme-label;
+                    text: "⚙";
                     x: parent.width - 140px;
                     y: 10px;
                     width: 28px;
                     height: 28px;
                     clicked => {
-                        root.theme-clicked();
+                        root.settings-opened();
                     }
                 }
 
@@ -189,6 +196,21 @@ export component BangApp inherits Window {
         }
         cancel => {
             root.wizard-cancel();
+        }
+    }
+
+    SettingsDialog {
+        open: root.settings-open;
+        accounts: root.settings-accounts;
+        theme: root.settings-theme;
+        theme-selected(mode) => {
+            root.settings-theme-selected(mode);
+        }
+        account-remove(id) => {
+            root.settings-account-remove(id);
+        }
+        close => {
+            root.settings-close();
         }
     }
 }

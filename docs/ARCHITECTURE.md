@@ -155,7 +155,11 @@ and uses them as XOAUTH2 credentials for IMAP/SMTP. Client IDs come from
 
 `smtp.rs` sends via `lettre` on the tokio runtime. It builds a transport from
 the account's `SmtpConfig` + `AuthMethod` (password or XOAUTH2) and sends the
-message, reporting a `SendResult` event.
+message, reporting a `SendResult` event. The message body is built by
+`build_message`: a plain body when there are no attachments, or a
+`multipart/mixed` message (text part + one part per `OutgoingAttachment`) when
+there are. An unparseable attachment content type falls back to
+`application/octet-stream`.
 
 ## MIME
 
@@ -173,14 +177,25 @@ The window (`ui/app.slint`) is a three-pane layout:
 - **Message list** (`messagelist.slint`) — rows for the selected folder.
 - **Reading pane** (`readingpane.slint`) — the selected message.
 
-`theme.slint` is a global holding the color tokens for light/dark. `models.slint`
-defines the `FolderRow` and `MessageRow` structs used by the list views.
+`theme.slint` is a global holding the color/typography/spacing tokens for
+light/dark. It must be re-exported from the entry file (`app.slint`) so Rust
+can reach it — see the Slint gotchas in DEVELOPMENT.md. `models.slint` defines
+the `FolderRow`, `MessageRow`, and `AccountRow` structs used by the list views.
 `accountwizard.slint` is the add-account overlay (OAuth buttons + a generic
-IMAP/SMTP form).
+IMAP/SMTP form). `settingsdialog.slint` is the settings overlay (theme
+selection + account management).
 
-`state.rs` (`UiState`) holds the current selection and applies each
-`MailEvent` to the window. `main.rs` wires the window callbacks (folder
-selection, message selection, the wizard) to the store and the `Bridge`.
+The toolbar hosts a search box (live FTS5 results via `Store::search_all`) and
+a settings button. The compose window (`ComposeWindow`, a second exported
+component in `app.slint`) handles to/cc/bcc/subject/body plus file-path
+attachments.
+
+`state.rs` (`UiState`) holds the current selection (and a `search_active`
+flag) and applies each `MailEvent` to the window; it also fires desktop
+notifications for new mail (via `notify-send`) unless the user is already
+viewing the affected folder. `main.rs` wires the window callbacks (folder
+selection, message selection, search, the wizard, compose, settings) to the
+store and the `Bridge`.
 
 ### Reading the store directly
 
@@ -191,15 +206,21 @@ local-cache reads.
 
 ## Configuration
 
-`app/src/config.rs` loads `~/.config/bang/config.toml`:
+`app/src/config.rs` loads (and saves) `~/.config/bang/config.toml`:
 
 ```toml
+theme = "system"            # "light" | "dark" | "system"
+
 [oauth.google]
 client_id = "..."
 [oauth.microsoft]
 client_id = "..."
 ```
 
-A missing file or missing keys simply yields defaults (empty client IDs), in
-which case the OAuth buttons report an error and the generic IMAP/SMTP path
-remains available.
+The `theme` key is written by the settings dialog. A missing file or missing
+keys simply yields defaults (theme `system`, empty client IDs), in which case
+the OAuth buttons report an error and the generic IMAP/SMTP path remains
+available.
+
+When `theme` is `system`, the app detects the desktop's dark mode at startup
+via `gsettings` (GNOME) or `kreadconfig5` (KDE), falling back to light.

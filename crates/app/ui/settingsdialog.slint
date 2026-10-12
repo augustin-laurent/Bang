@@ -1,0 +1,124 @@
+import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AccountRow } from "models.slint";
+
+// Settings overlay: theme selection and account management.
+export component SettingsDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <[AccountRow]> accounts;
+    in property <string> theme: "system";
+
+    callback theme-selected(mode: string);
+    callback account-remove(id: string);
+    callback close();
+
+    visible: root.open;
+    background: #00000080;
+    width: 100%;
+    height: 100%;
+
+    Rectangle {
+        width: 440px;
+        height: 480px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.bg;
+        border-radius: Theme.radius-md;
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: Theme.space-sm;
+
+            Text {
+                text: "Settings";
+                color: Theme.text;
+                font-size: Theme.font-size-xxl;
+                font-weight: Theme.font-weight-bold;
+            }
+
+            Text {
+                text: "Theme";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+
+                Button {
+                    text: root.theme == "light" ? "• Light" : "Light";
+                    clicked => {
+                        root.theme-selected("light");
+                    }
+                }
+
+                Button {
+                    text: root.theme == "dark" ? "• Dark" : "Dark";
+                    clicked => {
+                        root.theme-selected("dark");
+                    }
+                }
+
+                Button {
+                    text: root.theme == "system" ? "• System" : "System";
+                    clicked => {
+                        root.theme-selected("system");
+                    }
+                }
+            }
+
+            Text {
+                text: "Accounts";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+            }
+
+            if root.accounts.length == 0: Text {
+                text: "No accounts";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+            }
+
+            ListView {
+                height: 160px;
+                for acc in root.accounts: Rectangle {
+                    height: 32px;
+                    border-radius: Theme.radius-sm;
+
+                    Text {
+                        text: acc.email;
+                        x: Theme.space-sm;
+                        y: 8px;
+                        width: parent.width - 90px;
+                        color: Theme.text;
+                        font-size: Theme.font-size-md;
+                        overflow: elide;
+                    }
+
+                    Button {
+                        text: "Remove";
+                        x: parent.width - 78px;
+                        y: 4px;
+                        width: 70px;
+                        height: 24px;
+                        clicked => {
+                            root.account-remove(acc.id);
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                alignment: end;
+
+                Button {
+                    text: "Close";
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}
