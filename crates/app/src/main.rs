@@ -211,27 +211,29 @@ fn fts_query(raw: &str) -> String {
         .join(" ")
 }
 
-/// Whether the desktop environment is in dark mode (GNOME or KDE).
+/// Whether the desktop environment is in dark mode.
 ///
-/// Falls back to `false` (light) when the desktop is unknown or the query
-/// tool is missing.
+/// Queries GNOME (`gsettings`) then KDE (`kreadconfig5`) in turn and uses the
+/// first tool that reports a value; this also covers compositors such as
+/// Hyprland where `gsettings` is present. Falls back to `false` (light) when
+/// no tool reports a value.
 fn system_dark_mode() -> bool {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    if desktop.contains("GNOME") {
-        if let Ok(out) = std::process::Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-            .output()
-        {
-            return String::from_utf8_lossy(&out.stdout).contains("dark");
+    if let Ok(out) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+    {
+        let value = String::from_utf8_lossy(&out.stdout);
+        if !value.trim().is_empty() {
+            return value.contains("dark");
         }
-    } else if desktop.contains("KDE") {
-        if let Ok(out) = std::process::Command::new("kreadconfig5")
-            .args(["--hierarchical", "false", "General", "ColorScheme"])
-            .output()
-        {
-            return String::from_utf8_lossy(&out.stdout)
-                .to_ascii_lowercase()
-                .contains("dark");
+    }
+    if let Ok(out) = std::process::Command::new("kreadconfig5")
+        .args(["--hierarchical", "false", "General", "ColorScheme"])
+        .output()
+    {
+        let value = String::from_utf8_lossy(&out.stdout);
+        if !value.trim().is_empty() {
+            return value.to_ascii_lowercase().contains("dark");
         }
     }
     false

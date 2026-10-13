@@ -223,4 +223,6 @@ the OAuth buttons report an error and the generic IMAP/SMTP path remains
 available.
 
 When `theme` is `system`, the app detects the desktop's dark mode at startup
-via `gsettings` (GNOME) or `kreadconfig5` (KDE), falling back to light.
+by querying `gsettings` then `kreadconfig5` in turn and using the first that
+reports a value (this covers GNOME, KDE, and compositors such as Hyprland
+where `gsettings` is present), falling back to light when neither does.
