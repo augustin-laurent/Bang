@@ -150,15 +150,42 @@ export component BangApp inherits Window {
                 background: Theme.border;
             }
 
-            MessageList {
+            Rectangle {
                 min-width: 280px;
-                messages: root.messages;
-                selected-message: root.selected-message;
-                message-clicked(id) => {
-                    root.message-selected(id);
+
+                MessageList {
+                    messages: root.messages;
+                    selected-message: root.selected-message;
+                    message-clicked(id) => {
+                        root.message-selected(id);
+                    }
+                    message-action(id, action) => {
+                        root.message-action(id, action);
+                    }
                 }
-                message-action(id, action) => {
-                    root.message-action(id, action);
+
+                // Empty state: no account yet, so the folder list is empty.
+                Rectangle {
+                    visible: root.folders.length == 0;
+                    background: Theme.bg;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: Theme.space-md;
+
+                        Text {
+                            text: "No accounts yet";
+                            color: Theme.text-secondary;
+                            font-size: Theme.font-size-xl;
+                        }
+
+                        Button {
+                            text: "+ Add account";
+                            clicked => {
+                                root.wizard-open = true;
+                            }
+                        }
+                    }
                 }
             }
         }
