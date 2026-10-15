@@ -42,10 +42,18 @@ impl MailService {
     }
 
     /// Register a new account and start its syncer.
+    ///
+    /// If a syncer is already running for this account (e.g. the user
+    /// re-added it with new credentials), it is quit first so the old
+    /// in-memory config cannot keep syncing alongside the new one.
     fn add_account(&self, config: AccountConfig) {
         let _ = self.store.save_account(&config);
+        let mut syncers = self.syncers.lock().unwrap();
+        if let Some(old) = syncers.get(&config.id.0) {
+            let _ = old.send(SyncerCommand::Quit);
+        }
         let tx = start_syncer(config.clone(), self.store.clone(), self.events_tx.clone());
-        self.syncers.lock().unwrap().insert(config.id.0.clone(), tx);
+        syncers.insert(config.id.0.clone(), tx);
     }
 
     /// Handle a command from the UI.
