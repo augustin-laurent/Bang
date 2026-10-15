@@ -110,7 +110,8 @@ impl<T: Read + Write> ImapSession<T> {
     /// # Errors
     /// Returns `Error::Imap` on failure.
     pub fn list_folders(&mut self) -> Result<Vec<String>> {
-        let names = self.session.list(None, None)?;
+        // `None` pattern would send `LIST "" ""` (matches nothing); we want all.
+        let names = self.session.list(None, Some("*"))?;
         Ok(names
             .iter()
             .filter(|n| !n.attributes().contains(&NameAttribute::NoSelect))
