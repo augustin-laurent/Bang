@@ -140,9 +140,12 @@ impl<T: Read + Write> ImapSession<T> {
     /// # Errors
     /// Returns `Error::Imap` on failure.
     pub fn fetch_meta(&mut self, uid_set: &str) -> Result<Vec<MetaMessage>> {
+        // Gmail rejects unparenthesized multi-attribute fetch lists with
+        // "Could not parse command"; the parenthesized form is RFC 3501
+        // standard and accepted by all servers.
         let fetches = self
             .session
-            .uid_fetch(uid_set, "UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE")?;
+            .uid_fetch(uid_set, "(UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)")?;
         Ok(fetches.iter().filter_map(convert_fetch).collect())
     }
 
@@ -151,7 +154,7 @@ impl<T: Read + Write> ImapSession<T> {
     /// # Errors
     /// Returns `Error::Imap` on failure.
     pub fn fetch_preview(&mut self, uid: u32, max_bytes: usize) -> Result<Option<String>> {
-        let query = format!("UID BODY.PEEK[TEXT]<0.{max_bytes}>");
+        let query = format!("(UID BODY.PEEK[TEXT]<0.{max_bytes}>)");
         let fetches = self.session.uid_fetch(&uid.to_string(), &query)?;
         Ok(fetches
             .iter()
@@ -163,7 +166,7 @@ impl<T: Read + Write> ImapSession<T> {
     /// # Errors
     /// Returns `Error::Imap` on failure.
     pub fn fetch_body(&mut self, uid: u32) -> Result<Vec<u8>> {
-        let fetches = self.session.uid_fetch(&uid.to_string(), "UID BODY.PEEK[]")?;
+        let fetches = self.session.uid_fetch(&uid.to_string(), "(UID BODY.PEEK[])")?;
         fetches
             .iter()
             .find_map(|f| f.body().map(|b| b.to_vec()))
