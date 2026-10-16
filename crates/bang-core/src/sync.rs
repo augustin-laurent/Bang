@@ -82,22 +82,26 @@ fn run_syncer(
             return;
         }
 
-        match connect_and_sync(&config, &store, &events_tx) {
+        let failed = match connect_and_sync(&config, &store, &events_tx) {
             Ok(conn) => {
                 backoff = Duration::from_secs(1);
                 emit(&events_tx, &account_id, AccountStatus::Connected);
-                if idle_loop(conn, &config, &store, &events_tx, &cmd_rx) {
-                    return;
-                }
+                // `false` means the idle loop ended (dropped connection or a
+                // condition like an empty folder list); fall through to the
+                // backoff so we cannot reconnect in a tight loop.
+                !idle_loop(conn, &config, &store, &events_tx, &cmd_rx)
             }
             Err(e) => {
                 tracing::warn!("sync error for {account_id}: {e}");
-                emit(&events_tx, &account_id, AccountStatus::Reconnecting);
-                if sleep_or_quit(&cmd_rx, backoff) {
-                    return;
-                }
-                backoff = (backoff * 2).min(Duration::from_secs(60));
+                true
             }
+        };
+        if failed {
+            emit(&events_tx, &account_id, AccountStatus::Reconnecting);
+            if sleep_or_quit(&cmd_rx, backoff) {
+                return;
+            }
+            backoff = (backoff * 2).min(Duration::from_secs(60));
         }
     }
 }
