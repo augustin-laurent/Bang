@@ -1,122 +1,62 @@
-import { Button, ListView } from "std-widgets.slint";
+import { ScrollView, ListView, ComboBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
 import { AccountRow } from "models.slint";
-
-// Settings overlay: theme selection and account management.
 export component SettingsDialog inherits Rectangle {
-    in property <bool> open: false;
-    in property <[AccountRow]> accounts;
-    in property <string> theme: "system";
-
-    callback theme-selected(mode: string);
-    callback account-remove(id: string);
-    callback close();
-
-    visible: root.open;
-    background: #00000080;
-    width: 100%;
-    height: 100%;
-
+    in property <bool> open; in property <[AccountRow]> accounts;
+    in property <string> theme; in property <string> language;
+    private property <string> remove-id; private property <string> remove-email;
+    callback theme-selected(string); callback language-selected(string);
+    callback account-remove(string); callback add-account; callback close;
+    changed open => { if !self.open { self.remove-id = ""; } }
+    visible: open; background: #00000044; TouchArea { }
     Rectangle {
-        width: 440px;
-        height: 480px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        background: Theme.bg;
-        border-radius: Theme.radius-md;
-
-        VerticalLayout {
-            padding: 20px;
-            spacing: Theme.space-sm;
-
-            Text {
-                text: "Settings";
-                color: Theme.text;
-                font-size: Theme.font-size-xxl;
-                font-weight: Theme.font-weight-bold;
-            }
-
-            Text {
-                text: "Theme";
-                color: Theme.text-secondary;
-                font-size: Theme.font-size-sm;
-            }
-
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-
-                Button {
-                    text: root.theme == "light" ? "• Light" : "Light";
-                    clicked => {
-                        root.theme-selected("light");
+        width: min(540px, parent.width - 40px); height: min(680px, parent.height - 32px);
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        border-radius: 16px; background: Theme.bg;
+        VerticalLayout { padding: 24px; spacing: 20px;
+            Text { text: @tr("Settings"); color: Theme.text; font-size: 20px; font-weight: 600; }
+            ScrollView { content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout { spacing: 20px; padding: 4px;
+                    Text { text: @tr("Appearance"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                    HorizontalLayout { spacing: 8px;
+                        ActionButton { modal: true; text: @tr("System"); active: root.theme == "system"; clicked => { root.theme-selected("system"); } }
+                        ActionButton { modal: true; text: @tr("Light"); active: root.theme == "light"; clicked => { root.theme-selected("light"); } }
+                        ActionButton { modal: true; text: @tr("Dark"); active: root.theme == "dark"; clicked => { root.theme-selected("dark"); } }
                     }
-                }
-
-                Button {
-                    text: root.theme == "dark" ? "• Dark" : "Dark";
-                    clicked => {
-                        root.theme-selected("dark");
-                    }
-                }
-
-                Button {
-                    text: root.theme == "system" ? "• System" : "System";
-                    clicked => {
-                        root.theme-selected("system");
-                    }
-                }
-            }
-
-            Text {
-                text: "Accounts";
-                color: Theme.text-secondary;
-                font-size: Theme.font-size-sm;
-            }
-
-            if root.accounts.length == 0: Text {
-                text: "No accounts";
-                color: Theme.text-secondary;
-                font-size: Theme.font-size-sm;
-            }
-
-            ListView {
-                height: 160px;
-                for acc in root.accounts: Rectangle {
-                    height: 32px;
-                    border-radius: Theme.radius-sm;
-
-                    Text {
-                        text: acc.email;
-                        x: Theme.space-sm;
-                        y: 8px;
-                        width: parent.width - 90px;
-                        color: Theme.text;
-                        font-size: Theme.font-size-md;
-                        overflow: elide;
-                    }
-
-                    Button {
-                        text: "Remove";
-                        x: parent.width - 78px;
-                        y: 4px;
-                        width: 70px;
-                        height: 24px;
-                        clicked => {
-                            root.account-remove(acc.id);
+                    Rectangle { height: 88px; border-radius: 8px; background: Theme.sidebar-bg;
+                        Rectangle { x: 20px; y: 16px; width: 54px; height: 56px; background: Theme.hover; border-radius: 4px; }
+                        Rectangle { x: 80px; y: 16px; width: 100px; height: 56px; background: Theme.bg;
+                            Rectangle { x: 4px; y: 4px; width: 92px; height: 16px; border-radius: 3px; background: Theme.selection; }
                         }
+                        Rectangle { x: 188px; y: 16px; width: parent.width - 208px; height: 56px; background: Theme.bg; }
                     }
+                    Text { text: @tr("Language"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                    ComboBox { model: [@tr("System"), "Français", "English"]; current-index: root.language == "fr" ? 1 : root.language == "en" ? 2 : 0;
+                        selected(value) => { root.language-selected(self.current-index == 1 ? "fr" : self.current-index == 2 ? "en" : "system"); }
+                    }
+                    Text { text: @tr("Accounts"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                    if root.accounts.length == 0: Text { text: @tr("No accounts"); color: Theme.text-secondary; font-size: 13px; }
+                    for acc in root.accounts: HorizontalLayout { height: 38px; spacing: 8px;
+                        Text { text: acc.email; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
+                        ActionButton { modal: true; text: @tr("Remove"); icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
+                    }
+                    ActionButton { modal: true; text: @tr("Add account"); icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
                 }
             }
-
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                alignment: end;
-
-                Button {
-                    text: "Close";
-                    clicked => {
-                        root.close();
-                    }
+            ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
+        }
+    }
+    if root.remove-id != "": Rectangle {
+        background: #00000066; TouchArea { }
+        Rectangle { width: 400px; height: 210px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            background: Theme.bg; border-radius: 16px;
+            VerticalLayout { padding: 24px; spacing: 16px;
+                Text { text: @tr("Remove this account?"); color: Theme.text; font-size: 16px; font-weight: 600; }
+                Text { text: root.remove-email + "\n" + @tr("Its cached messages will be removed from this device."); wrap: word-wrap; color: Theme.text-secondary; font-size: 13px; }
+                HorizontalLayout { spacing: 8px;
+                    ActionButton { modal: true; text: @tr("Cancel"); clicked => { root.remove-id = ""; } }
+                    ActionButton { modal: true; text: @tr("Remove"); clicked => { root.account-remove(root.remove-id); root.remove-id = ""; } }
                 }
             }
         }

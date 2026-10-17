@@ -1,0 +1,427 @@
+@font-face {
+  font-family: "Noto Sans";
+  src: url("../../../../assets/fonts/NotoSans-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans";
+  src: url("../../../../assets/fonts/NotoSans-Bold.ttf") format("truetype");
+  font-weight: 600 800;
+  font-display: swap;
+}
+:root {
+  font-family: "Noto Sans", sans-serif;
+  color: #202124;
+  background: #fff;
+  font-synthesis: none;
+  --surface: #fff;
+  --chrome: #fafafb;
+  --border: #e5e6e9;
+  --text: #202124;
+  --muted: #626267;
+  --active: #e8e9ec;
+  --accent: #0864d6;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1c1c1e;
+  --chrome: #242426;
+  --border: #38383b;
+  --text: #f4f4f6;
+  --muted: #b4b4bc;
+  --active: #343438;
+  --accent: #4094ff;
+  background: var(--surface);
+  color: var(--text);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--surface);
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  min-height: 30px;
+  padding: 5px 9px;
+}
+button:hover {
+  background: var(--active);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+button[aria-pressed="true"] {
+  background: var(--active);
+}
+svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+button svg {
+  margin: auto;
+}
+.primary {
+  background: #0864d6 !important;
+  color: #fff !important;
+}
+.danger {
+  color: #bd2635;
+}
+#app {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  height: 52px;
+  min-height: 52px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.title svg {
+  width: 23px;
+  height: 23px;
+}
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+.toolbar-actions button {
+  width: 38px;
+  height: 34px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.toolbar-actions #send {
+  width: 46px;
+}
+.addresses {
+  padding: 0 24px;
+  flex-shrink: 0;
+}
+.field {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  gap: 10px;
+}
+.field label {
+  color: var(--muted);
+  width: 62px;
+  flex-shrink: 0;
+}
+.field input,
+.field select {
+  background: transparent;
+  border: 0;
+  outline: none;
+  min-height: 32px;
+  flex: 1;
+  min-width: 0;
+}
+.field select {
+  max-width: 360px;
+}
+.field input:focus {
+  box-shadow: 0 1px var(--accent);
+}
+#cc-toggle {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.formatting {
+  padding: 7px 18px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+  flex-shrink: 0;
+}
+.formatting select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  height: 28px;
+  font-size: 12px;
+  padding: 2px 6px;
+  max-width: 115px;
+}
+.formatting button {
+  width: 30px;
+  height: 28px;
+  min-height: 28px;
+  font-family: serif;
+  font-size: 18px;
+  padding: 4px;
+}
+.formatting svg {
+  width: 18px;
+  height: 18px;
+}
+.separator {
+  height: 20px;
+  width: 1px;
+  background: var(--border);
+  margin: 0 5px;
+  flex-shrink: 0;
+}
+.color-control {
+  position: relative;
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.color-control input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.color-control:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.color-mark {
+  border-bottom: 3px solid var(--text);
+  font: 19px serif;
+}
+.attachments {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  max-height: 120px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 340px;
+}
+.attachment > span:first-child svg {
+  width: 28px;
+  height: 32px;
+}
+.attachment strong {
+  display: block;
+  font-weight: 500;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+  white-space: nowrap;
+}
+.attachment small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.attachment button {
+  width: 28px;
+  padding: 5px;
+}
+.attachment button svg {
+  width: 14px;
+  height: 14px;
+}
+#editor-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 24px 40px;
+}
+#editor {
+  min-height: 100%;
+}
+.tiptap {
+  outline: none;
+  min-height: 100%;
+  font-family: "Noto Sans", sans-serif;
+  font-size: 12pt;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  caret-color: var(--text);
+}
+.tiptap p {
+  margin: 0 0 1.15em;
+}
+.tiptap ul,
+.tiptap ol {
+  padding-left: 26px;
+  margin: 0 0 1.15em;
+}
+.tiptap li p {
+  margin: 0;
+}
+.tiptap a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.tiptap mark {
+  color: #202124 !important;
+}
+.tiptap blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+  margin-left: 0;
+}
+#feedback {
+  padding: 9px 24px;
+  background: var(--chrome);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  width: min(420px, 90vw);
+  box-shadow: 0 12px 40px #0002;
+}
+dialog::backdrop {
+  background: #0004;
+}
+dialog h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+dialog p {
+  font-size: 13px;
+  color: var(--muted);
+}
+dialog input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  font-size: 13px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 760px) {
+  .formatting {
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 6px 12px;
+  }
+  .formatting #align {
+    max-width: 86px;
+  }
+  .separator {
+    margin: 0 3px;
+  }
+  .addresses {
+    padding: 0 16px;
+  }
+  #editor-wrap {
+    padding: 16px;
+  }
+  .attachments {
+    padding: 8px 16px;
+  }
+  .field label {
+    width: 46px;
+  }
+  .title {
+    gap: 8px;
+  }
+  .toolbar {
+    padding: 8px 16px;
+  }
+}
+
+.highlight-group {
+  display: flex;
+  align-items: center;
+}
+.highlight-group input {
+  width: 12px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+@font-face {
+  font-family: "Noto Sans";
+  src: url("../../../../assets/fonts/NotoSans-Italic.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans";
+  src: url("../../../../assets/fonts/NotoSans-BoldItalic.ttf")
+    format("truetype");
+  font-style: italic;
+  font-weight: 600 800;
+  font-display: swap;
+}
+.tiptap {
+  font-synthesis: weight style;
+}

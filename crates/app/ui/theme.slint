@@ -1,46 +1,37 @@
-// Theme tokens for Bang (Spark-like palette, light and dark).
+import { Palette } from "std-widgets.slint";
+// Shared opaque Mail-inspired surfaces. All sizes are logical pixels.
 export global Theme {
-    /// Whether the dark theme is active.
     in property <bool> dark: false;
-
-    // Colors.
-    /// Window / message list background.
-    out property <color> bg: dark ? #1e1f22 : #ffffff;
-    /// Sidebar background.
-    out property <color> sidebar-bg: dark ? #17181a : #f5f6f8;
-    /// Reading pane background.
-    out property <color> reading-bg: dark ? #26272b : #ffffff;
-    /// Primary text.
-    out property <color> text: dark ? #e8e8e8 : #1a1a1a;
-    /// Secondary text.
-    out property <color> text-secondary: dark ? #9a9a9a : #6b6b6b;
-    /// Accent color.
-    out property <color> accent: #4c8bf5;
-    /// Hover / selection background.
-    out property <color> hover: dark ? #2a2b30 : #eef1f5;
-    /// Border color.
-    out property <color> border: dark ? #33343a : #e2e4e8;
-
-    // Typography.
+    in property <bool> blocked: false;
+    callback sync-palette();
+    sync-palette => { Palette.color-scheme = self.dark ? ColorScheme.dark : ColorScheme.light; }
+    out property <color> bg: dark ? #1c1c1e : #ffffff;
+    out property <color> sidebar-bg: dark ? #242426 : #f5f6f7;
+    out property <color> reading-bg: bg;
+    out property <color> toolbar-bg: dark ? #242426 : #fafafb;
+    out property <color> text: dark ? #f4f4f6 : #202124;
+    out property <color> text-secondary: dark ? #b4b4bc : #626267;
+    out property <color> accent: dark ? #4094ff : #0864d6;
+    out property <color> selection: dark ? #075bca : #0864d6;
+    out property <color> hover: dark ? #343438 : #e8e9ec;
+    out property <color> border: dark ? #38383b : #e5e6e9;
+    out property <color> control-border: dark ? #66666b : #a6a7ae;
+    out property <color> danger: dark ? #ff8a91 : #bd2635;
     out property <length> font-size-xs: 11px;
     out property <length> font-size-sm: 12px;
     out property <length> font-size-md: 13px;
     out property <length> font-size-lg: 14px;
     out property <length> font-size-xl: 16px;
-    out property <length> font-size-xxl: 18px;
+    out property <length> font-size-xxl: 20px;
     out property <int> font-weight-regular: 400;
     out property <int> font-weight-medium: 500;
     out property <int> font-weight-semibold: 600;
     out property <int> font-weight-bold: 700;
-
-    // Spacing.
     out property <length> space-xs: 4px;
     out property <length> space-sm: 8px;
     out property <length> space-md: 12px;
     out property <length> space-lg: 16px;
     out property <length> space-xl: 24px;
-
-    // Shape.
     out property <length> radius-sm: 6px;
-    out property <length> radius-md: 12px;
+    out property <length> radius-md: 16px;
 }

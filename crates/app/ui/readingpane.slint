@@ -1,50 +1,33 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-
-// Right pane: message reading area.
 export component ReadingPane inherits Rectangle {
     background: Theme.reading-bg;
-
-    in property <string> sender: "";
-    in property <string> subject: "";
-    in property <string> date: "";
-    in property <string> body: "";
-
-    if root.subject == "": Text {
-        text: "Select a message to read it";
-        x: Theme.space-lg;
-        y: Theme.space-lg;
-        color: Theme.text-secondary;
-        font-size: Theme.font-size-md;
-    }
-
-    VerticalLayout {
-        padding: Theme.space-lg;
-        spacing: Theme.space-sm;
-
-        Text {
-            text: root.subject;
-            color: Theme.text;
-            font-size: Theme.font-size-xl;
-            font-weight: Theme.font-weight-semibold;
-            wrap: word-wrap;
+    in property <string> sender; in property <string> sender-address;
+    in property <string> recipients; in property <string> initials;
+    in property <string> subject; in property <string> date; in property <string> body;
+    in property <bool> selected: false; in property <bool> loading: false;
+    if !root.selected: Text { text: @tr("Select a message to read it"); color: Theme.text-secondary; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; }
+    if root.selected: VerticalLayout {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        padding: 24px; spacing: 16px;
+        HorizontalLayout {
+            height: 74px; spacing: 12px;
+            Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Theme.hover;
+                Text { text: root.initials; font-size: 12px; color: Theme.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            VerticalLayout { spacing: 4px; alignment: start; horizontal-stretch: 1;
+                Text { text: root.sender; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
+                Text { text: root.subject; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+                Text { text: @tr("To:") + " " + root.recipients; color: Theme.text-secondary; font-size: 12px; overflow: elide; }
+                Text { text: root.sender-address; color: Theme.text-secondary; font-size: 11px; overflow: elide; }
+            }
+            Text { text: root.date; color: Theme.text-secondary; font-size: 11px; vertical-alignment: top; horizontal-stretch: 0; }
         }
-
-        Text {
-            text: root.sender + " — " + root.date;
-            color: Theme.text-secondary;
-            font-size: Theme.font-size-sm;
-        }
-
-        Rectangle {
-            height: 1px;
-            background: Theme.border;
-        }
-
-        Text {
-            text: root.body;
-            color: Theme.text;
-            font-size: Theme.font-size-lg;
-            wrap: word-wrap;
+        Rectangle { height: 1px; background: Theme.border; }
+        ScrollView {
+            min-height: 0px; vertical-stretch: 1;
+            content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            Text { x: 0px; y: 0px; width: min(parent.width, 800px); height: self.preferred-height; vertical-alignment: top; text: root.loading ? @tr("Loading…") : root.body; color: root.loading ? Theme.text-secondary : Theme.text; font-size: 15px; wrap: word-wrap; }
         }
     }
 }

@@ -1,8 +1,9 @@
-import { Button, LineEdit } from "std-widgets.slint";
+import "../../../assets/fonts/NotoSans-Regular.ttf";
+import "../../../assets/fonts/NotoSans-Bold.ttf";
 import { Theme } from "theme.slint";
-// Re-export so Rust can reach the global: only the entry file's exports
-// get public-API treatment (otherwise its properties are constant-folded).
 export { Theme } from "theme.slint";
+export { Palette } from "std-widgets.slint";
+import { ActionButton, SearchField } from "controls.slint";
 import { FolderRow, MessageRow, AccountRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
@@ -10,354 +11,164 @@ import { ReadingPane } from "readingpane.slint";
 import { AccountWizard } from "accountwizard.slint";
 import { SettingsDialog } from "settingsdialog.slint";
 
-// Bang main window: three-pane layout (sidebar, message list, reading pane).
 export component BangApp inherits Window {
-    title: "Bang";
-    preferred-width: 1100px;
-    preferred-height: 680px;
-    min-width: 720px;
-    min-height: 420px;
-
-    // Data, set from Rust.
-    in property <[FolderRow]> folders;
-    in-out property <[MessageRow]> messages;
-    in property <int> selected-folder: -1;
-    in property <int> selected-message: -1;
-    in property <string> folder-name: "";
-    /// Search box content (cleared from Rust when a folder is selected).
-    in-out property <string> search-text;
-    in property <string> account-status: "";
-    in property <string> status-message: "";
-    in property <string> message-sender: "";
-    in property <string> message-subject: "";
-    in property <string> message-date: "";
-    in property <string> message-body: "";
-
-    // Account wizard.
-    in-out property <bool> wizard-open: false;
-    in property <string> wizard-status: "";
-
-    // Settings dialog.
+    title: "Bang"; preferred-width: 1440px; preferred-height: 900px;
+    min-width: 720px; min-height: 480px; background: Theme.bg;
+    default-font-family: "Noto Sans"; default-font-size: 13px;
+    in property <[FolderRow]> folders; in-out property <[MessageRow]> messages;
+    in property <int> account-count: 0;
+    in property <int> selected-folder: -1; in property <int> selected-message: -1;
+    in property <string> folder-name; in-out property <string> search-text;
+    in property <bool> search-active: false;
+    in property <string> account-status; in property <string> status-message;
+    in property <string> message-sender; in property <string> message-subject;
+    in property <string> message-date; in property <string> message-body;
+    in property <string> message-sender-address; in property <string> message-recipients;
+    in property <string> message-initials;
+    in property <bool> message-loading: false;
+    in property <bool> message-starred: false;
+    in-out property <bool> wizard-open: false; in-out property <bool> wizard-manual: false; in property <string> wizard-status;
     in-out property <bool> settings-open: false;
-    in property <[AccountRow]> settings-accounts;
-    in property <string> settings-theme: "system";
+    in property <[AccountRow]> settings-accounts; in property <string> settings-theme: "system";
+    in property <string> settings-language: "system";
+    in-out property <string> email; in-out property <string> imap-host;
+    in-out property <string> imap-port: "993"; in-out property <string> smtp-host;
+    in-out property <string> smtp-port: "465"; in-out property <string> username;
+    in-out property <string> password; in-out property <bool> starttls: false;
+    callback wizard-oauth-clicked(string); callback wizard-add-generic(); callback wizard-cancel();
+    callback folder-selected(int); callback account-toggled(string);
+    callback message-selected(int); callback message-action(int, string);
+    callback compose-clicked(); callback search-edited(string); callback navigate-message(int);
+    callback settings-opened(); callback settings-theme-selected(string);
+    callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
 
-    // Generic account form (read from Rust on submit).
-    in-out property <string> email;
-    in-out property <string> imap-host;
-    in-out property <string> imap-port: "993";
-    in-out property <string> smtp-host;
-    in-out property <string> smtp-port: "465";
-    in-out property <string> username;
-    in-out property <string> password;
-    in-out property <bool> starttls: false;
-
-    callback wizard-oauth-clicked(provider: string);
-    callback wizard-add-generic();
-    callback wizard-cancel();
-
-    callback folder-selected(id: int);
-    callback message-selected(id: int);
-    callback message-action(id: int, action: string);
-    callback compose-clicked();
-    callback search-edited(text: string);
-    callback settings-opened();
-    callback settings-theme-selected(mode: string);
-    callback settings-account-remove(id: string);
-    callback settings-close();
-
-    HorizontalLayout {
-        padding: 0;
-        spacing: 0;
-
-        Sidebar {
-            width: 220px;
-            folders: root.folders;
-            selected-folder: root.selected-folder;
-            account-status: root.account-status;
-            add-account => {
-                root.wizard-open = true;
+    changed wizard-open => { Theme.blocked = self.wizard-open || self.settings-open; }
+    changed settings-open => { Theme.blocked = self.wizard-open || self.settings-open; }
+    private property <length> sidebar-size: 260px;
+    private property <length> list-size: 384px;
+    private property <bool> sidebar-hidden: false;
+    private property <bool> sidebar-overlay: false;
+    private property <bool> detail-open: false;
+    private property <bool> narrow: root.width < 900px;
+    private property <bool> show-nav: root.width >= 1120px && !sidebar-hidden;
+    private property <length> nav-width: show-nav ? sidebar-size : 0px;
+    private property <length> actual-list-width: narrow ? root.width : min(list-size, (root.width - nav-width) * 0.48);
+    private property <length> reader-x: nav-width + actual-list-width + 1px;
+    private property <bool> list-visible: !narrow || !detail-open;
+    private property <bool> reader-visible: !narrow || detail-open;
+    forward-focus: keyboard;
+    keyboard := FocusScope {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        key-pressed(e) => {
+            if root.settings-open || root.wizard-open {
+                if e.text == Key.Escape { if root.wizard-open { root.wizard-cancel(); } else { root.settings-close(); } return accept; }
+                return reject;
             }
-            folder-clicked(id) => {
-                root.folder-selected(id);
-            }
+            if e.modifiers.control && (e.text == "n" || e.text == "N") { root.compose-clicked(); return accept; }
+            if e.modifiers.control && (e.text == "f" || e.text == "F") { if root.narrow { list-search.focus-input(); } else { search.focus-input(); } return accept; }
+            if e.text == Key.Escape { root.detail-open = false; root.sidebar-overlay = false; return accept; }
+            if e.text == Key.DownArrow { root.navigate-message(1); return accept; }
+            if e.text == Key.UpArrow { root.navigate-message(-1); return accept; }
+            return reject;
         }
-
-        VerticalLayout {
-            spacing: 0;
-
-            // Toolbar: folder title, search box, compose button.
-            Rectangle {
-                height: 48px;
-                background: Theme.bg;
-
-                Text {
-                    text: root.folder-name == "" ? "Inbox" : root.folder-name;
-                    x: Theme.space-lg;
-                    y: 14px;
-                    width: 180px;
-                    color: Theme.text;
-                    font-size: Theme.font-size-xl;
-                    font-weight: Theme.font-weight-semibold;
-                    overflow: elide;
-                }
-
-                Text {
-                    visible: root.status-message != "";
-                    text: root.status-message;
-                    x: Theme.space-lg;
-                    y: 30px;
-                    color: Theme.text-secondary;
-                    font-size: Theme.font-size-xs;
-                }
-
-                LineEdit {
-                    x: 200px;
-                    y: 10px;
-                    width: 220px;
-                    height: 28px;
-                    text <=> root.search-text;
-                    placeholder-text: "Search";
-                    edited(text) => {
-                        root.search-edited(text);
-                    }
-                }
-
-                Button {
-                    text: "⚙";
-                    x: parent.width - 140px;
-                    y: 10px;
-                    width: 28px;
-                    height: 28px;
-                    clicked => {
-                        root.settings-opened();
-                    }
-                }
-
-                Button {
-                    text: "Compose";
-                    x: parent.width - 104px;
-                    y: 10px;
-                    width: 92px;
-                    clicked => {
-                        root.compose-clicked();
-                    }
-                }
-            }
-
-            Rectangle {
-                height: 1px;
-                background: Theme.border;
-            }
-
-            Rectangle {
-                min-width: 280px;
-
-                MessageList {
-                    messages: root.messages;
-                    selected-message: root.selected-message;
-                    message-clicked(id) => {
-                        root.message-selected(id);
-                    }
-                    message-action(id, action) => {
-                        root.message-action(id, action);
-                    }
-                }
-
-                // Empty state: no account yet, so the folder list is empty.
-                Rectangle {
-                    visible: root.folders.length == 0;
-                    background: Theme.bg;
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: Theme.space-md;
-
-                        Text {
-                            text: "No accounts yet";
-                            color: Theme.text-secondary;
-                            font-size: Theme.font-size-xl;
-                        }
-
-                        Button {
-                            text: "+ Add account";
-                            clicked => {
-                                root.wizard-open = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+    Sidebar {
+        visible: root.show-nav; x: 0px; y: 0px; width: root.nav-width; height: parent.height;
+        folders: root.folders; selected-folder: root.selected-folder; account-status: root.account-status;
+        hide => { root.sidebar-hidden = true; }
+        add-account => { root.wizard-open = true; }
+        settings => { root.settings-opened(); }
+        folder-clicked(id) => { root.folder-selected(id); root.detail-open = false; }
+        account-toggled(id) => { root.account-toggled(id); }
+    }
+    nav-splitter := Rectangle {
+        visible: root.show-nav; x: root.nav-width - 2px; width: 4px; height: parent.height;
+        background: Theme.border;
+        TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.sidebar-size = clamp(root.sidebar-size + self.mouse-x, 180px, 300px); } } }
+    }
+    // List stays instantiated when hidden so its scroll position is retained.
+    Rectangle {
+        visible: root.list-visible; x: root.nav-width; width: root.actual-list-width; height: parent.height;
+        background: Theme.bg;
         Rectangle {
-            width: 1px;
-            background: Theme.border;
-        }
-
-        ReadingPane {
-            min-width: 320px;
-            sender: root.message-sender;
-            subject: root.message-subject;
-            date: root.message-date;
-            body: root.message-body;
-        }
-    }
-
-    AccountWizard {
-        open: root.wizard-open;
-        status: root.wizard-status;
-        email <=> root.email;
-        imap-host <=> root.imap-host;
-        imap-port <=> root.imap-port;
-        smtp-host <=> root.smtp-host;
-        smtp-port <=> root.smtp-port;
-        username <=> root.username;
-        password <=> root.password;
-        starttls <=> root.starttls;
-        oauth-clicked(provider) => {
-            root.wizard-oauth-clicked(provider);
-        }
-        add-generic => {
-            root.wizard-add-generic();
-        }
-        cancel => {
-            root.wizard-cancel();
-        }
-    }
-
-    SettingsDialog {
-        open: root.settings-open;
-        accounts: root.settings-accounts;
-        theme: root.settings-theme;
-        theme-selected(mode) => {
-            root.settings-theme-selected(mode);
-        }
-        account-remove(id) => {
-            root.settings-account-remove(id);
-        }
-        close => {
-            root.settings-close();
-        }
-    }
-}
-
-// Compose window: to/cc/bcc/subject/body and send/cancel.
-// A second exported component so Rust can instantiate it as its own window.
-export component ComposeWindow inherits Window {
-    title: "New message";
-    preferred-width: 640px;
-    preferred-height: 520px;
-    min-width: 420px;
-    min-height: 320px;
-
-    /// Sender (the selected account's email).
-    in property <string> from: "";
-
-    in-out property <string> to;
-    in-out property <string> cc;
-    in-out property <string> bcc;
-    in-out property <string> subject;
-    in-out property <string> body;
-
-    /// File path to attach (read from Rust on attach).
-    in-out property <string> attach-path;
-    /// Names of the staged attachments (set from Rust).
-    in property <string> attachments: "";
-
-    callback send();
-    callback cancel();
-    callback attach-clicked();
-
-    VerticalLayout {
-        padding: Theme.space-lg;
-        spacing: Theme.space-sm;
-
-        Text {
-            text: "From: " + root.from;
-            color: Theme.text-secondary;
-            font-size: Theme.font-size-sm;
-        }
-
-        LineEdit {
-            text <=> root.to;
-            placeholder-text: "To";
-        }
-
-        LineEdit {
-            text <=> root.cc;
-            placeholder-text: "Cc";
-        }
-
-        LineEdit {
-            text <=> root.bcc;
-            placeholder-text: "Bcc";
-        }
-
-        LineEdit {
-            text <=> root.subject;
-            placeholder-text: "Subject";
-        }
-
-        HorizontalLayout {
-            spacing: Theme.space-sm;
-
-            LineEdit {
-                text <=> root.attach-path;
-                placeholder-text: "Attachment file path";
-            }
-
-            Button {
-                text: "Attach";
-                clicked => {
-                    root.attach-clicked();
+            x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
+            HorizontalLayout {
+                padding: 10px; spacing: 8px;
+                if !root.show-nav: ActionButton { text: @tr("Mailboxes"); icon: @image-url("icons/sidebar.svg"); compact: true; clicked => { if root.width >= 1120px { root.sidebar-hidden = false; } else { root.sidebar-overlay = true; } } }
+                VerticalLayout { spacing: 2px;
+                    Text { text: root.folder-name == "" ? @tr("All Inboxes") : root.folder-name; color: Theme.text; font-size: 14px; font-weight: 600; overflow: elide; }
+                    Text { text: @tr("{n} message" | "{n} messages" % root.messages.length); color: Theme.text-secondary; font-size: 11px; }
                 }
+                ActionButton { framed: true; text: @tr("New message"); icon: @image-url("icons/compose.svg"); compact: true; clicked => { root.compose-clicked(); } }
             }
         }
-
-        Text {
-            visible: root.attachments != "";
-            text: "Attached: " + root.attachments;
-            color: Theme.text-secondary;
-            font-size: Theme.font-size-xs;
-            wrap: word-wrap;
+        list-search := SearchField { visible: root.narrow; x: 10px; y: 56px; width: parent.width - 20px; height: 30px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
+        MessageList {
+            y: root.narrow ? 94px : 53px; height: parent.height - (root.narrow ? 94px : 53px); width: parent.width;
+            messages: root.messages; selected-message: root.selected-message;
+            message-clicked(id) => { root.message-selected(id); root.detail-open = true; }
+            message-action(id, action) => { root.message-action(id, action); }
         }
-
+        if root.account-count == 0 || root.messages.length == 0: Rectangle {
+            y: root.narrow ? 94px : 53px; height: parent.height - self.y; width: parent.width; background: Theme.bg;
+            VerticalLayout { padding: 24px; spacing: 16px; alignment: center;
+                Text { text: root.account-count == 0 ? @tr("Welcome to Bang") : root.search-active ? @tr("No results") : @tr("No messages"); font-size: 16px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
+                Text { text: root.account-count == 0 ? @tr("Add your first email account to get started.") : root.search-active ? @tr("Try another search.") : @tr("New messages will appear here."); font-size: 13px; color: Theme.text-secondary; wrap: word-wrap; horizontal-alignment: center; }
+                if root.account-count == 0: ActionButton { text: @tr("Add account"); primary: true; clicked => { root.wizard-open = true; } }
+            }
+        }
+    }
+    Rectangle {
+        visible: !root.narrow; x: root.reader-x - 2px; width: 4px; height: parent.height; background: Theme.border;
+        TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.list-size = clamp(root.list-size + self.mouse-x, 280px, 480px); } } }
+    }
+    Rectangle {
+        visible: root.reader-visible; x: root.narrow ? 0px : root.reader-x;
+        width: root.narrow ? parent.width : parent.width - root.reader-x; height: parent.height;
         Rectangle {
-            background: Theme.reading-bg;
-            border-radius: Theme.radius-sm;
-
-            TextInput {
-                x: Theme.space-sm;
-                y: Theme.space-sm;
-                width: parent.width - 2 * Theme.space-sm;
-                height: parent.height - 2 * Theme.space-sm;
-                text <=> root.body;
-                single-line: false;
-                wrap: word-wrap;
-                color: Theme.text;
-                font-size: Theme.font-size-lg;
+            x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
+            HorizontalLayout { padding: 10px; spacing: 4px;
+                if root.narrow: ActionButton { compact: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); clicked => { root.detail-open = false; } }
+                Rectangle { width: 112px; height: 32px; background: Theme.bg; border-width: 1px; border-color: Theme.border; border-radius: 12px;
+                    HorizontalLayout { spacing: 0px;
+                ActionButton { compact: true; text: @tr("Star"); icon: @image-url("icons/star.svg"); enabled: root.selected-message >= 0; active: root.message-starred; clicked => { root.message-action(root.selected-message, "star"); } }
+                ActionButton { compact: true; text: @tr("Read / unread"); icon: @image-url("icons/mail.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "read"); } }
+                ActionButton { compact: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "delete"); } }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                search := SearchField { max-width: 264px; min-width: 160px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
             }
         }
-
-        HorizontalLayout {
-            spacing: Theme.space-sm;
-            alignment: end;
-
-            Button {
-                text: "Cancel";
-                clicked => {
-                    root.cancel();
-                }
-            }
-
-            Button {
-                text: "Send";
-                primary: true;
-                clicked => {
-                    root.send();
-                }
-            }
+        ReadingPane { x: 0px; width: parent.width; y: 53px; height: parent.height - 53px - (root.status-message == "" ? 0px : 36px);
+            sender: root.message-sender; subject: root.message-subject; date: root.message-date; body: root.message-body;
+            sender-address: root.message-sender-address; recipients: root.message-recipients; initials: root.message-initials;
+            selected: root.selected-message >= 0; loading: root.message-loading;
         }
+        if root.status-message != "": Rectangle { y: parent.height - 36px; height: 36px; background: Theme.toolbar-bg;
+            Text { x: 12px; width: parent.width - 24px; text: root.status-message; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        }
+    }
+    if root.sidebar-overlay: Rectangle {
+        background: #00000044;
+        TouchArea { clicked => { root.sidebar-overlay = false; } }
+        Sidebar { width: 260px; folders: root.folders; selected-folder: root.selected-folder; account-status: root.account-status;
+            hide => { root.sidebar-overlay = false; }
+            add-account => { root.sidebar-overlay = false; root.wizard-open = true; }
+            settings => { root.sidebar-overlay = false; root.settings-opened(); }
+            folder-clicked(id) => { root.folder-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
+            account-toggled(id) => { root.account-toggled(id); }
+        }
+    }
+    AccountWizard { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.wizard-open; manual <=> root.wizard-manual; status: root.wizard-status;
+        email <=> root.email; imap-host <=> root.imap-host; imap-port <=> root.imap-port;
+        smtp-host <=> root.smtp-host; smtp-port <=> root.smtp-port; username <=> root.username;
+        password <=> root.password; starttls <=> root.starttls;
+        oauth-clicked(p) => { root.wizard-oauth-clicked(p); } add-generic => { root.wizard-add-generic(); } cancel => { root.wizard-cancel(); }
+    }
+    SettingsDialog { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.settings-open; accounts: root.settings-accounts; theme: root.settings-theme; language: root.settings-language;
+        theme-selected(m) => { root.settings-theme-selected(m); } language-selected(m) => { root.settings-language-selected(m); }
+        account-remove(id) => { root.settings-account-remove(id); } add-account => { root.settings-open = false; root.wizard-open = true; }
+        close => { root.settings-close(); }
+    }
     }
 }

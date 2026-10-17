@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Top-level configuration.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     /// OAuth2 client ids per provider.
     #[serde(default)]
@@ -11,6 +11,19 @@ pub struct Config {
     /// Theme mode: `"light"`, `"dark"`, or `"system"`.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// UI language: system, fr or en.
+    #[serde(default = "default_theme")]
+    pub language: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            oauth: OAuthConfig::default(),
+            theme: default_theme(),
+            language: default_theme(),
+        }
+    }
 }
 
 fn default_theme() -> String {
@@ -48,13 +61,56 @@ impl Config {
         }
     }
 
-    /// Save the config file (best effort; ignored on failure).
-    pub fn save(&self) {
+    /// Save preferences and create their directory on first use.
+    pub fn save(&self) -> std::io::Result<()> {
         let Some(dirs) = directories::ProjectDirs::from("", "", "bang") else {
-            return;
+            return Err(std::io::Error::other("no configuration directory"));
         };
-        if let Ok(s) = toml::to_string_pretty(self) {
-            let _ = std::fs::write(dirs.config_dir().join("config.toml"), s);
+        self.save_to(&dirs.config_dir().join("config.toml"))
+    }
+
+    fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        let s = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn existing_config_remains_compatible() {
+        let cfg: super::Config = toml::from_str("theme = 'dark'").unwrap();
+        assert_eq!(cfg.language, "system");
+        assert_eq!(cfg.theme, "dark");
+        let default = super::Config::default();
+        assert_eq!(default.theme, "system");
+        assert_eq!(default.language, "system");
+    }
+
+    #[test]
+    fn language_preferences_persist_without_losing_oauth() {
+        let dir = std::env::temp_dir().join(format!(
+            "bang-preferences-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("nested/config.toml");
+        let mut config = super::Config::default();
+        config.oauth.google.client_id = "local-test-client".into();
+        for language in ["system", "fr", "en"] {
+            config.language = language.into();
+            config.save_to(&path).unwrap();
+            let restored: super::Config =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(restored.language, language);
+            assert_eq!(restored.oauth.google.client_id, "local-test-client");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

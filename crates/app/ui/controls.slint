@@ -1,0 +1,80 @@
+import { Theme } from "theme.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> enabled: true;
+    in property <bool> modal: false;
+    private property <bool> can-activate: self.enabled && (!Theme.blocked || self.modal);
+    in property <bool> framed: false;
+    in property <bool> primary: false;
+    in property <bool> active: false;
+    in property <bool> compact: false;
+    callback clicked;
+    min-width: compact ? 32px : 96px;
+    max-width: compact ? 36px : 300px;
+    horizontal-stretch: compact ? 0 : 1;
+    min-height: 32px; max-height: 32px; preferred-height: 32px;
+    border-radius: 9px;
+    background: primary ? Theme.selection : active || touch.has-hover ? Theme.hover : framed ? Theme.bg : transparent;
+    border-width: focus.has-focus ? 2px : framed ? 1px : 0px;
+    border-color: focus.has-focus ? Theme.accent : Theme.border;
+    opacity: can-activate ? 1 : 0.5;
+    accessible-enabled: can-activate;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { if root.can-activate { root.clicked(); } }
+    forward-focus: focus;
+    HorizontalLayout {
+        padding-left: 8px; padding-right: 8px; spacing: 6px; alignment: center;
+        if root.icon != @image-url(""): Rectangle {
+            width: 18px;
+            Image { source: root.icon; width: 18px; height: 18px; y: (parent.height - self.height) / 2; colorize: root.primary ? white : Theme.text; }
+        }
+        if !root.compact: Text { text: root.text; color: root.primary ? white : Theme.text; font-size: 13px; vertical-alignment: center; }
+    }
+    focus := FocusScope {
+        enabled: root.can-activate;
+        key-pressed(e) => {
+            if root.can-activate && (e.text == " " || e.text == "\n") { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { enabled: root.can-activate; clicked => { focus.focus(); root.clicked(); } }
+    if touch.has-hover && root.compact: Rectangle {
+        y: parent.height + 6px; x: -24px; width: max(96px, label.preferred-width + 16px); height: 28px;
+        background: Theme.text; border-radius: 6px;
+        label := Text { text: root.text; color: Theme.bg; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}
+
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> secret: false;
+    in-out property <string> text;
+    spacing: 6px;
+    Text { text: root.label; color: Theme.text; font-size: 13px; font-weight: 500; }
+    LineEdit { accessible-label: root.label; text <=> root.text; placeholder-text: root.placeholder; input-type: root.secret ? InputType.password : InputType.text; min-height: 36px; preferred-height: 36px; }
+}
+
+export component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: @tr("Search");
+    callback edited(string);
+    public function focus-input() { input.focus(); }
+    preferred-height: 32px; min-height: 32px; max-height: 32px;
+    border-radius: 12px; background: Theme.bg;
+    border-width: 1px; border-color: input.has-focus ? Theme.accent : Theme.border;
+    forward-focus: input;
+    Image { x: 10px; y: 8px; width: 16px; height: 16px; source: @image-url("icons/search.svg"); colorize: Theme.text-secondary; }
+    if root.text == "": Text { x: 34px; width: parent.width - 44px; text: root.placeholder; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; }
+    input := TextInput { x: 34px; width: parent.width - 44px; height: parent.height;
+        text <=> root.text; color: Theme.text; font-size: 13px;
+        single-line: true; read-only: Theme.blocked; input-type: search; vertical-alignment: center;
+        selection-background-color: Theme.selection; selection-foreground-color: white;
+        accessible-label: root.placeholder;
+        edited => { root.edited(self.text); }
+    }
+}

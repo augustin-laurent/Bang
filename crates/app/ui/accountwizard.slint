@@ -1,151 +1,54 @@
-import { Button, CheckBox, LineEdit } from "std-widgets.slint";
+import { ScrollView, CheckBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-
-// Account wizard overlay: OAuth sign-in or a generic IMAP/SMTP form.
+import { ActionButton, Field } from "controls.slint";
 export component AccountWizard inherits Rectangle {
-    in property <bool> open: false;
-    in property <string> status: "";
-
-    // Generic form fields (read from Rust on submit).
-    in-out property <string> email;
-    in-out property <string> imap-host;
-    in-out property <string> imap-port: "993";
-    in-out property <string> smtp-host;
-    in-out property <string> smtp-port: "465";
-    in-out property <string> username;
-    in-out property <string> password;
-    in-out property <bool> starttls: false;
-
-    callback oauth-clicked(provider: string);
-    callback add-generic();
-    callback cancel();
-
-    visible: root.open;
-    background: #00000080;
-    width: 100%;
-    height: 100%;
-
+    in property <bool> open: false; in property <string> status;
+    in-out property <string> email; in-out property <string> imap-host; in-out property <string> imap-port;
+    in-out property <string> smtp-host; in-out property <string> smtp-port;
+    in-out property <string> username; in-out property <string> password;
+    in-out property <bool> starttls; in-out property <bool> manual: false;
+    callback oauth-clicked(string); callback add-generic(); callback cancel();
+    visible: open; background: #00000044;
+    TouchArea { }
     Rectangle {
-        width: 440px;
-        height: 520px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        background: Theme.bg;
-        border-radius: Theme.radius-md;
-
-        VerticalLayout {
-            padding: 20px;
-            spacing: Theme.space-sm;
-
-            Text {
-                text: "Add account";
-                color: Theme.text;
-                font-size: Theme.font-size-xxl;
-                font-weight: Theme.font-weight-bold;
+        width: min(520px, parent.width - 40px); height: min(700px, parent.height - 32px);
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        background: Theme.bg; border-radius: 16px;
+        VerticalLayout { padding: 24px; spacing: 16px;
+            Text { text: @tr("Add account"); color: Theme.text; font-size: 20px; font-weight: 600; }
+            HorizontalLayout { spacing: 8px;
+                ActionButton { modal: true; text: @tr("Provider"); active: !root.manual; clicked => { root.manual = false; } }
+                ActionButton { modal: true; text: @tr("Manual setup"); active: root.manual; clicked => { root.manual = true; } }
             }
-
-            Text {
-                text: "Sign in with";
-                color: Theme.text-secondary;
-                font-size: Theme.font-size-sm;
-            }
-
-            Button {
-                text: "Google (Gmail)";
-                clicked => {
-                    root.oauth-clicked("google");
-                }
-            }
-
-            Button {
-                text: "Microsoft (Outlook)";
-                clicked => {
-                    root.oauth-clicked("microsoft");
-                }
-            }
-
-            Text {
-                text: "— or add a generic IMAP/SMTP account —";
-                color: Theme.text-secondary;
-                font-size: Theme.font-size-sm;
-            }
-
-            LineEdit {
-                text <=> root.email;
-                placeholder-text: "Email address";
-            }
-
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-
-                LineEdit {
-                    text <=> root.imap-host;
-                    placeholder-text: "IMAP host";
-                }
-
-                LineEdit {
-                    text <=> root.imap-port;
-                    placeholder-text: "993";
-                    width: 70px;
-                }
-            }
-
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-
-                LineEdit {
-                    text <=> root.smtp-host;
-                    placeholder-text: "SMTP host";
-                }
-
-                LineEdit {
-                    text <=> root.smtp-port;
-                    placeholder-text: "465";
-                    width: 70px;
-                }
-            }
-
-            CheckBox {
-                text: "Use STARTTLS instead of direct TLS";
-                checked <=> root.starttls;
-            }
-
-            LineEdit {
-                text <=> root.username;
-                placeholder-text: "Username";
-            }
-
-            LineEdit {
-                text <=> root.password;
-                placeholder-text: "Password";
-            }
-
-            Text {
-                visible: root.status != "";
-                text: root.status;
-                color: Theme.accent;
-                font-size: Theme.font-size-sm;
-                wrap: word-wrap;
-            }
-
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                alignment: end;
-
-                Button {
-                    text: "Cancel";
-                    clicked => {
-                        root.cancel();
+            ScrollView { content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout { padding: 4px; spacing: 14px;
+                    if !root.manual: VerticalLayout { spacing: 16px;
+                        Text { text: @tr("Sign in securely with your provider."); color: Theme.text-secondary; font-size: 13px; wrap: word-wrap; }
+                        ActionButton { modal: true; text: "Google (Gmail)"; clicked => { root.oauth-clicked("google"); } }
+                        ActionButton { modal: true; text: "Microsoft (Outlook)"; clicked => { root.oauth-clicked("microsoft"); } }
                     }
-                }
-
-                Button {
-                    text: "Add account";
-                    primary: true;
-                    clicked => {
-                        root.add-generic();
+                    if root.manual: VerticalLayout { spacing: 14px;
+                        Field { label: @tr("Email address"); text <=> root.email; placeholder: "name@example.com"; }
+                        Field { label: @tr("Username"); text <=> root.username; }
+                        Field { label: @tr("Password"); text <=> root.password; secret: true; }
+                        Text { text: @tr("Incoming IMAP"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                        HorizontalLayout { spacing: 12px;
+                            Field { label: @tr("Server"); text <=> root.imap-host; placeholder: "imap.example.com"; }
+                            Field { width: 88px; label: @tr("Port"); text <=> root.imap-port; }
+                        }
+                        Text { text: @tr("Outgoing SMTP"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                        HorizontalLayout { spacing: 12px;
+                            Field { label: @tr("Server"); text <=> root.smtp-host; placeholder: "smtp.example.com"; }
+                            Field { width: 88px; label: @tr("Port"); text <=> root.smtp-port; }
+                        }
+                        CheckBox { text: @tr("Use STARTTLS"); checked <=> root.starttls; }
                     }
+                    Text { text: root.status; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
                 }
+            }
+            HorizontalLayout { spacing: 8px; alignment: end;
+                ActionButton { modal: true; text: @tr("Cancel"); clicked => { root.cancel(); } }
+                if root.manual: ActionButton { modal: true; text: @tr("Add account"); primary: true; clicked => { root.add-generic(); } }
             }
         }
     }

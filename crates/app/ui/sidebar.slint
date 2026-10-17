@@ -1,72 +1,49 @@
-import { Button, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
 import { FolderRow } from "models.slint";
-
-// Left sidebar: account status and folder list.
 export component Sidebar inherits Rectangle {
     background: Theme.sidebar-bg;
-
     in property <[FolderRow]> folders;
     in property <int> selected-folder: -1;
-    in property <string> account-status: "";
-
-    callback add-account;
-    callback folder-clicked(id: int);
-
+    in property <string> account-status;
+    callback add-account; callback settings; callback hide;
+    callback folder-clicked(int); callback account-toggled(string);
     VerticalLayout {
-        padding: Theme.space-sm;
-        spacing: Theme.space-xs;
-        alignment: start;
-
-        Text {
-            text: "Bang";
-            color: Theme.accent;
-            font-size: Theme.font-size-xxl;
-            font-weight: Theme.font-weight-bold;
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        padding: 12px; spacing: 8px;
+        HorizontalLayout {
+            height: 34px;
+            Text { text: "Bang"; color: Theme.text; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+            ActionButton { compact: true; icon: @image-url("icons/sidebar.svg"); text: @tr("Hide sidebar"); clicked => { root.hide(); } }
         }
-
-        Text {
-            visible: root.account-status != "";
-            text: root.account-status;
-            color: Theme.text-secondary;
-            font-size: Theme.font-size-xs;
-        }
-
+        Text { text: @tr("Mailboxes"); color: Theme.text-secondary; font-size: 11px; height: 22px; vertical-alignment: bottom; }
         ListView {
             for folder in root.folders: Rectangle {
-                height: 28px;
-                border-radius: Theme.radius-sm;
-                background: folder.id == root.selected-folder ? Theme.hover : transparent;
-
-                TouchArea {
-                    clicked => {
-                        root.folder-clicked(folder.id);
+                height: folder.is-header ? 44px : 32px;
+                border-radius: 7px;
+                background: !folder.is-header && folder.id == root.selected-folder ? Theme.hover : transparent;
+                accessible-role: button; accessible-label: folder.name; accessible-enabled: !Theme.blocked;
+                accessible-action-default => { if Theme.blocked { return; } if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } }
+                HorizontalLayout {
+                    padding-left: 8px; padding-right: 8px; spacing: 8px;
+                    Rectangle {
+                        width: folder.is-header ? 12px : 17px;
+                        Image {
+                            width: parent.width; height: 17px; y: (parent.height - self.height) / 2;
+                            source: folder.is-header ? @image-url("icons/chevron.svg") : folder.kind == "sent" ? @image-url("icons/send.svg") : folder.kind == "draft" ? @image-url("icons/file.svg") : folder.kind == "trash" ? @image-url("icons/trash.svg") : folder.kind == "inbox" ? @image-url("icons/inbox.svg") : @image-url("icons/folder.svg");
+                            colorize: folder.is-header ? Theme.text-secondary : folder.id == root.selected-folder ? Theme.accent : Theme.text;
+                            transform-rotation: folder.is-header && folder.collapsed ? -90deg : 0deg;
+                        }
                     }
+                    Text { text: folder.name; color: folder.is-header ? Theme.text-secondary : Theme.text; font-size: folder.is-header ? 11px : 13px; font-weight: folder.is-header ? 600 : 400; overflow: elide; vertical-alignment: center; }
+                    if folder.unread > 0 && !folder.is-header: Text { text: folder.unread; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; }
                 }
-
-                Text {
-                    text: folder.name;
-                    x: Theme.space-sm;
-                    y: 7px;
-                    color: Theme.text;
-                    font-size: Theme.font-size-md;
-                }
-
-                if folder.unread > 0: Text {
-                    text: folder.unread;
-                    x: 180px;
-                    y: 7px;
-                    color: Theme.accent;
-                    font-size: Theme.font-size-sm;
-                }
+                TouchArea { enabled: !Theme.blocked; clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } } }
             }
         }
-
-        Button {
-            text: "+ Add account";
-            clicked => {
-                root.add-account();
-            }
-        }
+        if root.account-status != "": Text { text: root.account-status; color: Theme.text-secondary; font-size: 11px; wrap: word-wrap; }
+        ActionButton { text: @tr("Add account"); icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
+        ActionButton { text: @tr("Settings"); icon: @image-url("icons/settings.svg"); clicked => { root.settings(); } }
     }
 }

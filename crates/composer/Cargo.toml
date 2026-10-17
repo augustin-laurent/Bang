@@ -1,0 +1,22 @@
+[package]
+name = "bang-composer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Isolated local rich-text composer and IPC protocol for Bang."
+
+[features]
+default = ["native"]
+native = ["dep:wry", "dep:tao", "dep:rfd"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wry = { version = "0.55", optional = true }
+tao = { version = "0.34", optional = true }
+rfd = { version = "0.15", default-features = false, features = ["gtk3"], optional = true }
+
+[[bin]]
+name = "bang-compose"
+path = "src/main.rs"
+required-features = ["native"]
