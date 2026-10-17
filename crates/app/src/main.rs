@@ -61,15 +61,15 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_compose(&ui, &store, bridge.clone());
     wire_settings(&ui, &store, &state, bridge);
     let weak = ui.as_weak();
-    ui.window().on_close_requested(move || {
-        if composer::is_open() {
-            composer::request_application_close();
-            slint::CloseRequestResponse::KeepWindowShown
-        } else {
-            if let Some(ui) = weak.upgrade() {
-                ui.hide().ok();
-            }
-            slint::CloseRequestResponse::HideWindow
+    ui.window().on_close_requested({
+        let weak = weak.clone();
+        move || close_application(&weak)
+    });
+    // Ctrl+Q quits through the same close path as the window button.
+    ui.on_quit({
+        let weak = weak.clone();
+        move || {
+            let _ = close_application(&weak);
         }
     });
 
@@ -95,6 +95,22 @@ fn main() -> Result<(), slint::PlatformError> {
     // terminates the syncer threads (IMAP servers notice the TCP drop).
     // The command channel stays open because the UI closures hold senders.
     ui.run()
+}
+
+/// Close the application, asking the composer to close first if it is open.
+///
+/// Returns [`slint::CloseRequestResponse::KeepWindowShown`] while the composer
+/// is still closing, otherwise hides the window (which ends the process).
+fn close_application(weak: &slint::Weak<BangApp>) -> slint::CloseRequestResponse {
+    if composer::is_open() {
+        composer::request_application_close();
+        slint::CloseRequestResponse::KeepWindowShown
+    } else {
+        if let Some(ui) = weak.upgrade() {
+            ui.hide().ok();
+        }
+        slint::CloseRequestResponse::HideWindow
+    }
 }
 
 /// Connect folder and message selection to the store and the mail core.

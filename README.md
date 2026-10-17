@@ -18,6 +18,24 @@ A desktop mail client for Linux, written in Rust, with a Mail macOS 26-inspired 
 - Light/dark/system theme, desktop notifications for new mail, and a settings
   dialog for theme and account management.
 
+## Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next message |
+| `k` / `↑` | Previous message |
+| `Home` / `End` | First / last message |
+| `s` | Toggle star |
+| `u` | Toggle read / unread |
+| `d` | Delete |
+| `Ctrl+N` | New message |
+| `Ctrl+F` | Focus search |
+| `Ctrl+Q` | Quit |
+| `Esc` | Close reading pane / sidebar |
+
+Single-letter actions apply to the selected message and are ignored while a
+text field has focus.
+
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organized and how data flows

@@ -39,6 +39,7 @@ export component BangApp inherits Window {
     callback folder-selected(int); callback account-toggled(string);
     callback message-selected(int); callback message-action(int, string);
     callback compose-clicked(); callback search-edited(string); callback navigate-message(int);
+    callback quit();
     callback settings-opened(); callback settings-theme-selected(string);
     callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
 
@@ -64,11 +65,22 @@ export component BangApp inherits Window {
                 if e.text == Key.Escape { if root.wizard-open { root.wizard-cancel(); } else { root.settings-close(); } return accept; }
                 return reject;
             }
+            // Global shortcuts.
             if e.modifiers.control && (e.text == "n" || e.text == "N") { root.compose-clicked(); return accept; }
             if e.modifiers.control && (e.text == "f" || e.text == "F") { if root.narrow { list-search.focus-input(); } else { search.focus-input(); } return accept; }
+            if e.modifiers.control && (e.text == "q" || e.text == "Q") { root.quit(); return accept; }
             if e.text == Key.Escape { root.detail-open = false; root.sidebar-overlay = false; return accept; }
-            if e.text == Key.DownArrow { root.navigate-message(1); return accept; }
-            if e.text == Key.UpArrow { root.navigate-message(-1); return accept; }
+            // Message navigation: j/k mirror the arrows; Home/End jump to the ends.
+            if e.text == Key.DownArrow || e.text == "j" { root.navigate-message(1); return accept; }
+            if e.text == Key.UpArrow || e.text == "k" { root.navigate-message(-1); return accept; }
+            if e.text == Key.Home { root.navigate-message(-100000); return accept; }
+            if e.text == Key.End { root.navigate-message(100000); return accept; }
+            // Message actions on the selected row.
+            if root.selected-message >= 0 {
+                if e.text == "s" { root.message-action(root.selected-message, "star"); return accept; }
+                if e.text == "u" { root.message-action(root.selected-message, "read"); return accept; }
+                if e.text == "d" { root.message-action(root.selected-message, "delete"); return accept; }
+            }
             return reject;
         }
     Sidebar {
