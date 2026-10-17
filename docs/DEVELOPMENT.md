@@ -6,21 +6,54 @@ How to build, test, and extend Bang. For the system design see
 
 ## Prerequisites
 
-- A recent stable Rust toolchain (`rustup`).
-- Linux. The UI uses the Slint software renderer, so there are **no GPU or
-  system library dependencies**.
+- A recent stable Rust toolchain, Node.js 20.19+ (or 22.12+), npm and pkg-config.
+- Linux with GTK3 and WebKitGTK 4.1 development packages. The Slint window uses
+  the software renderer; the composer uses the system WebKit engine.
 
-No other system packages are required: SQLite is built from source via the
-`rusqlite/bundled` feature.
+Distribution packages:
+
+```sh
+# Arch / Pond
+sudo pacman -S --needed webkit2gtk-4.1
+# Debian / Ubuntu
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel pkgconf-pkg-config
+```
+
+Noto Sans is bundled under the SIL OFL in `assets/fonts/`. No font or editor
+resource is fetched at runtime, and the editor requires no account or service.
+SQLite is built from source via `rusqlite/bundled`.
 
 ## Build and run
 
 ```sh
-cargo build --release     # or: cargo build
-cargo run -p app          # launches the UI
+./scripts/dev.sh
 ```
 
-The first run creates `~/.local/share/bang/bang.db` (the SQLite store).
+The script builds the editor before the Rust binaries. The equivalent steps are:
+
+```sh
+npm ci --prefix crates/composer/web
+npm run build --prefix crates/composer/web
+cargo build --workspace
+cargo run -p app
+```
+
+Keep `app` and `bang-compose` in the same directory when installing. For release,
+use `cargo build --workspace --release`. Node/npm are build-time tools only:
+compiled JS, CSS and fonts are embedded in `bang-compose`.
+
+First run creates `~/.local/share/bang/bang.db`. Preferences are saved in
+`~/.config/bang/config.toml`; the directory is created automatically.
+
+```toml
+theme = "system"    # system, light, dark
+language = "system" # system, fr, en
+```
+
+Existing configuration files remain compatible; missing language defaults to
+system. Personal folder names and message content are preserved as received.
 
 ## Tests
 
@@ -37,7 +70,40 @@ plain `cargo test` stays fast and dependency-light. They spin up a minimal
 IMAP server on `127.0.0.1` and drive the real sync engine against it,
 including an IDLE push.
 
-There are no frontend tests; the UI is exercised manually.
+UI, localization and rich composer checks:
+
+```sh
+npm test --prefix crates/composer/web
+cargo test --workspace --features app/preview-renderer
+```
+
+The SMTP test binds a loopback port, captures the MIME message and simulates a
+server rejection. It never contacts an external mail server. Environments that
+block local sockets must grant loopback access for this test.
+
+For a deterministic Slint screenshot, without accounts, storage or network:
+
+```sh
+BANG_SNAPSHOT=/tmp/bang-inbox.png BANG_WIDTH=1440 BANG_HEIGHT=900 \
+  BANG_LANGUAGE=fr BANG_THEME=light \
+  cargo run -p app --features preview-renderer -- --preview
+```
+
+`BANG_SURFACE=settings`, `wizard` or `wizard-manual` opens a dialog. The preview renderer uses
+Slint's real software rasterizer without a window manager. Omitting
+`BANG_SNAPSHOT` opens an interactive native fixture.
+
+For browser testing of the composer:
+
+```sh
+npm run dev --prefix crates/composer/web
+# Open http://127.0.0.1:5173/?preview
+# Optional: &theme=dark&lang=en
+```
+
+Only `?preview` enables sample messages and simulated send failure. Normal native
+launches use neither fixtures nor simulated results. The in-page preview stores
+its last send in `#app[data-preview-send]` for export assertions.
 
 ## Conventions
 
@@ -64,6 +130,7 @@ breakdown. The short version:
 - `crates/bang-core` — the mail engine (IMAP/SMTP, OAuth2, sync, SQLite store).
   Headless and unit-testable.
 - `crates/app` — the Slint UI and the bridge that connects it to `bang-core`.
+- `crates/composer` — the isolated GTK/WebKit composer and its local web editor.
 
 ## Adding a feature
 

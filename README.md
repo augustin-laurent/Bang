@@ -1,8 +1,8 @@
 # Bang
 
-A desktop mail client for Linux, written in Rust, with a UI inspired by Spark.
+A desktop mail client for Linux, written in Rust, with a Mail macOS 26-inspired interface adapted to Linux.
 
-- **UI**: [Slint](https://slint.dev) (native, no webview)
+- **UI**: [Slint](https://slint.dev) (native Slint main window; isolated local WebKit rich composer)
 - **Engine**: IMAP (per-account syncer thread, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
 - **Status**: early development — see [PLAN.md](PLAN.md) for the roadmap
 
@@ -12,7 +12,9 @@ A desktop mail client for Linux, written in Rust, with a UI inspired by Spark.
   across all accounts.
 - Multiple accounts: OAuth2 (Gmail/Microsoft) or generic IMAP/SMTP.
 - Read/unread, star, and delete, with per-folder unread badges.
-- Compose with attachments; full-text search across all accounts.
+- Rich compose with fonts, size, bold/italic/underline, colors, highlighting,
+  links, lists, alignment and native file attachments. HTML and plain-text MIME alternatives.
+- Full-text search across all accounts; French/English interface and locale-aware dates.
 - Light/dark/system theme, desktop notifications for new mail, and a settings
   dialog for theme and account management.
 
@@ -24,11 +26,18 @@ A desktop mail client for Linux, written in Rust, with a UI inspired by Spark.
 ## Build
 
 ```sh
-cargo build --release
-cargo run -p app
+./scripts/dev.sh
+
+# Release build, after installing the Linux packages in docs/DEVELOPMENT.md:
+npm ci --prefix crates/composer/web
+npm run build --prefix crates/composer/web
+cargo build --workspace --release
+./target/release/app
 ```
 
-No system dependencies: the software renderer is used by default (zero GPU deps).
+The main window uses Slint’s software renderer. The rich composer requires GTK3
+and WebKitGTK 4.1; it loads only bundled local assets. See
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for distribution packages.
 
 ## OAuth client IDs
 
@@ -48,4 +57,6 @@ Until then, use the manual IMAP/SMTP account type.
 
 - `crates/bang-core` — mail engine (IMAP, SMTP, OAuth, sync, SQLite store). No UI dependencies.
 - `crates/app` — Slint UI + tokio/Slint bridge.
-- `docs/` — architecture and development notes.
+- `crates/composer` — isolated GTK/WebKit host and local TypeScript/Tiptap editor.
+- `assets/design/` — accepted visual references; `assets/fonts/` — bundled OFL fonts.
+- `docs/` — architecture, design and development notes.

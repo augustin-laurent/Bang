@@ -226,3 +226,32 @@ When `theme` is `system`, the app detects the desktop's dark mode at startup
 by querying `gsettings` then `kreadconfig5` in turn and using the first that
 reports a value (this covers GNOME, KDE, and compositors such as Hyprland
 where `gsettings` is present), falling back to light when neither does.
+
+
+## Native UI and isolated rich composer
+
+Bang's navigation, message list, text reader and settings remain Slint. The
+native `bang-compose` process owns its own GTK event loop and Wry/WebKit view,
+so GTK and Slint do not share an event loop. GTK hosts support X11 and Wayland.
+The parent opens one writer at a time and focuses it on subsequent requests.
+
+`crates/composer/src/lib.rs` defines the JSON-lines protocol over private process
+stdin/stdout. Only sender identities, preferences, draft fields and attachment
+metadata cross it. Credentials and attachment bytes stay in the parent process.
+The child invokes a native file picker; the parent reads the selected files off
+the UI thread and assigns stable IDs for removing them.
+
+The TypeScript editor uses Tiptap with local open-source extensions. Static assets
+are built with Vite and embedded at compile time; a local custom protocol serves
+an allowlisted asset map. Remote navigation and network connections are blocked.
+No external HTML message is loaded into this editor.
+
+Sending forwards HTML plus text to the existing `SendEmail` command. SMTP builds
+`multipart/alternative` and nests it in `multipart/mixed` for files. The writer
+stays alive, and attachment bytes remain staged, until `SendResult` confirms
+success. Failure restores editing without losing content. Close confirmation is
+handled in the writer and acknowledged to the parent before closing Bang.
+
+`crates/app/i18n/fr.json` is the shared English-key/French-value catalogue. The
+Slint build produces an embedded PO catalogue from it; Rust and the composer use
+the same source. Mail content and custom folder names are never translated.
