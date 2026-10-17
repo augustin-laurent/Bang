@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::account::{AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode};
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::events::{MailEvent, UiCommand};
 use crate::message::AccountStatus;
 use crate::store::Store;
@@ -54,6 +54,64 @@ impl MailService {
         }
         let tx = start_syncer(config.clone(), self.store.clone(), self.events_tx.clone());
         syncers.insert(config.id.0.clone(), tx);
+    }
+
+    /// Apply a local-only store mutation to a set of messages and notify the UI.
+    ///
+    /// On success, emits `MessagesUpdated` for each affected (account, folder)
+    /// pair so the UI refreshes the visible list.
+    fn update_local(&self, message_ids: &[i64], f: impl FnOnce(&Store) -> Result<()>) {
+        // Capture (account, folder) before mutating so the UI can refresh
+        // the right lists.
+        let mut targets: Vec<(String, i64)> = Vec::new();
+        for id in message_ids {
+            if let Ok(Some(m)) = self.store.get_message(*id) {
+                targets.push((m.account_id, m.folder_id));
+            }
+        }
+        if let Err(e) = f(&self.store) {
+            let _ = self.events_tx.send(MailEvent::Error {
+                account: None,
+                message: e.to_string(),
+            });
+            return;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (account, folder_id) in targets {
+            if seen.insert((account.clone(), folder_id)) {
+                let _ = self.events_tx.send(MailEvent::MessagesUpdated {
+                    account: AccountId(account),
+                    folder_id,
+                    message_ids: message_ids.to_vec(),
+                });
+            }
+        }
+    }
+
+    /// Emit `FollowUpDue` for every message whose follow-up reminder is due,
+    /// then clear the reminder so it fires only once.
+    ///
+    /// Called periodically by the app's bridge; also runs once at startup,
+    /// so reminders that came due while the app was closed fire on launch.
+    pub fn check_due_follow_ups(&self) {
+        let now = chrono::Utc::now().timestamp();
+        let due = match self.store.due_follow_ups(now) {
+            Ok(due) => due,
+            Err(e) => {
+                tracing::warn!("due_follow_ups failed: {e}");
+                return;
+            }
+        };
+        for msg in due {
+            let _ = self.events_tx.send(MailEvent::FollowUpDue {
+                account: AccountId(msg.account_id),
+                message_id: msg.id,
+                subject: msg.subject,
+            });
+            if let Err(e) = self.store.clear_follow_up(&[msg.id]) {
+                tracing::warn!("clear_follow_up failed for {}: {e}", msg.id);
+            }
+        }
     }
 
     /// Handle a command from the UI.
@@ -175,6 +233,26 @@ impl MailService {
                 if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
                     let _ = tx.send(SyncerCommand::Delete { message_ids });
                 }
+            }
+            // Snooze and follow-up are local operations: they only touch the
+            // store, so they are handled here rather than routed to a syncer.
+            UiCommand::Snooze {
+                message_ids,
+                until,
+            } => {
+                self.update_local(&message_ids, |store| store.snooze_messages(&message_ids, until));
+            }
+            UiCommand::Unsnooze { message_ids } => {
+                self.update_local(&message_ids, |store| store.unsnooze_messages(&message_ids));
+            }
+            UiCommand::SetFollowUp {
+                message_ids,
+                at,
+            } => {
+                self.update_local(&message_ids, |store| store.set_follow_up(&message_ids, at));
+            }
+            UiCommand::ClearFollowUp { message_ids } => {
+                self.update_local(&message_ids, |store| store.clear_follow_up(&message_ids));
             }
             UiCommand::SendEmail(req) => {
                 let store = self.store.clone();

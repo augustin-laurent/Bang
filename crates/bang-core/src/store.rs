@@ -15,7 +15,7 @@ use crate::message::{
 };
 
 /// Current schema version.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Special folder id for the unified inbox (all accounts' INBOXes).
 ///
@@ -94,6 +94,15 @@ CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
 END;
 "#;
 
+/// V2 schema: snooze and follow-up scheduling.
+///
+/// Both columns are local (never synced from the server) and nullable:
+/// `NULL` means "not snoozed" / "no follow-up scheduled".
+const MIGRATION_V2: &str = r#"
+ALTER TABLE messages ADD COLUMN snoozed_until INTEGER;
+ALTER TABLE messages ADD COLUMN follow_up_at INTEGER;
+"#;
+
 /// Persistent store for all local mail data.
 ///
 /// All methods take `&self`; the connection is guarded by an internal mutex,
@@ -152,8 +161,14 @@ impl Store {
         if version >= SCHEMA_VERSION {
             return Ok(());
         }
-        conn.execute_batch(MIGRATION_V1)
-            .map_err(|e| Error::Store(e.to_string()))?;
+        if version < 1 {
+            conn.execute_batch(MIGRATION_V1)
+                .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        if version < 2 {
+            conn.execute_batch(MIGRATION_V2)
+                .map_err(|e| Error::Store(e.to_string()))?;
+        }
         conn.execute(
             "INSERT INTO schema_version (version) VALUES (?1)",
             params![SCHEMA_VERSION],
@@ -490,15 +505,18 @@ impl Store {
     /// Returns `Error::Store` on database failure.
     pub fn get_messages(&self, folder_id: i64, limit: usize) -> Result<Vec<MessageSummary>> {
         let conn = self.lock()?;
+        let now = chrono::Utc::now().timestamp();
         let mut stmt = conn
             .prepare(
                 "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
                         subject, date, flags, preview, has_attachments
-                 FROM messages WHERE folder_id = ?1 ORDER BY date DESC, id DESC LIMIT ?2",
+                 FROM messages
+                 WHERE folder_id = ?1 AND (snoozed_until IS NULL OR snoozed_until <= ?2)
+                 ORDER BY date DESC, id DESC LIMIT ?3",
             )
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(params![folder_id, limit as i64], Self::row_to_summary)
+            .query_map(params![folder_id, now, limit as i64], Self::row_to_summary)
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -515,6 +533,7 @@ impl Store {
     /// Returns `Error::Store` on database failure.
     pub fn get_unified_inbox(&self, limit: usize) -> Result<Vec<MessageSummary>> {
         let conn = self.lock()?;
+        let now = chrono::Utc::now().timestamp();
         let mut stmt = conn
             .prepare(
                 "SELECT m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.from_name,
@@ -523,11 +542,12 @@ impl Store {
                  FROM messages m
                  JOIN folders f ON f.id = m.folder_id
                  WHERE UPPER(f.path) = 'INBOX'
-                 ORDER BY m.date DESC, m.id DESC LIMIT ?1",
+                   AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?1)
+                 ORDER BY m.date DESC, m.id DESC LIMIT ?2",
             )
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(params![limit as i64], Self::row_to_summary)
+            .query_map(params![now, limit as i64], Self::row_to_summary)
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -636,6 +656,121 @@ impl Store {
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// Snooze messages until the given Unix timestamp (seconds).
+    ///
+    /// Snoozed messages are hidden from folder listings until the time passes;
+    /// they reappear on their own once `snoozed_until` is in the past.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn snooze_messages(&self, ids: &[i64], until: i64) -> Result<()> {
+        let conn = self.lock()?;
+        for id in ids {
+            conn.execute(
+                "UPDATE messages SET snoozed_until = ?2 WHERE id = ?1",
+                params![id, until],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Clear the snooze on messages so they reappear immediately.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn unsnooze_messages(&self, ids: &[i64]) -> Result<()> {
+        let conn = self.lock()?;
+        for id in ids {
+            conn.execute(
+                "UPDATE messages SET snoozed_until = NULL WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Schedule a follow-up reminder on messages at the given Unix timestamp.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn set_follow_up(&self, ids: &[i64], at: i64) -> Result<()> {
+        let conn = self.lock()?;
+        for id in ids {
+            conn.execute(
+                "UPDATE messages SET follow_up_at = ?2 WHERE id = ?1",
+                params![id, at],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Clear the follow-up reminder on messages.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn clear_follow_up(&self, ids: &[i64]) -> Result<()> {
+        let conn = self.lock()?;
+        for id in ids {
+            conn.execute(
+                "UPDATE messages SET follow_up_at = NULL WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// List messages whose follow-up reminder is due (`follow_up_at <= now`).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn due_follow_ups(&self, now: i64) -> Result<Vec<MessageSummary>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
+                        subject, date, flags, preview, has_attachments
+                 FROM messages WHERE follow_up_at IS NOT NULL AND follow_up_at <= ?1",
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![now], Self::row_to_summary)
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// List all currently snoozed messages (hidden until their snooze passes).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn get_snoozed(&self) -> Result<Vec<MessageSummary>> {
+        let conn = self.lock()?;
+        let now = chrono::Utc::now().timestamp();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, account_id, folder_id, uid, message_id, from_name, from_email, \"to\", cc,
+                        subject, date, flags, preview, has_attachments
+                 FROM messages WHERE snoozed_until IS NOT NULL AND snoozed_until > ?1
+                 ORDER BY snoozed_until ASC",
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![now], Self::row_to_summary)
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(e.to_string()))?);
+        }
+        Ok(out)
     }
 
     /// Save the full body of a message (text and HTML).
@@ -1005,6 +1140,118 @@ mod tests {
         assert_eq!(store.search("bob", "invoice", 10).unwrap().len(), 1);
         assert_eq!(store.search_all("invoice", 10).unwrap().len(), 2);
         assert_eq!(store.search_all("nonexistent", 10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn snooze_hides_message_until_time_passes() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+
+        let msg = test_summary("alice", folder_id, 1, "Snoozed");
+        let id = store.upsert_message(&msg).unwrap();
+        let now = chrono::Utc::now().timestamp();
+
+        // Snoozed into the future: hidden from the folder listing and the
+        // unified inbox, but listed in get_snoozed.
+        store.snooze_messages(&[id], now + 3600).unwrap();
+        assert!(store.get_messages(folder_id, 10).unwrap().is_empty());
+        assert!(store.get_unified_inbox(10).unwrap().is_empty());
+        let snoozed = store.get_snoozed().unwrap();
+        assert_eq!(snoozed.len(), 1);
+        assert_eq!(snoozed[0].id, id);
+
+        // Unsnoozing brings it back immediately.
+        store.unsnooze_messages(&[id]).unwrap();
+        assert_eq!(store.get_messages(folder_id, 10).unwrap().len(), 1);
+        assert!(store.get_snoozed().unwrap().is_empty());
+
+        // A snooze in the past never hides the message.
+        store.snooze_messages(&[id], now - 1).unwrap();
+        assert_eq!(store.get_messages(folder_id, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn snooze_and_follow_up_survive_reupsert() {
+        // A sync re-upsert must not clear the local scheduling columns.
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+
+        let msg = test_summary("alice", folder_id, 1, "Keep me");
+        let id = store.upsert_message(&msg).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        store.snooze_messages(&[id], now + 3600).unwrap();
+        store.set_follow_up(&[id], now + 7200).unwrap();
+
+        store.upsert_message(&msg).unwrap();
+
+        assert!(store.get_messages(folder_id, 10).unwrap().is_empty());
+        assert_eq!(store.due_follow_ups(now + 7200).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn follow_up_due_and_clear() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+
+        let msg = test_summary("alice", folder_id, 1, "Follow up");
+        let id = store.upsert_message(&msg).unwrap();
+        let now = chrono::Utc::now().timestamp();
+
+        // Not due yet.
+        store.set_follow_up(&[id], now + 3600).unwrap();
+        assert!(store.due_follow_ups(now).unwrap().is_empty());
+
+        // Due once the time passes.
+        store.set_follow_up(&[id], now - 1).unwrap();
+        let due = store.due_follow_ups(now).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].id, id);
+
+        // Cleared reminders never fire again.
+        store.clear_follow_up(&[id]).unwrap();
+        assert!(store.due_follow_ups(now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_v1_to_v2_adds_snooze_columns() {
+        let dir = std::env::temp_dir().join(format!("bang-mig-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v1.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            // Build a V1 database: schema + version row, no V2 columns.
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE schema_version (version INTEGER NOT NULL);")
+                .unwrap();
+            conn.execute_batch(MIGRATION_V1).unwrap();
+            conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+                .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let folder = test_folder("alice", "INBOX");
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+        let msg = test_summary("alice", folder_id, 1, "Old");
+        let id = store.upsert_message(&msg).unwrap();
+
+        // The V2 columns work on the migrated database.
+        store
+            .snooze_messages(&[id], chrono::Utc::now().timestamp() + 3600)
+            .unwrap();
+        assert!(store.get_messages(folder_id, 10).unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

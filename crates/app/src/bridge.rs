@@ -52,8 +52,19 @@ impl Bridge {
                     .expect("build tokio runtime");
                 rt.block_on(async move {
                     let forward = tokio::spawn(forward_events(weak, state, store, events_rx));
-                    while let Some(cmd) = cmd_rx.recv().await {
-                        service.handle_command(cmd);
+                    // Follow-up reminders are checked periodically. The first
+                    // tick fires immediately, so reminders that came due while
+                    // the app was closed fire on startup.
+                    let mut follow_up_tick =
+                        tokio::time::interval(std::time::Duration::from_secs(30));
+                    loop {
+                        tokio::select! {
+                            cmd = cmd_rx.recv() => match cmd {
+                                Some(cmd) => service.handle_command(cmd),
+                                None => break,
+                            },
+                            _ = follow_up_tick.tick() => service.check_due_follow_ups(),
+                        }
                     }
                     let _ = forward.await;
                 });

@@ -195,6 +195,9 @@ impl UiState {
                     message.body_text.clone().into()
                 });
             }
+            MailEvent::FollowUpDue { subject, .. } => {
+                notify(&tr("Follow-up due"), &subject);
+            }
             MailEvent::SearchResults { messages, .. } => {
                 let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
                 ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
@@ -240,15 +243,20 @@ pub(crate) fn display_name(addr: &EmailAddress) -> String {
     }
 }
 
-/// Show a desktop notification for a new message (best effort).
+/// Show a desktop notification (best effort).
 ///
 /// Uses `notify-send` (libnotify), present on most Linux desktops. Fails
 /// silently when it is missing (e.g. headless).
-pub(crate) fn notify_new_message(sender: &str, subject: &str) {
+pub(crate) fn notify(title: &str, body: &str) {
     let _ = std::process::Command::new("notify-send")
-        .arg(format!("{} {sender}", tr("New message from")))
-        .arg(subject)
+        .arg(title)
+        .arg(body)
         .spawn();
+}
+
+/// Show a desktop notification for a new message.
+pub(crate) fn notify_new_message(sender: &str, subject: &str) {
+    notify(&format!("{} {sender}", tr("New message from")), subject);
 }
 
 /// Format a Unix timestamp as a short local date.

@@ -50,6 +50,32 @@ pub enum UiCommand {
         /// Local store ids of the messages.
         message_ids: Vec<i64>,
     },
+    /// Snooze messages until the given Unix timestamp (seconds).
+    ///
+    /// Snoozed messages are hidden from folder listings until the time passes.
+    Snooze {
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+        /// Unix timestamp (seconds) at which the messages reappear.
+        until: i64,
+    },
+    /// Clear the snooze on messages so they reappear immediately.
+    Unsnooze {
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+    },
+    /// Schedule a follow-up reminder on messages at the given Unix timestamp.
+    SetFollowUp {
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+        /// Unix timestamp (seconds) at which the reminder fires.
+        at: i64,
+    },
+    /// Clear the follow-up reminder on messages.
+    ClearFollowUp {
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+    },
     /// Send an email.
     SendEmail(SendRequest),
     /// Search messages in an account.
@@ -141,6 +167,15 @@ pub enum MailEvent {
     MessageLoaded {
         /// The loaded message.
         message: MessageFull,
+    },
+    /// A scheduled follow-up reminder is due.
+    FollowUpDue {
+        /// Account the message belongs to.
+        account: AccountId,
+        /// Local store id of the message.
+        message_id: i64,
+        /// Message subject (for the notification).
+        subject: String,
     },
     /// Search results.
     SearchResults {
