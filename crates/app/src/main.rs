@@ -404,6 +404,7 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
                         bcc: addrs(&compose.get_bcc().to_string()),
                         subject: compose.get_subject().to_string(),
                         body_text: compose.get_body().to_string(),
+                        body_html: None,
                         attachments: COMPOSE_ATTACHMENTS.with(|a| std::mem::take(&mut *a.borrow_mut())),
                         in_reply_to: None,
                         references: None,

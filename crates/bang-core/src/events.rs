@@ -91,6 +91,9 @@ pub struct SendRequest {
     pub subject: String,
     /// Plain-text body.
     pub body_text: String,
+    /// Optional HTML alternative to the plain-text body.
+    #[serde(default)]
+    pub body_html: Option<String>,
     /// Attachments.
     pub attachments: Vec<OutgoingAttachment>,
     /// Message-ID being replied to, if any.

@@ -20,6 +20,7 @@ use crate::events::OutgoingAttachment;
 /// * `to`, `cc`, `bcc` — recipient lists.
 /// * `subject` — subject line.
 /// * `body` — plain-text body.
+/// * `body_html` — optional HTML alternative.
 /// * `attachments` — files to attach (multipart/mixed when non-empty).
 /// * `in_reply_to` — Message-ID being replied to, if any.
 /// * `references` — References header value, if any.
@@ -35,6 +36,7 @@ pub async fn send(
     bcc: &[String],
     subject: &str,
     body: &str,
+    body_html: Option<&str>,
     attachments: &[OutgoingAttachment],
     in_reply_to: Option<&str>,
     references: Option<&str>,
@@ -63,7 +65,16 @@ pub async fn send(
     let transport: AsyncSmtpTransport<lettre::Tokio1Executor> = builder.build();
 
     let mail = build_message(
-        from, to, cc, bcc, subject, body, attachments, in_reply_to, references,
+        from,
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        body_html,
+        attachments,
+        in_reply_to,
+        references,
     )?;
     transport.send(mail).await?;
     Ok(())
@@ -81,6 +92,7 @@ fn build_message(
     bcc: &[String],
     subject: &str,
     body: &str,
+    body_html: Option<&str>,
     attachments: &[OutgoingAttachment],
     in_reply_to: Option<&str>,
     references: Option<&str>,
@@ -91,20 +103,18 @@ fn build_message(
     let mut mail = Message::builder()
         .from(Mailbox::new(Some(from.to_string()), from_addr))
         .subject(subject);
+    let parse = |addr: &str| {
+        addr.parse::<Mailbox>()
+            .map_err(|e| Error::Config(format!("bad recipient address: {e}")))
+    };
     for addr in to {
-        if let Ok(a) = addr.parse::<Address>() {
-            mail = mail.to(Mailbox::new(Some(addr.to_string()), a));
-        }
+        mail = mail.to(parse(addr)?);
     }
     for addr in cc {
-        if let Ok(a) = addr.parse::<Address>() {
-            mail = mail.cc(Mailbox::new(Some(addr.to_string()), a));
-        }
+        mail = mail.cc(parse(addr)?);
     }
     for addr in bcc {
-        if let Ok(a) = addr.parse::<Address>() {
-            mail = mail.bcc(Mailbox::new(Some(addr.to_string()), a));
-        }
+        mail = mail.bcc(parse(addr)?);
     }
     if let Some(id) = in_reply_to {
         mail = mail.in_reply_to(id.to_string());
@@ -112,22 +122,36 @@ fn build_message(
     if let Some(refs) = references {
         mail = mail.references(refs.to_string());
     }
-    Ok(if attachments.is_empty() {
-        mail.body(body.to_string())
-            .map_err(|e| Error::Config(format!("build message: {e}")))?
+    let content = match body_html {
+        Some(html) => MultiPart::alternative()
+            .singlepart(SinglePart::plain(body.to_string()))
+            .singlepart(SinglePart::html(html.to_string())),
+        None => MultiPart::mixed().singlepart(SinglePart::plain(body.to_string())),
+    };
+    if attachments.is_empty() && body_html.is_none() {
+        return mail
+            .singlepart(SinglePart::plain(body.to_string()))
+            .map_err(|e| Error::Config(format!("build message: {e}")));
+    }
+    let content = if attachments.is_empty() {
+        content
     } else {
-        // multipart/mixed: the text body plus one part per attachment.
-        let mut part = MultiPart::mixed().singlepart(SinglePart::plain(body.to_string()));
+        let mut mixed = if body_html.is_some() {
+            MultiPart::mixed().multipart(content)
+        } else {
+            MultiPart::mixed().singlepart(SinglePart::plain(body.to_string()))
+        };
         for att in attachments {
             let content_type = ContentType::parse(&att.content_type)
-                .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
-            part = part.singlepart(
+                .unwrap_or(ContentType::parse("application/octet-stream").unwrap());
+            mixed = mixed.singlepart(
                 Attachment::new(att.filename.clone()).body(att.data.clone(), content_type),
             );
         }
-        mail.multipart(part)
-            .map_err(|e| Error::Config(format!("build message: {e}")))?
-    })
+        mixed
+    };
+    mail.multipart(content)
+        .map_err(|e| Error::Config(format!("build message: {e}")))
 }
 
 /// Map a `TlsMode` to a lettre `Tls` value.
@@ -169,14 +193,16 @@ mod tests {
             &[],
             "Hi",
             "Hello",
+            None,
             &[],
             None,
             None,
         )
         .unwrap();
         let raw = String::from_utf8(mail.formatted()).unwrap();
-        // No Content-Type header: the RFC 5322 default is text/plain.
+        // Explicit plain-text content is preserved.
         assert!(!raw.contains("multipart"));
+        assert!(raw.contains("text/plain"));
         assert!(raw.contains("Hello"));
     }
 
@@ -189,6 +215,7 @@ mod tests {
             &[],
             "Hi",
             "Hello",
+            None,
             &[attachment("report.pdf", "application/pdf")],
             None,
             None,
@@ -210,6 +237,7 @@ mod tests {
             &[],
             "Hi",
             "Hello",
+            None,
             &[attachment("blob.bin", "not a valid type")],
             None,
             None,
@@ -217,5 +245,145 @@ mod tests {
         .unwrap();
         let raw = String::from_utf8(mail.formatted()).unwrap();
         assert!(raw.contains("application/octet-stream"));
+    }
+    #[test]
+    fn rich_body_and_attachments_roundtrip() {
+        let mail = build_message(
+            "alice@example.com",
+            &["bob@example.com".into()],
+            &[],
+            &["private@example.com".into()],
+            "Bonjour",
+            "Été en gras",
+            Some("<p>Été en <strong>gras</strong></p>"),
+            &[attachment("maquette.pdf", "application/pdf")],
+            None,
+            None,
+        )
+        .unwrap();
+        let raw = mail.formatted();
+        let wire = String::from_utf8(raw.clone()).unwrap();
+        assert!(wire.contains("multipart/mixed"));
+        assert!(wire.contains("multipart/alternative"));
+        assert!(!wire.contains("Bcc:"));
+        let parsed = crate::mime::parse(&raw).unwrap();
+        assert!(parsed.body_text.contains("Été en gras"));
+        assert!(parsed.body_html.contains("<strong>gras</strong>"));
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].data, b"file content");
+    }
+
+    #[test]
+    fn html_without_files_is_alternative_and_invalid_recipients_fail() {
+        let mail = build_message(
+            "alice@example.com",
+            &["Bob <bob@example.com>".into()],
+            &[],
+            &[],
+            "Hi",
+            "Hello",
+            Some("<p>Hello</p>"),
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        let raw = String::from_utf8(mail.formatted()).unwrap();
+        assert!(raw.contains("multipart/alternative"));
+        assert!(!raw.contains("multipart/mixed"));
+        assert!(build_message(
+            "alice@example.com",
+            &["invalid".into()],
+            &[],
+            &[],
+            "Hi",
+            "Hello",
+            None,
+            &[],
+            None,
+            None
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn local_smtp_receives_rich_mail_and_reports_rejection() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::TcpListener;
+        for reject in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut read = BufReader::new(read);
+                write.write_all(b"220 localhost ESMTP\r\n").await.unwrap();
+                let mut data = String::new();
+                let mut in_data = false;
+                loop {
+                    let mut line = String::new();
+                    if read.read_line(&mut line).await.unwrap() == 0 {
+                        break;
+                    }
+                    if in_data {
+                        if line == ".\r\n" {
+                            write
+                                .write_all(if reject {
+                                    b"554 message rejected\r\n"
+                                } else {
+                                    b"250 queued\r\n"
+                                })
+                                .await
+                                .unwrap();
+                            break;
+                        }
+                        data.push_str(&line);
+                        continue;
+                    }
+                    let reply: &[u8] = if line.starts_with("EHLO") {
+                        b"250-localhost\r\n250 AUTH PLAIN\r\n"
+                    } else if line.starts_with("AUTH") {
+                        b"235 authenticated\r\n"
+                    } else if line.starts_with("DATA") {
+                        in_data = true;
+                        b"354 go ahead\r\n"
+                    } else {
+                        b"250 OK\r\n"
+                    };
+                    write.write_all(reply).await.unwrap();
+                }
+                data
+            });
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                send(
+                    &SmtpConfig {
+                        host: "127.0.0.1".into(),
+                        port,
+                        tls: TlsMode::Plaintext,
+                    },
+                    &AuthMethod::Password {
+                        username: "local".into(),
+                        password: "test".into(),
+                    },
+                    "alice@example.com",
+                    &["bob@example.com".into()],
+                    &[],
+                    &[],
+                    "Local test",
+                    "Hello",
+                    Some("<p><b>Hello</b></p>"),
+                    &[attachment("file.txt", "text/plain")],
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.is_err(), reject);
+            let data = server.await.unwrap();
+            assert!(data.contains("multipart/alternative"));
+            assert!(data.contains("file.txt"));
+        }
     }
 }
