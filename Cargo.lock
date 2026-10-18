@@ -603,6 +603,7 @@ dependencies = [
  "bitflags 2.13.2",
  "chrono",
  "directories",
+ "dom_query",
  "imap",
  "imap-proto",
  "lettre",

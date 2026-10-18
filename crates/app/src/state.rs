@@ -190,8 +190,9 @@ impl UiState {
                 ui.set_message_sender(display_name(&message.summary.from).into());
                 ui.set_message_subject(message.summary.subject.clone().into());
                 ui.set_message_date(format_date(message.summary.date).into());
+                // HTML-only messages are rendered as structured text.
                 ui.set_message_body(if message.body_text.is_empty() {
-                    message.body_html.clone().into()
+                    bang_core::mime::render_html_subset(&message.body_html).into()
                 } else {
                     message.body_text.clone().into()
                 });
