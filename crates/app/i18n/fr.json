@@ -104,5 +104,8 @@
   "Reconnecting…": "Reconnexion…",
   "Offline preview: no message was sent.": "Aperçu hors connexion : aucun message n’a été envoyé.",
   "Message headers": "En-tête du message",
-  "Attachments": "Pièces jointes"
+  "Attachments": "Pièces jointes",
+  "Save as…": "Enregistrer sous…",
+  "Saved": "Enregistré :",
+  "Save failed": "Échec de l’enregistrement :"
 }

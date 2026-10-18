@@ -1,0 +1,42 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
+
+/// Modal preview of a text or image attachment.
+export component AttachmentPreview inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title;
+    in property <string> kind; // "text" | "image"
+    in property <string> text;
+    in property <image> image;
+    callback save-clicked();
+    callback close();
+    visible: root.open;
+    background: #00000066;
+    TouchArea { clicked => { root.close(); } }
+    Rectangle {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: min(720px, parent.width - 80px); height: min(560px, parent.height - 80px);
+        background: Theme.bg; border-radius: 12px;
+        VerticalLayout { padding: 16px; spacing: 12px;
+            HorizontalLayout { spacing: 8px;
+                Text { text: root.title; font-size: 14px; font-weight: 600; color: Theme.text; overflow: elide; horizontal-stretch: 1; }
+                ActionButton { compact: true; framed: true; text: @tr("Save as…"); icon: @image-url("icons/file.svg"); clicked => { root.save-clicked(); } }
+                ActionButton { compact: true; framed: true; text: @tr("Close"); icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+            }
+            Rectangle { height: 1px; background: Theme.border; }
+            if root.kind == "text": ScrollView {
+                min-height: 0px; vertical-stretch: 1;
+                content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                Text { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; vertical-alignment: top; text: root.text; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+            }
+            if root.kind == "image": Rectangle {
+                min-height: 0px; vertical-stretch: 1;
+                background: Theme.reading-bg; border-radius: 8px;
+                Image { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; source: root.image; image-fit: contain; }
+            }
+        }
+        // Swallow clicks so the backdrop's close-on-click does not fire.
+        TouchArea { }
+    }
+}

@@ -12,7 +12,7 @@ use bang_core::events::MailEvent;
 use bang_core::message::{EmailAddress, MessageSummary};
 use bang_core::store::{Store, UNIFIED_INBOX_ID};
 
-use crate::{BangApp, FolderRow, MessageRow};
+use crate::{AttachmentRow, BangApp, FolderRow, MessageRow};
 
 /// Selection state shared between the UI callbacks and the event forwarder.
 pub struct UiState {
@@ -53,6 +53,7 @@ impl UiState {
                 self.selected_message.store(-1, Ordering::SeqCst);
                 ui.set_selected_message(-1);
                 ui.set_message_body("".into());
+                ui.set_message_attachments(slint::ModelRc::new(VecModel::from(Vec::new())));
                 ui.set_message_loading(false);
             } else if let Some(summary) = messages.iter().find(|m| m.id == selected) {
                 set_message_header(ui, summary);
@@ -194,6 +195,17 @@ impl UiState {
                 } else {
                     message.body_text.clone().into()
                 });
+                let atts: Vec<AttachmentRow> = message
+                    .attachments
+                    .iter()
+                    .map(|a| AttachmentRow {
+                        filename: a.filename.clone().into(),
+                        size: format_size(a.size).into(),
+                        path: a.path.clone().into(),
+                        content_type: a.content_type.clone().into(),
+                    })
+                    .collect();
+                ui.set_message_attachments(slint::ModelRc::new(VecModel::from(atts)));
             }
             MailEvent::FollowUpDue { subject, .. } => {
                 notify(&tr("Follow-up due"), &subject);
@@ -234,6 +246,19 @@ pub(crate) fn to_row(m: &MessageSummary) -> MessageRow {
         unread: m.flags.is_unread(),
         starred: m.flags.is_flagged(),
         has_attachments: m.has_attachments,
+    }
+}
+
+/// Human-readable file size (B, KB, MB).
+pub(crate) fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
     }
 }
 

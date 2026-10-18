@@ -4,12 +4,14 @@ import { Theme } from "theme.slint";
 export { Theme } from "theme.slint";
 export { Palette } from "std-widgets.slint";
 import { ActionButton, SearchField } from "controls.slint";
-import { FolderRow, MessageRow, AccountRow } from "models.slint";
+import { FolderRow, MessageRow, AccountRow, AttachmentRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
 import { AccountWizard } from "accountwizard.slint";
 import { SettingsDialog } from "settingsdialog.slint";
+import { AttachmentPreview } from "attachmentpreview.slint";
+import { SaveDialog } from "savedialog.slint";
 
 export component BangApp inherits Window {
     title: "Bang"; preferred-width: 1440px; preferred-height: 900px;
@@ -25,8 +27,15 @@ export component BangApp inherits Window {
     in property <string> message-date; in property <string> message-body;
     in property <string> message-sender-address; in property <string> message-recipients;
     in property <string> message-initials;
+    in property <[AttachmentRow]> message-attachments;
     in property <bool> message-loading: false;
     in property <bool> message-starred: false;
+    in-out property <bool> preview-open: false;
+    in property <string> preview-title; in property <string> preview-kind;
+    in property <string> preview-text; in property <image> preview-image;
+    in property <string> preview-path;
+    in-out property <bool> save-open: false;
+    in property <string> save-filename; in-out property <string> save-path;
     in-out property <bool> wizard-open: false; in-out property <bool> wizard-manual: false; in property <string> wizard-status;
     in-out property <bool> settings-open: false;
     in property <[AccountRow]> settings-accounts; in property <string> settings-theme: "system";
@@ -39,6 +48,7 @@ export component BangApp inherits Window {
     callback folder-selected(int); callback account-toggled(string);
     callback message-selected(int); callback message-action(int, string);
     callback compose-clicked(); callback search-edited(string); callback navigate-message(int);
+    callback attachment-clicked(int); callback attachment-save(string);
     callback quit();
     callback settings-opened(); callback settings-theme-selected(string);
     callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
@@ -154,7 +164,9 @@ export component BangApp inherits Window {
         ReadingPane { x: 0px; width: parent.width; y: 53px; height: parent.height - 53px - (root.status-message == "" ? 0px : 36px);
             sender: root.message-sender; subject: root.message-subject; date: root.message-date; body: root.message-body;
             sender-address: root.message-sender-address; recipients: root.message-recipients; initials: root.message-initials;
+            attachments: root.message-attachments;
             selected: root.selected-message >= 0; loading: root.message-loading;
+            attachment-clicked(i) => { root.attachment-clicked(i); }
         }
         if root.status-message != "": Rectangle { y: parent.height - 36px; height: 36px; background: Theme.toolbar-bg;
             Text { x: 12px; width: parent.width - 24px; text: root.status-message; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; overflow: elide; }
@@ -181,6 +193,17 @@ export component BangApp inherits Window {
         theme-selected(m) => { root.settings-theme-selected(m); } language-selected(m) => { root.settings-language-selected(m); }
         account-remove(id) => { root.settings-account-remove(id); } add-account => { root.settings-open = false; root.wizard-open = true; }
         close => { root.settings-close(); }
+    }
+    AttachmentPreview { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        open: root.preview-open; title: root.preview-title; kind: root.preview-kind;
+        text: root.preview-text; image: root.preview-image;
+        save-clicked => { root.save-open = true; }
+        close => { root.preview-open = false; }
+    }
+    SaveDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        open: root.save-open; filename: root.save-filename; path <=> root.save-path;
+        confirmed => { root.attachment-save(root.save-path); root.save-open = false; }
+        close => { root.save-open = false; }
     }
     }
 }

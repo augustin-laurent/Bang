@@ -6,6 +6,7 @@ use slint::{include_modules, ComponentHandle, Global};
 
 include_modules!();
 
+mod attachments;
 mod bridge;
 mod composer;
 mod config;
@@ -59,6 +60,7 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_wizard(&ui, bridge.clone(), config);
     wire_selection(&ui, &store, &state, bridge.clone());
     wire_compose(&ui, &store, bridge.clone());
+    wire_attachments(&ui, &store);
     wire_settings(&ui, &store, &state, bridge);
     let weak = ui.as_weak();
     ui.window().on_close_requested({
@@ -303,6 +305,7 @@ fn load_folder_view(ui: &BangApp, store: &Arc<bang_core::Store>, id: i64) {
     ui.set_message_subject("".into());
     ui.set_message_date("".into());
     ui.set_message_body("".into());
+    ui.set_message_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::new())));
     let messages = if id == bang_core::UNIFIED_INBOX_ID {
         ui.set_folder_name(tr("All Inboxes").into());
         store.get_unified_inbox(200)
@@ -513,6 +516,28 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
         if let Some(ui) = weak.upgrade() {
             if let Err(error) = composer::open(&ui, store.clone(), bridge.clone()) {
                 ui.set_status_message(format!("{} {error}", tr("Compose unavailable:")).into());
+            }
+        }
+    });
+}
+
+/// Connect attachment chips to preview and save.
+fn wire_attachments(ui: &BangApp, store: &Arc<bang_core::Store>) {
+    ui.on_attachment_clicked({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        move |index| {
+            if let Some(ui) = weak.upgrade() {
+                attachments::open(&ui, &store, index);
+            }
+        }
+    });
+    ui.on_attachment_save({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        move |dest| {
+            if let Some(ui) = weak.upgrade() {
+                attachments::save(&ui, &store, dest);
             }
         }
     });

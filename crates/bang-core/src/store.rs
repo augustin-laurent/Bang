@@ -3,7 +3,7 @@
 //! The store is a single connection guarded by a mutex. SQLite operations are
 //! fast and local, so a connection pool is not needed at this scale.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -123,6 +123,9 @@ CREATE TABLE pending_sends (
 /// so a single `Store` can be shared across threads.
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Where attachment files live (`<dir>/<message_id>/<filename>`), for
+    /// file-backed stores. `None` for in-memory stores.
+    attachments_dir: Option<PathBuf>,
 }
 
 impl Store {
@@ -144,6 +147,7 @@ impl Store {
             .map_err(|e| Error::Store(e.to_string()))?;
         let store = Self {
             conn: Mutex::new(conn),
+            attachments_dir: path.parent().map(|p| p.join("attachments")),
         };
         store.migrate()?;
         Ok(store)
@@ -158,6 +162,7 @@ impl Store {
         let conn = Connection::open_in_memory().map_err(|e| Error::Store(e.to_string()))?;
         let store = Self {
             conn: Mutex::new(conn),
+            attachments_dir: None,
         };
         store.migrate()?;
         Ok(store)
@@ -275,8 +280,21 @@ impl Store {
     /// Returns `Error::Store` on database failure.
     pub fn delete_account(&self, id: &str) -> Result<()> {
         let conn = self.lock()?;
+        // Remove the account's attachment files before the rows cascade.
+        let mut stmt = conn
+            .prepare("SELECT id FROM messages WHERE account_id = ?1")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let ids = stmt
+            .query_map(params![id], |r| r.get::<_, i64>(0))
+            .map_err(|e| Error::Store(e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        drop(stmt);
         conn.execute("DELETE FROM accounts WHERE id = ?1", params![id])
             .map_err(|e| Error::Store(e.to_string()))?;
+        for id in ids {
+            self.delete_attachment_files(id)?;
+        }
         Ok(())
     }
 
@@ -672,6 +690,7 @@ impl Store {
         for id in ids {
             conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
                 .map_err(|e| Error::Store(e.to_string()))?;
+            self.delete_attachment_files(*id)?;
         }
         Ok(())
     }
@@ -961,6 +980,63 @@ impl Store {
         }))
     }
 
+    /// Save an attachment's data to disk and return the stored path.
+    ///
+    /// Layout: `<attachments_dir>/<message_id>/<filename>`. File names come
+    /// from untrusted mail content, so only the final path component is kept
+    /// and collisions get a numeric suffix.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on I/O failure or when the store is in-memory.
+    pub fn save_attachment(&self, message_id: i64, filename: &str, data: &[u8]) -> Result<String> {
+        let dir = self
+            .attachments_dir
+            .as_ref()
+            .ok_or_else(|| Error::Store("in-memory store: no attachment dir".into()))?;
+        let msg_dir = dir.join(message_id.to_string());
+        std::fs::create_dir_all(&msg_dir).map_err(|e| Error::Store(e.to_string()))?;
+        let name = sanitize_filename(filename);
+        let mut path = msg_dir.join(&name);
+        let mut n = 1;
+        while path.exists() {
+            let (stem, ext) = split_name(&name);
+            path = msg_dir.join(format!("{stem}-{n}{ext}"));
+            n += 1;
+        }
+        std::fs::write(&path, data).map_err(|e| Error::Store(e.to_string()))?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
+    /// Read an attachment's data from disk.
+    ///
+    /// The path must be inside this store's attachments directory.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on I/O failure or if the path escapes the
+    /// attachments directory.
+    pub fn read_attachment(&self, path: &str) -> Result<Vec<u8>> {
+        let dir = self
+            .attachments_dir
+            .as_ref()
+            .ok_or_else(|| Error::Store("in-memory store: no attachment dir".into()))?;
+        let p = Path::new(path);
+        if !p.starts_with(dir) {
+            return Err(Error::Store("path outside attachments dir".into()));
+        }
+        std::fs::read(p).map_err(|e| Error::Store(e.to_string()))
+    }
+
+    /// Delete all attachment files of a message.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on I/O failure.
+    pub fn delete_attachment_files(&self, message_id: i64) -> Result<()> {
+        if let Some(dir) = &self.attachments_dir {
+            let _ = std::fs::remove_dir_all(dir.join(message_id.to_string()));
+        }
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Search
     // ------------------------------------------------------------------
@@ -1022,6 +1098,35 @@ impl Store {
         }
         Ok(out)
     }
+}
+
+/// Reduce an untrusted attachment file name to a safe single component.
+fn sanitize_filename(name: &str) -> String {
+    let base = Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string();
+    if base.is_empty() || base == "." || base == ".." {
+        "attachment".into()
+    } else {
+        base
+    }
+}
+
+/// Split a file name into (stem, extension including the dot).
+fn split_name(name: &str) -> (String, String) {
+    let p = Path::new(name);
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    (
+        stem.to_string(),
+        if ext.is_empty() {
+            String::new()
+        } else {
+            format!(".{ext}")
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1414,6 +1519,43 @@ mod tests {
         store.remove_send(id).unwrap();
         assert!(store.due_sends(now + 3600).unwrap().is_empty());
         assert!(store.get_pending_sends().unwrap().is_empty());
+    }
+
+    #[test]
+    fn attachment_files_roundtrip_and_sanitize() {
+        let dir = std::env::temp_dir().join(format!("bang-att-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("test.db");
+        let _ = std::fs::remove_file(&db);
+        let store = Store::open(&db).unwrap();
+
+        // Round-trip.
+        let path = store.save_attachment(1, "note.txt", b"hello").unwrap();
+        assert!(path.ends_with("note.txt"));
+        assert_eq!(store.read_attachment(&path).unwrap(), b"hello");
+
+        // Path traversal in the file name is reduced to the final component.
+        let evil = store.save_attachment(1, "../../evil.txt", b"x").unwrap();
+        assert!(evil.starts_with(dir.join("attachments").to_str().unwrap()));
+        assert!(evil.ends_with("evil.txt"));
+
+        // Collisions get a numeric suffix.
+        let dup = store.save_attachment(1, "note.txt", b"other").unwrap();
+        assert_ne!(dup, path);
+        assert_eq!(store.read_attachment(&dup).unwrap(), b"other");
+
+        // Paths outside the attachments directory are rejected.
+        assert!(store.read_attachment("/etc/passwd").is_err());
+
+        // Deleting a message's files makes them unreadable.
+        store.delete_attachment_files(1).unwrap();
+        assert!(store.read_attachment(&path).is_err());
+
+        // In-memory stores have no attachment dir.
+        let mem = Store::open_in_memory().unwrap();
+        assert!(mem.save_attachment(1, "a.txt", b"x").is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

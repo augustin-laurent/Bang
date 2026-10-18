@@ -447,7 +447,13 @@ fn handle_fetch_body(
     let raw = conn.fetch_body(summary.uid)?;
     let parsed = crate::mime::parse(&raw)?;
 
-    let attachments = crate::mime::to_attachment_records(message_id, &parsed.attachments);
+    // Persist attachment data on disk; the record's path is set once stored.
+    let mut attachments = crate::mime::to_attachment_records(message_id, &parsed.attachments);
+    for (record, data) in attachments.iter_mut().zip(&parsed.attachments) {
+        if let Ok(path) = store.save_attachment(message_id, &record.filename, &data.data) {
+            record.path = path;
+        }
+    }
     store.save_message_bodies(
         message_id,
         &parsed.body_text,

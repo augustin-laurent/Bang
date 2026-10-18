@@ -1,11 +1,14 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { AttachmentRow } from "models.slint";
 export component ReadingPane inherits Rectangle {
     background: Theme.reading-bg;
     in property <string> sender; in property <string> sender-address;
     in property <string> recipients; in property <string> initials;
     in property <string> subject; in property <string> date; in property <string> body;
+    in property <[AttachmentRow]> attachments;
     in property <bool> selected: false; in property <bool> loading: false;
+    callback attachment-clicked(int);
     if !root.selected: Text { text: @tr("Select a message to read it"); color: Theme.text-secondary; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; }
     if root.selected: VerticalLayout {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
@@ -27,7 +30,22 @@ export component ReadingPane inherits Rectangle {
         ScrollView {
             min-height: 0px; vertical-stretch: 1;
             content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-            Text { x: 0px; y: 0px; width: min(parent.width, 800px); height: self.preferred-height; vertical-alignment: top; text: root.loading ? @tr("Loading…") : root.body; color: root.loading ? Theme.text-secondary : Theme.text; font-size: 15px; wrap: word-wrap; }
+            VerticalLayout { x: 0px; y: 0px; width: min(parent.width, 800px); height: self.preferred-height; spacing: 16px;
+                Text { width: parent.width; height: self.preferred-height; vertical-alignment: top; text: root.loading ? @tr("Loading…") : root.body; color: root.loading ? Theme.text-secondary : Theme.text; font-size: 15px; wrap: word-wrap; }
+                if root.attachments.length > 0: VerticalLayout { spacing: 8px;
+                    Text { text: @tr("Attachments"); color: Theme.text-secondary; font-size: 12px; font-weight: 600; }
+                    HorizontalLayout { spacing: 8px;
+                        for att [i] in root.attachments: Rectangle {
+                            border-radius: 8px; border-width: 1px; border-color: Theme.border; background: Theme.bg;
+                            HorizontalLayout { spacing: 6px; padding-top: 6px; padding-bottom: 6px; padding-left: 10px; padding-right: 10px;
+                                Text { text: att.filename; font-size: 12px; color: Theme.text; overflow: elide; }
+                                Text { text: att.size; font-size: 11px; color: Theme.text-secondary; }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.attachment-clicked(i); } }
+                        }
+                    }
+                }
+            }
         }
     }
 }
