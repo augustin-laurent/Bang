@@ -63,7 +63,10 @@ impl Bridge {
                                 Some(cmd) => service.handle_command(cmd),
                                 None => break,
                             },
-                            _ = follow_up_tick.tick() => service.check_due_follow_ups(),
+                            _ = follow_up_tick.tick() => {
+                                service.check_due_follow_ups();
+                                service.check_due_sends();
+                            }
                         }
                     }
                     let _ = forward.await;

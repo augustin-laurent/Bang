@@ -76,6 +76,13 @@ pub enum UiCommand {
         /// Local store ids of the messages.
         message_ids: Vec<i64>,
     },
+    /// Schedule an email to be sent at a later time.
+    ScheduleSend {
+        /// Unix timestamp (seconds) at which the email is sent.
+        send_at: i64,
+        /// The email to send.
+        request: SendRequest,
+    },
     /// Send an email.
     SendEmail(SendRequest),
     /// Search messages in an account.
@@ -192,6 +199,13 @@ pub enum MailEvent {
         ok: bool,
         /// Error message if it failed.
         error: Option<String>,
+    },
+    /// An email was scheduled for later sending.
+    SendScheduled {
+        /// Account that will send.
+        account: AccountId,
+        /// Unix timestamp (seconds) at which the email is sent.
+        send_at: i64,
     },
     /// A non-fatal error to display.
     Error {

@@ -116,6 +116,23 @@ pub struct Folder {
     pub unread: u32,
 }
 
+/// A send-later email waiting to be dispatched.
+///
+/// Lightweight view of a pending send, for listing in the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSend {
+    /// Local store id.
+    pub id: i64,
+    /// Account that will send.
+    pub account_id: String,
+    /// Unix timestamp (seconds) at which the email is sent.
+    pub send_at: i64,
+    /// From address.
+    pub from: String,
+    /// Subject line.
+    pub subject: String,
+}
+
 /// Connection status of an account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

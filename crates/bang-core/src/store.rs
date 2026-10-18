@@ -10,12 +10,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::account::AccountConfig;
 use crate::error::{Error, Result};
+use crate::events::SendRequest;
 use crate::message::{
-    Attachment, EmailAddress, Folder, MessageFlags, MessageFull, MessageSummary,
+    Attachment, EmailAddress, Folder, MessageFlags, MessageFull, MessageSummary, PendingSend,
 };
 
 /// Current schema version.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Special folder id for the unified inbox (all accounts' INBOXes).
 ///
@@ -103,6 +104,19 @@ ALTER TABLE messages ADD COLUMN snoozed_until INTEGER;
 ALTER TABLE messages ADD COLUMN follow_up_at INTEGER;
 "#;
 
+/// V3 schema: send-later.
+///
+/// A pending send is a full `SendRequest` serialized as JSON, held until
+/// `send_at` passes. It is removed once the SMTP send succeeds.
+const MIGRATION_V3: &str = r#"
+CREATE TABLE pending_sends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    request TEXT NOT NULL,
+    send_at INTEGER NOT NULL
+);
+"#;
+
 /// Persistent store for all local mail data.
 ///
 /// All methods take `&self`; the connection is guarded by an internal mutex,
@@ -167,6 +181,10 @@ impl Store {
         }
         if version < 2 {
             conn.execute_batch(MIGRATION_V2)
+                .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        if version < 3 {
+            conn.execute_batch(MIGRATION_V3)
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
         conn.execute(
@@ -773,6 +791,94 @@ impl Store {
         Ok(out)
     }
 
+    /// Schedule an email to be sent at the given Unix timestamp (seconds).
+    ///
+    /// The full request is stored as JSON and dispatched by the service
+    /// once `send_at` passes.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or serialization failure.
+    pub fn schedule_send(&self, request: &SendRequest, send_at: i64) -> Result<i64> {
+        let conn = self.lock()?;
+        let json = serde_json::to_vec(request).map_err(|e| Error::Store(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO pending_sends (account_id, request, send_at) VALUES (?1, ?2, ?3)",
+            params![request.account.0, json, send_at],
+        )
+        .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// List pending sends whose time has come (`send_at <= now`), oldest first.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or deserialization failure.
+    pub fn due_sends(&self, now: i64) -> Result<Vec<(i64, SendRequest)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT id, request FROM pending_sends WHERE send_at <= ?1 ORDER BY send_at")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![now], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, json) = row.map_err(|e| Error::Store(e.to_string()))?;
+            let request = serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
+            out.push((id, request));
+        }
+        Ok(out)
+    }
+
+    /// List all pending sends, soonest first (for the UI).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or deserialization failure.
+    pub fn get_pending_sends(&self) -> Result<Vec<PendingSend>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT id, account_id, request, send_at FROM pending_sends ORDER BY send_at")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, account_id, json, send_at) = row.map_err(|e| Error::Store(e.to_string()))?;
+            let request: SendRequest =
+                serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
+            out.push(PendingSend {
+                id,
+                account_id,
+                send_at,
+                from: request.from,
+                subject: request.subject,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Remove a pending send (after a successful send, or on cancel).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn remove_send(&self, id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM pending_sends WHERE id = ?1", params![id])
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
     /// Save the full body of a message (text and HTML).
     ///
     /// # Errors
@@ -922,6 +1028,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::account::{AccountId, AuthMethod, ImapConfig, SmtpConfig, TlsMode};
+    use crate::events::{OutgoingAttachment, SendRequest};
 
     fn test_account(id: &str) -> AccountConfig {
         AccountConfig {
@@ -1250,6 +1357,89 @@ mod tests {
             .snooze_messages(&[id], chrono::Utc::now().timestamp() + 3600)
             .unwrap();
         assert!(store.get_messages(folder_id, 10).unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn test_send_request(account: &str) -> SendRequest {
+        SendRequest {
+            account: AccountId(account.into()),
+            from: format!("{account}@example.com"),
+            to: vec!["bob@example.com".into()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject: "Later".into(),
+            body_text: "Hello later".into(),
+            body_html: None,
+            attachments: vec![OutgoingAttachment {
+                filename: "note.txt".into(),
+                content_type: "text/plain".into(),
+                data: b"hello".to_vec(),
+            }],
+            in_reply_to: None,
+            references: None,
+        }
+    }
+
+    #[test]
+    fn send_later_due_and_remove() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let now = chrono::Utc::now().timestamp();
+
+        let id = store
+            .schedule_send(&test_send_request("alice"), now + 3600)
+            .unwrap();
+        assert!(id > 0);
+
+        // Not due yet.
+        assert!(store.due_sends(now).unwrap().is_empty());
+
+        // Listed for the UI.
+        let pending = store.get_pending_sends().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, id);
+        assert_eq!(pending[0].subject, "Later");
+        assert_eq!(pending[0].from, "alice@example.com");
+
+        // Due once the time passes; the request round-trips, attachments
+        // included.
+        let due = store.due_sends(now + 3600).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].0, id);
+        assert_eq!(due[0].1.subject, "Later");
+        assert_eq!(due[0].1.attachments[0].data, b"hello");
+
+        // Removed after a successful send.
+        store.remove_send(id).unwrap();
+        assert!(store.due_sends(now + 3600).unwrap().is_empty());
+        assert!(store.get_pending_sends().unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_v2_to_v3_adds_pending_sends() {
+        let dir = std::env::temp_dir().join(format!("bang-mig3-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v2.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            // Build a V2 database: V1 + V2 schema, no pending_sends table.
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE schema_version (version INTEGER NOT NULL);")
+                .unwrap();
+            conn.execute_batch(MIGRATION_V1).unwrap();
+            conn.execute_batch(MIGRATION_V2).unwrap();
+            conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])
+                .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let id = store
+            .schedule_send(&test_send_request("alice"), chrono::Utc::now().timestamp() + 3600)
+            .unwrap();
+        assert_eq!(store.get_pending_sends().unwrap().len(), 1);
+        store.remove_send(id).unwrap();
 
         let _ = std::fs::remove_dir_all(&dir);
     }

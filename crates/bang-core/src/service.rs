@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::account::{AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode};
 use crate::error::{Error, Result};
-use crate::events::{MailEvent, UiCommand};
+use crate::events::{MailEvent, SendRequest, UiCommand};
 use crate::message::AccountStatus;
 use crate::store::Store;
 use crate::sync::{start_syncer, SyncerCommand};
@@ -111,6 +111,41 @@ impl MailService {
             if let Err(e) = self.store.clear_follow_up(&[msg.id]) {
                 tracing::warn!("clear_follow_up failed for {}: {e}", msg.id);
             }
+        }
+    }
+
+    /// Dispatch every pending send whose time has come.
+    ///
+    /// Called periodically by the app's bridge. A successful send is removed
+    /// from the pending list; a failed one is kept and retried on the next
+    /// tick (no event, so a dead network does not spam the UI).
+    pub fn check_due_sends(&self) {
+        let now = chrono::Utc::now().timestamp();
+        let due = match self.store.due_sends(now) {
+            Ok(due) => due,
+            Err(e) => {
+                tracing::warn!("due_sends failed: {e}");
+                return;
+            }
+        };
+        for (id, request) in due {
+            let store = self.store.clone();
+            let events_tx = self.events_tx.clone();
+            tokio::spawn(async move {
+                match smtp_send(&store, &request).await {
+                    Ok(()) => {
+                        if let Err(e) = store.remove_send(id) {
+                            tracing::warn!("remove_send failed for {}: {e}", id);
+                        }
+                        let _ = events_tx.send(MailEvent::SendResult {
+                            account: request.account,
+                            ok: true,
+                            error: None,
+                        });
+                    }
+                    Err(e) => tracing::warn!("scheduled send {} failed: {e}", id),
+                }
+            });
         }
     }
 
@@ -254,31 +289,38 @@ impl MailService {
             UiCommand::ClearFollowUp { message_ids } => {
                 self.update_local(&message_ids, |store| store.clear_follow_up(&message_ids));
             }
+            UiCommand::ScheduleSend { send_at, request } => {
+                // Reject unknown accounts now: the send would otherwise
+                // retry forever against a dead account.
+                match self.store.get_account(&request.account.0) {
+                    Ok(Some(_)) => match self.store.schedule_send(&request, send_at) {
+                        Ok(_) => {
+                            let _ = self.events_tx.send(MailEvent::SendScheduled {
+                                account: request.account,
+                                send_at,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = self.events_tx.send(MailEvent::Error {
+                                account: Some(request.account),
+                                message: e.to_string(),
+                            });
+                        }
+                    },
+                    _ => {
+                        let message = format!("unknown account {}", request.account.0);
+                        let _ = self.events_tx.send(MailEvent::Error {
+                            account: Some(request.account),
+                            message,
+                        });
+                    }
+                }
+            }
             UiCommand::SendEmail(req) => {
                 let store = self.store.clone();
                 let events_tx = self.events_tx.clone();
                 tokio::spawn(async move {
-                    let result = match store.get_account(&req.account.0) {
-                        Ok(Some(acc)) => crate::smtp::send(
-                            &acc.smtp,
-                            &acc.auth,
-                            &req.from,
-                            &req.to,
-                            &req.cc,
-                            &req.bcc,
-                            &req.subject,
-                            &req.body_text,
-                            req.body_html.as_deref(),
-                            &req.attachments,
-                            req.in_reply_to.as_deref(),
-                            req.references.as_deref(),
-                        )
-                        .await,
-                        _ => Err(Error::Config(format!(
-                            "unknown account {}",
-                            req.account.0
-                        ))),
-                    };
+                    let result = smtp_send(&store, &req).await;
                     let _ = events_tx.send(MailEvent::SendResult {
                         account: req.account,
                         ok: result.is_ok(),
@@ -308,6 +350,31 @@ impl MailService {
                 }
             }
         }
+    }
+}
+
+/// Send a request over the account's SMTP endpoint.
+async fn smtp_send(store: &Store, request: &SendRequest) -> Result<()> {
+    match store.get_account(&request.account.0) {
+        Ok(Some(acc)) => crate::smtp::send(
+            &acc.smtp,
+            &acc.auth,
+            &request.from,
+            &request.to,
+            &request.cc,
+            &request.bcc,
+            &request.subject,
+            &request.body_text,
+            request.body_html.as_deref(),
+            &request.attachments,
+            request.in_reply_to.as_deref(),
+            request.references.as_deref(),
+        )
+        .await,
+        _ => Err(Error::Config(format!(
+            "unknown account {}",
+            request.account.0
+        ))),
     }
 }
 

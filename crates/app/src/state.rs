@@ -198,6 +198,9 @@ impl UiState {
             MailEvent::FollowUpDue { subject, .. } => {
                 notify(&tr("Follow-up due"), &subject);
             }
+            MailEvent::SendScheduled { .. } => {
+                ui.set_status_message(tr("Message scheduled").into());
+            }
             MailEvent::SearchResults { messages, .. } => {
                 let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
                 ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
