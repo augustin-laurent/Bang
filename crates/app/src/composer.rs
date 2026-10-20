@@ -18,6 +18,25 @@ struct Session {
     next_attachment: u64,
     pending: bool,
     dirty: bool,
+    /// Prefill to deliver once the editor is ready (new session only).
+    pending_prefill: Option<Prefill>,
+    /// Reply threading headers for the current draft (set by a prefill).
+    in_reply_to: Option<String>,
+    references: Option<String>,
+}
+
+/// Draft fields to prefill the composer with (reply / forward).
+pub struct Prefill {
+    /// Recipients for the To field.
+    pub to: Vec<String>,
+    /// Subject line.
+    pub subject: String,
+    /// Body as HTML (quoted original).
+    pub body_html: String,
+    /// Message-ID being replied to, if any.
+    pub in_reply_to: Option<String>,
+    /// References header value, if any.
+    pub references: Option<String>,
 }
 fn slot() -> &'static Mutex<Option<Arc<Mutex<Session>>>> {
     static SLOT: OnceLock<Mutex<Option<Arc<Mutex<Session>>>>> = OnceLock::new();
@@ -69,9 +88,33 @@ pub fn send_result(ok: bool, error: Option<String>) {
     }
 }
 /// Open a single writer, or bring the existing writer to the foreground.
-pub fn open(ui: &BangApp, store: Arc<bang_core::Store>, bridge: Bridge) -> anyhow::Result<()> {
+///
+/// With a `prefill`, the draft fields are replaced (reply / forward).
+pub fn open(
+    ui: &BangApp,
+    store: Arc<bang_core::Store>,
+    bridge: Bridge,
+    prefill: Option<Prefill>,
+) -> anyhow::Result<()> {
     if let Some(s) = current() {
-        write(&mut s.lock().unwrap(), &HostMessage::Focus)?;
+        match prefill {
+            Some(p) => {
+                let mut s = s.lock().unwrap();
+                s.in_reply_to = p.in_reply_to.clone();
+                s.references = p.references.clone();
+                write(
+                    &mut s,
+                    &HostMessage::Prefill {
+                        to: p.to,
+                        subject: p.subject,
+                        body_html: p.body_html,
+                        in_reply_to: p.in_reply_to,
+                        references: p.references,
+                    },
+                )?;
+            }
+            None => write(&mut s.lock().unwrap(), &HostMessage::Focus)?,
+        }
         return Ok(());
     }
     let accounts = store.get_accounts()?;
@@ -91,6 +134,8 @@ pub fn open(ui: &BangApp, store: Arc<bang_core::Store>, bridge: Bridge) -> anyho
         .spawn()?;
     let input = child.stdin.take().unwrap();
     let output = child.stdout.take().unwrap();
+    let in_reply_to = prefill.as_ref().and_then(|p| p.in_reply_to.clone());
+    let references = prefill.as_ref().and_then(|p| p.references.clone());
     let session = Arc::new(Mutex::new(Session {
         child,
         input,
@@ -98,6 +143,9 @@ pub fn open(ui: &BangApp, store: Arc<bang_core::Store>, bridge: Bridge) -> anyho
         next_attachment: 1,
         pending: false,
         dirty: false,
+        pending_prefill: prefill,
+        in_reply_to,
+        references,
     }));
     *slot().lock().unwrap() = Some(session.clone());
     let init = HostMessage::Init {
@@ -123,7 +171,20 @@ pub fn open(ui: &BangApp, store: Arc<bang_core::Store>, bridge: Bridge) -> anyho
             };
             match msg {
                 EditorMessage::Ready => {
-                    let _ = write(&mut session.lock().unwrap(), &init);
+                    let mut s = session.lock().unwrap();
+                    let _ = write(&mut s, &init);
+                    if let Some(p) = s.pending_prefill.take() {
+                        let _ = write(
+                            &mut s,
+                            &HostMessage::Prefill {
+                                to: p.to,
+                                subject: p.subject,
+                                body_html: p.body_html,
+                                in_reply_to: p.in_reply_to,
+                                references: p.references,
+                            },
+                        );
+                    }
                 }
                 EditorMessage::CloseCancelled => {
                     CLOSE_MAIN.store(false, Ordering::Relaxed);
@@ -198,8 +259,8 @@ pub fn open(ui: &BangApp, store: Arc<bang_core::Store>, bridge: Bridge) -> anyho
                                 body_text,
                                 body_html: Some(body_html),
                                 attachments: s.attachments.iter().map(|(_, a)| a.clone()).collect(),
-                                in_reply_to: None,
-                                references: None,
+                                in_reply_to: s.in_reply_to.clone(),
+                                references: s.references.clone(),
                             }));
                         }
                         _ => {
@@ -253,6 +314,134 @@ fn attachments_changed(s: &mut Session) {
         .collect();
     let _ = write(s, &HostMessage::Attachments { files });
 }
+/// Open the composer prefilled to reply to or forward a message.
+pub fn reply_or_forward(
+    ui: &BangApp,
+    store: Arc<bang_core::Store>,
+    bridge: Bridge,
+    message_id: i64,
+    forward: bool,
+) -> anyhow::Result<()> {
+    let full = store
+        .get_message_full(message_id)?
+        .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+    let body = if full.body_text.is_empty() {
+        bang_core::mime::render_html_subset(&full.body_html)
+    } else {
+        full.body_text.clone()
+    };
+    let mut body_html = quoted_body_html(&body);
+    if forward {
+        // Prepend the original headers above the quote.
+        let to = full
+            .summary
+            .to
+            .iter()
+            .map(|a| display(&a))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let headers = format!(
+            "From: {}\nTo: {}\nDate: {}\nSubject: {}",
+            display(&full.summary.from),
+            to,
+            crate::state::format_date(full.summary.date),
+            full.summary.subject
+        );
+        body_html = format!(
+            "<p>{}</p>{body_html}",
+            html_escape(&headers).replace('\n', "<br>")
+        );
+    }
+    let subject = full.summary.subject.clone();
+    let prefix = if forward { "Fwd: " } else { "Re: " };
+    let subject = if subject.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase()) {
+        subject
+    } else {
+        format!("{prefix}{subject}")
+    };
+    let to = if forward {
+        Vec::new()
+    } else {
+        vec![full.summary.from.address.clone()]
+    };
+    let in_reply_to = if full.summary.message_id.is_empty() {
+        None
+    } else {
+        Some(full.summary.message_id.clone())
+    };
+    open(
+        ui,
+        store,
+        bridge,
+        Some(Prefill {
+            to,
+            subject,
+            body_html,
+            in_reply_to,
+            references: None,
+        }),
+    )
+}
+
+/// Display name of an address (name if set, else the address).
+fn display(addr: &bang_core::EmailAddress) -> String {
+    if addr.name.is_empty() {
+        addr.address.clone()
+    } else {
+        addr.name.clone()
+    }
+}
+
+/// Build the quoted body as HTML: an empty paragraph for the user to type in,
+/// then the original body with each line prefixed by "> ".
+fn quoted_body_html(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "<p></p>".into();
+    }
+    let lines: Vec<String> = trimmed
+        .lines()
+        .map(|l| format!("&gt; {}", html_escape(l.trim_end())))
+        .collect();
+    format!("<p></p><p>{}</p>", lines.join("<br>"))
+}
+
+/// Minimal HTML escaping for text embedded in generated markup.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_escape_escapes_specials() {
+        assert_eq!(html_escape("a<b>&c"), "a&lt;b&gt;&amp;c");
+        assert_eq!(html_escape("plain"), "plain");
+    }
+
+    #[test]
+    fn quoted_body_empty_is_blank_paragraph() {
+        assert_eq!(quoted_body_html(""), "<p></p>");
+        assert_eq!(quoted_body_html("   \n  "), "<p></p>");
+    }
+
+    #[test]
+    fn quoted_body_prefixes_each_line() {
+        let html = quoted_body_html("line one\nline two");
+        assert_eq!(html, "<p></p><p>&gt; line one<br>&gt; line two</p>");
+    }
+
+    #[test]
+    fn quoted_body_escapes_markup() {
+        let html = quoted_body_html("<b>bold</b> & more");
+        assert_eq!(html, "<p></p><p>&gt; &lt;b&gt;bold&lt;/b&gt; &amp; more</p>");
+    }
+}
+
 fn content_type(path: &str) -> &'static str {
     match std::path::Path::new(path)
         .extension()

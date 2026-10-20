@@ -18,6 +18,9 @@ type Host = {
   ok?: boolean;
   error?: string;
   message?: string;
+  to?: string[];
+  subject?: string;
+  body_html?: string;
 };
 declare global {
   interface Window {
@@ -243,6 +246,12 @@ window.bangReceive = (msg: Host) => {
     language = msg.language || "en";
     document.documentElement.dataset.theme = msg.dark ? "dark" : "light";
     localize();
+  } else if (msg.type === "prefill") {
+    input("to").value = (msg.to || []).join(", ");
+    input("subject").value = msg.subject || "";
+    editor.commands.setContent(msg.body_html || "", { emitUpdate: false });
+    setDirty();
+    input("to").focus();
   } else if (msg.type === "attachments") {
     files = msg.files || [];
     renderFiles();

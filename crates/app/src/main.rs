@@ -265,8 +265,20 @@ fn wire_selection(
     ui.on_message_action({
         let store = store.clone();
         let bridge = bridge.clone();
+        let weak = ui.as_weak();
         move |id: i32, action: slint::SharedString| {
             let id = i64::from(id);
+            // Reply / forward open the composer prefilled with a quote.
+            if action == "reply" || action == "forward" {
+                if let Some(ui) = weak.upgrade() {
+                    if let Err(e) =
+                        composer::reply_or_forward(&ui, store.clone(), bridge.clone(), id, action == "forward")
+                    {
+                        ui.set_status_message(format!("{} {e}", tr("Reply unavailable:")).into());
+                    }
+                }
+                return;
+            }
             // The row does not carry the account; look it up locally.
             let Ok(Some(summary)) = store.get_message(id) else {
                 return;
@@ -514,7 +526,7 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
     let store = store.clone();
     ui.on_compose_clicked(move || {
         if let Some(ui) = weak.upgrade() {
-            if let Err(error) = composer::open(&ui, store.clone(), bridge.clone()) {
+            if let Err(error) = composer::open(&ui, store.clone(), bridge.clone(), None) {
                 ui.set_status_message(format!("{} {error}", tr("Compose unavailable:")).into());
             }
         }

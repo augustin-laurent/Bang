@@ -43,6 +43,19 @@ pub enum HostMessage {
         /// Whether the dark appearance is active.
         dark: bool,
     },
+    /// Prefill the draft fields (reply / forward).
+    Prefill {
+        /// Recipients to prefill in the To field.
+        to: Vec<String>,
+        /// Subject to prefill.
+        subject: String,
+        /// Body to prefill (quoted original), as HTML.
+        body_html: String,
+        /// Message-ID being replied to, if any.
+        in_reply_to: Option<String>,
+        /// References header value, if any.
+        references: Option<String>,
+    },
     /// Replace staged attachment metadata.
     Attachments {
         /// Staged attachment metadata.
