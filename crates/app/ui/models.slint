@@ -12,6 +12,8 @@ export struct MessageRow {
     preview: string, unread: bool, starred: bool, has-attachments: bool,
 }
 export struct AccountRow { id: string, email: string, }
+export struct DraftRow { id: int, title: string, subtitle: string, }
+export struct TemplateRow { id: int, title: string, subtitle: string, }
 export struct AttachmentRow {
     filename: string, size: string, path: string, content-type: string,
 }

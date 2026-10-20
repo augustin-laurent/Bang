@@ -1,6 +1,6 @@
 //! Own the isolated rich composer. Only the parent talks to the mail engine.
 use crate::{bridge::Bridge, config::Config, i18n, BangApp, Theme};
-use bang_composer::{Attachment, EditorMessage, HostMessage, Sender};
+use bang_composer::{Attachment, DraftContent, EditorMessage, HostMessage, Sender};
 use slint::{ComponentHandle, Global};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -274,6 +274,37 @@ pub fn open(
                         }
                     }
                 }
+                EditorMessage::SaveDraft(content) => {
+                    let mut s = session.lock().unwrap();
+                    match build_request(&store, &s, &content) {
+                        Some(request) => bridge.send(bang_core::UiCommand::SaveDraft(request)),
+                        None => {
+                            let _ = write(
+                                &mut s,
+                                &HostMessage::Error {
+                                    message: i18n::tr("The account was removed.").into(),
+                                },
+                            );
+                        }
+                    }
+                }
+                EditorMessage::SaveTemplate { name, content } => {
+                    let mut s = session.lock().unwrap();
+                    match build_request(&store, &s, &content) {
+                        Some(request) => bridge.send(bang_core::UiCommand::SaveTemplate {
+                            name,
+                            request,
+                        }),
+                        None => {
+                            let _ = write(
+                                &mut s,
+                                &HostMessage::Error {
+                                    message: i18n::tr("The account was removed.").into(),
+                                },
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -314,6 +345,30 @@ fn attachments_changed(s: &mut Session) {
         .collect();
     let _ = write(s, &HostMessage::Attachments { files });
 }
+/// Build a send request from the editor's draft content and session state.
+///
+/// Returns `None` when the selected account no longer exists.
+fn build_request(
+    store: &bang_core::Store,
+    s: &Session,
+    c: &DraftContent,
+) -> Option<bang_core::SendRequest> {
+    let acc = store.get_account(&c.account).ok()??;
+    Some(bang_core::SendRequest {
+        account: acc.id,
+        from: acc.email,
+        to: c.to.clone(),
+        cc: c.cc.clone(),
+        bcc: c.bcc.clone(),
+        subject: c.subject.clone(),
+        body_text: c.body_text.clone(),
+        body_html: Some(c.body_html.clone()),
+        attachments: s.attachments.iter().map(|(_, a)| a.clone()).collect(),
+        in_reply_to: s.in_reply_to.clone(),
+        references: s.references.clone(),
+    })
+}
+
 /// Open the composer prefilled to reply to or forward a message.
 pub fn reply_or_forward(
     ui: &BangApp,

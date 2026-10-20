@@ -12,7 +12,7 @@ use bang_core::events::MailEvent;
 use bang_core::message::{EmailAddress, MessageSummary};
 use bang_core::store::{Store, UNIFIED_INBOX_ID};
 
-use crate::{AttachmentRow, BangApp, FolderRow, MessageRow};
+use crate::{AttachmentRow, BangApp, DraftRow, FolderRow, MessageRow, TemplateRow};
 
 /// Selection state shared between the UI callbacks and the event forwarder.
 pub struct UiState {
@@ -214,6 +214,12 @@ impl UiState {
             MailEvent::SendScheduled { .. } => {
                 ui.set_status_message(tr("Message scheduled").into());
             }
+            MailEvent::DraftsUpdated => {
+                load_drafts(ui, store);
+            }
+            MailEvent::TemplatesUpdated => {
+                load_templates(ui, store);
+            }
             MailEvent::SearchResults { messages, .. } => {
                 let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
                 ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
@@ -333,6 +339,36 @@ pub fn set_message_header(ui: &BangApp, summary: &MessageSummary) {
     ui.set_message_subject(summary.subject.clone().into());
     ui.set_message_date(format_date(summary.date).into());
     ui.set_message_starred(summary.flags.is_flagged());
+}
+
+/// Reload the drafts list into the dialog's model.
+pub(crate) fn load_drafts(ui: &BangApp, store: &Store) {
+    let rows: Vec<DraftRow> = store
+        .get_drafts()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| DraftRow {
+            id: d.id as i32,
+            title: d.subject.clone().into(),
+            subtitle: d.to.clone().into(),
+        })
+        .collect();
+    ui.set_drafts(slint::ModelRc::new(VecModel::from(rows)));
+}
+
+/// Reload the templates list into the dialog's model.
+pub(crate) fn load_templates(ui: &BangApp, store: &Store) {
+    let rows: Vec<TemplateRow> = store
+        .get_templates()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| TemplateRow {
+            id: t.id as i32,
+            title: t.name.clone().into(),
+            subtitle: t.subject.clone().into(),
+        })
+        .collect();
+    ui.set_templates(slint::ModelRc::new(VecModel::from(rows)));
 }
 
 fn folder_kind(path: &str) -> &'static str {

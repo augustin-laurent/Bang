@@ -12,11 +12,12 @@ use crate::account::AccountConfig;
 use crate::error::{Error, Result};
 use crate::events::SendRequest;
 use crate::message::{
-    Attachment, EmailAddress, Folder, MessageFlags, MessageFull, MessageSummary, PendingSend,
+    Attachment, Draft, EmailAddress, Folder, MessageFlags, MessageFull, MessageSummary,
+    PendingSend, Template,
 };
 
 /// Current schema version.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Special folder id for the unified inbox (all accounts' INBOXes).
 ///
@@ -117,6 +118,26 @@ CREATE TABLE pending_sends (
 );
 "#;
 
+/// V4 schema: drafts and templates.
+///
+/// Both hold a full `SendRequest` as JSON. A draft is tied to an account and
+/// carries a timestamp; a template is named and reusable.
+const MIGRATION_V4: &str = r#"
+CREATE TABLE drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    request TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    request TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+"#;
+
 /// Persistent store for all local mail data.
 ///
 /// All methods take `&self`; the connection is guarded by an internal mutex,
@@ -190,6 +211,10 @@ impl Store {
         }
         if version < 3 {
             conn.execute_batch(MIGRATION_V3)
+                .map_err(|e| Error::Store(e.to_string()))?;
+        }
+        if version < 4 {
+            conn.execute_batch(MIGRATION_V4)
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
         conn.execute(
@@ -898,6 +923,175 @@ impl Store {
         Ok(())
     }
 
+    /// Save a draft (a new row each time; the UI deletes it on send).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or serialization failure.
+    pub fn save_draft(&self, request: &SendRequest) -> Result<i64> {
+        let conn = self.lock()?;
+        let json = serde_json::to_vec(request).map_err(|e| Error::Store(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO drafts (account_id, request, updated_at) VALUES (?1, ?2, ?3)",
+            params![request.account.0, json, chrono::Utc::now().timestamp()],
+        )
+        .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// List all drafts, most recently updated first.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or deserialization failure.
+    pub fn get_drafts(&self) -> Result<Vec<Draft>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT id, account_id, request, updated_at FROM drafts ORDER BY updated_at DESC, id DESC")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, account_id, json, updated_at) = row.map_err(|e| Error::Store(e.to_string()))?;
+            let request: SendRequest =
+                serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
+            out.push(Draft {
+                id,
+                account_id,
+                to: request.to.join(", "),
+                subject: request.subject,
+                updated_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Load a draft's full request.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or deserialization failure.
+    pub fn get_draft(&self, id: i64) -> Result<Option<SendRequest>> {
+        let conn = self.lock()?;
+        let json: Option<Vec<u8>> = conn
+            .query_row("SELECT request FROM drafts WHERE id = ?1", params![id], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .optional()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        match json {
+            Some(json) => {
+                let request: SendRequest =
+                    serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
+                Ok(Some(request))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a draft.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn delete_draft(&self, id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM drafts WHERE id = ?1", params![id])
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Save a named template.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or serialization failure.
+    pub fn save_template(&self, name: &str, request: &SendRequest) -> Result<i64> {
+        let conn = self.lock()?;
+        let json = serde_json::to_vec(request).map_err(|e| Error::Store(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO templates (name, request, created_at) VALUES (?1, ?2, ?3)",
+            params![name, json, chrono::Utc::now().timestamp()],
+        )
+        .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// List all templates, by name.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or deserialization failure.
+    pub fn get_templates(&self) -> Result<Vec<Template>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, request FROM templates ORDER BY name COLLATE NOCASE")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, name, json) = row.map_err(|e| Error::Store(e.to_string()))?;
+            let request: SendRequest =
+                serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
+            out.push(Template {
+                id,
+                name,
+                subject: request.subject,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Load a template's full request.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or deserialization failure.
+    pub fn get_template(&self, id: i64) -> Result<Option<SendRequest>> {
+        let conn = self.lock()?;
+        let json: Option<Vec<u8>> = conn
+            .query_row("SELECT request FROM templates WHERE id = ?1", params![id], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .optional()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        match json {
+            Some(json) => {
+                let request: SendRequest =
+                    serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
+                Ok(Some(request))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a template.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn delete_template(&self, id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM templates WHERE id = ?1", params![id])
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
     /// Save the full body of a message (text and HTML).
     ///
     /// # Errors
@@ -1582,6 +1776,72 @@ mod tests {
             .unwrap();
         assert_eq!(store.get_pending_sends().unwrap().len(), 1);
         store.remove_send(id).unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn drafts_and_templates_roundtrip() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+
+        // Drafts: listed newest first, full request round-trips, deletable.
+        let first = store.save_draft(&test_send_request("alice")).unwrap();
+        let second = store.save_draft(&test_send_request("alice")).unwrap();
+        let drafts = store.get_drafts().unwrap();
+        assert_eq!(drafts.len(), 2);
+        assert_eq!(drafts[0].id, second);
+        assert_eq!(drafts[0].subject, "Later");
+        assert_eq!(drafts[0].to, "bob@example.com");
+        assert_eq!(drafts[0].account_id, "alice");
+        let loaded = store.get_draft(first).unwrap().unwrap();
+        assert_eq!(loaded.subject, "Later");
+        assert_eq!(loaded.attachments[0].data, b"hello");
+        store.delete_draft(first).unwrap();
+        assert!(store.get_draft(first).unwrap().is_none());
+        assert_eq!(store.get_drafts().unwrap().len(), 1);
+
+        // Templates: named, listed by name, full request round-trips.
+        let t1 = store.save_template("Congés", &test_send_request("alice")).unwrap();
+        let t2 = store.save_template("Alpha", &test_send_request("alice")).unwrap();
+        let templates = store.get_templates().unwrap();
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].id, t2); // "Alpha" sorts before "Congés"
+        assert_eq!(templates[0].name, "Alpha");
+        assert_eq!(templates[0].subject, "Later");
+        let loaded = store.get_template(t1).unwrap().unwrap();
+        assert_eq!(loaded.to, vec!["bob@example.com".to_string()]);
+        store.delete_template(t1).unwrap();
+        assert!(store.get_template(t1).unwrap().is_none());
+        assert_eq!(store.get_templates().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migration_v3_to_v4_adds_drafts_and_templates() {
+        let dir = std::env::temp_dir().join(format!("bang-mig4-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v3.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            // Build a V3 database: V1 + V2 + V3 schema, no drafts/templates.
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE schema_version (version INTEGER NOT NULL);")
+                .unwrap();
+            conn.execute_batch(MIGRATION_V1).unwrap();
+            conn.execute_batch(MIGRATION_V2).unwrap();
+            conn.execute_batch(MIGRATION_V3).unwrap();
+            conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])
+                .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        let d = store.save_draft(&test_send_request("alice")).unwrap();
+        let t = store.save_template("Test", &test_send_request("alice")).unwrap();
+        assert_eq!(store.get_drafts().unwrap().len(), 1);
+        assert_eq!(store.get_templates().unwrap().len(), 1);
+        store.delete_draft(d).unwrap();
+        store.delete_template(t).unwrap();
 
         let _ = std::fs::remove_dir_all(&dir);
     }

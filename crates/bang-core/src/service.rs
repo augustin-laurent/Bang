@@ -316,6 +316,48 @@ impl MailService {
                     }
                 }
             }
+            UiCommand::SaveDraft(request) => match self.store.save_draft(&request) {
+                Ok(_) => {
+                    let _ = self.events_tx.send(MailEvent::DraftsUpdated);
+                }
+                Err(e) => {
+                    let _ = self.events_tx.send(MailEvent::Error {
+                        account: Some(request.account),
+                        message: e.to_string(),
+                    });
+                }
+            },
+            UiCommand::DeleteDraft { id } => {
+                if let Err(e) = self.store.delete_draft(id) {
+                    let _ = self.events_tx.send(MailEvent::Error {
+                        account: None,
+                        message: e.to_string(),
+                    });
+                } else {
+                    let _ = self.events_tx.send(MailEvent::DraftsUpdated);
+                }
+            }
+            UiCommand::SaveTemplate { name, request } => match self.store.save_template(&name, &request) {
+                Ok(_) => {
+                    let _ = self.events_tx.send(MailEvent::TemplatesUpdated);
+                }
+                Err(e) => {
+                    let _ = self.events_tx.send(MailEvent::Error {
+                        account: Some(request.account),
+                        message: e.to_string(),
+                    });
+                }
+            },
+            UiCommand::DeleteTemplate { id } => {
+                if let Err(e) = self.store.delete_template(id) {
+                    let _ = self.events_tx.send(MailEvent::Error {
+                        account: None,
+                        message: e.to_string(),
+                    });
+                } else {
+                    let _ = self.events_tx.send(MailEvent::TemplatesUpdated);
+                }
+            }
             UiCommand::SendEmail(req) => {
                 let store = self.store.clone();
                 let events_tx = self.events_tx.clone();

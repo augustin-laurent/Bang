@@ -78,6 +78,24 @@ pub enum HostMessage {
     /// Ask the user before abandoning unsent edits.
     RequestClose,
 }
+/// Draft content exported by the editor (send, save draft, save template).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DraftContent {
+    /// Selected account identity; the parent resolves its credentials.
+    pub account: String,
+    /// To recipients as individual addresses.
+    pub to: Vec<String>,
+    /// Cc recipients as individual addresses.
+    pub cc: Vec<String>,
+    /// Bcc recipients as individual addresses.
+    pub bcc: Vec<String>,
+    /// Message subject.
+    pub subject: String,
+    /// Plain-text alternative exported from the editor document.
+    pub body_text: String,
+    /// HTML alternative exported from the same document.
+    pub body_html: String,
+}
 /// Messages emitted by the editor; names and paths are never evaluated as code.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -112,6 +130,15 @@ pub enum EditorMessage {
         body_text: String,
         /// HTML alternative exported from the same document.
         body_html: String,
+    },
+    /// Save the current draft through the parent mail engine.
+    SaveDraft(DraftContent),
+    /// Save the current draft as a named template.
+    SaveTemplate {
+        /// Template name.
+        name: String,
+        /// Draft content.
+        content: DraftContent,
     },
     /// Report the document edit state.
     Dirty {

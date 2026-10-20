@@ -29,6 +29,6 @@ pub use account::{
 pub use error::{Error, Result};
 pub use events::{MailEvent, OutgoingAttachment, SendRequest, UiCommand};
 pub use message::{
-    AccountStatus, Attachment, EmailAddress, Folder, MessageFlags, MessageFull, MessageSummary,
-    PendingSend,
+    AccountStatus, Attachment, Draft, EmailAddress, Folder, MessageFlags, MessageFull,
+    MessageSummary, PendingSend, Template,
 };

@@ -1,0 +1,66 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
+import { DraftRow, TemplateRow } from "models.slint";
+
+/// List of saved drafts or templates; a row click resumes it in the composer.
+export component DraftsDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> kind; // "drafts" | "templates"
+    in property <[DraftRow]> drafts;
+    in property <[TemplateRow]> templates;
+    callback row-clicked(int);
+    callback row-delete(int);
+    callback close();
+    visible: root.open;
+    background: #00000044;
+    TouchArea { clicked => { root.close(); } }
+    Rectangle {
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: min(560px, parent.width - 80px); height: min(480px, parent.height - 80px);
+        background: Theme.bg; border-radius: 12px;
+        VerticalLayout { padding: 16px; spacing: 12px;
+            HorizontalLayout { spacing: 8px;
+                Text { text: root.kind == "drafts" ? @tr("Drafts") : @tr("Templates"); font-size: 14px; font-weight: 600; color: Theme.text; horizontal-stretch: 1; }
+                ActionButton { modal: true; compact: true; framed: true; text: @tr("Close"); icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+            }
+            Rectangle { height: 1px; background: Theme.border; }
+            ScrollView {
+                min-height: 0px; vertical-stretch: 1;
+                content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout { spacing: 4px;
+                    if root.kind == "drafts" && root.drafts.length == 0: Text { text: @tr("No drafts"); color: Theme.text-secondary; font-size: 13px; padding-top: 12px; padding-bottom: 12px; }
+                    if root.kind == "templates" && root.templates.length == 0: Text { text: @tr("No templates"); color: Theme.text-secondary; font-size: 13px; padding-top: 12px; padding-bottom: 12px; }
+                    if root.kind == "drafts": VerticalLayout { spacing: 4px;
+                        for d in root.drafts: Rectangle {
+                            height: 48px;
+                            TouchArea { enabled: !Theme.blocked; clicked => { root.row-clicked(d.id); } }
+                            HorizontalLayout { padding-top: 8px; padding-bottom: 8px; padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                VerticalLayout { spacing: 2px; horizontal-stretch: 1;
+                                    Text { text: d.title; font-size: 13px; font-weight: 600; color: Theme.text; overflow: elide; }
+                                    Text { text: d.subtitle; font-size: 11px; color: Theme.text-secondary; overflow: elide; }
+                                }
+                                ActionButton { modal: true; compact: true; framed: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); clicked => { root.row-delete(d.id); } }
+                            }
+                        }
+                    }
+                    if root.kind == "templates": VerticalLayout { spacing: 4px;
+                        for t in root.templates: Rectangle {
+                            height: 48px;
+                            TouchArea { enabled: !Theme.blocked; clicked => { root.row-clicked(t.id); } }
+                            HorizontalLayout { padding-top: 8px; padding-bottom: 8px; padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                VerticalLayout { spacing: 2px; horizontal-stretch: 1;
+                                    Text { text: t.title; font-size: 13px; font-weight: 600; color: Theme.text; overflow: elide; }
+                                    Text { text: t.subtitle; font-size: 11px; color: Theme.text-secondary; overflow: elide; }
+                                }
+                                ActionButton { modal: true; compact: true; framed: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); clicked => { root.row-delete(t.id); } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Swallow clicks so the backdrop's close-on-click does not fire.
+        TouchArea { }
+    }
+}

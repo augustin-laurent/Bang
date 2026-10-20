@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Image, Model, Weak};
+use slint::{Image, Model};
 
 use bang_core::Store;
 

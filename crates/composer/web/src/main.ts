@@ -42,6 +42,7 @@ const paths: Record<string, string> = {
   clip: '<path d="m8 13 7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7L13 2"/>',
   compose: '<path d="M14 4H4v16h16V10 M12 12l1-4 7-7 3 3-7 7-4 1z"/>',
   file: '<path d="M5 2h9l5 5v15H5V2z M14 2v6h5"/>',
+  folder: '<path d="M3 5h6l2 2h10v12H3V5z"/>',
   link: '<path d="m10 14 4-4 M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0 M16 8l2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"/>',
   highlight: '<path d="m14 3 7 7-10 10H4v-7L14 3z M10 7l7 7 M3 23h18"/>',
   bullet:
@@ -61,7 +62,7 @@ const post = (msg: unknown) => {
 const button = (id: string, key: string, content: string, extra = "") =>
   `<button type="button" id="${id}" data-label="${key}" ${extra}>${content}</button>`;
 app.innerHTML = `
-<header class="toolbar"><div class="title">${icon("compose")}<span data-i18n="New message"></span></div><div class="toolbar-actions">${button("attach", "Attach a file", icon("clip"))}${button("format", "Formatting", "Aa", 'aria-pressed="true"')}${button("send", "Send", icon("send"), 'class="primary"')}</div></header>
+<header class="toolbar"><div class="title">${icon("compose")}<span data-i18n="New message"></span></div><div class="toolbar-actions">${button("attach", "Attach a file", icon("clip"))}${button("format", "Formatting", "Aa", 'aria-pressed="true"')}${button("save-draft", "Save draft", icon("file"))}${button("save-template", "Save as template", icon("folder"))}${button("send", "Send", icon("send"), 'class="primary"')}</div></header>
 <section class="addresses" data-label="Message headers">
 <div class="field"><label for="to" data-i18n="To:"></label><input id="to" type="text" autocomplete="off" spellcheck="false"><button id="cc-toggle" type="button" aria-expanded="false">Cc / Cci ▾</button></div>
 <div class="field optional" hidden><label for="cc">Cc :</label><input id="cc" type="text" spellcheck="false"></div>
@@ -82,7 +83,8 @@ ${button("bullet", "Bullet list", icon("bullet"))}${button("ordered", "Numbered 
 <div id="feedback" role="status" aria-live="polite" hidden></div>
 <div id="editor-wrap"><div id="editor"></div></div>
 <dialog id="discard-dialog"><h2 data-i18n="Discard message?"></h2><p data-i18n="Your unsent changes will be lost."></p><div class="dialog-actions"><button id="keep" data-i18n="Keep editing"></button><button id="discard" class="danger" data-i18n="Discard"></button></div></dialog>
-<dialog id="link-dialog"><form method="dialog"><h2 data-i18n="Link address"></h2><label class="sr-only" for="link-url" data-i18n="Link address"></label><input id="link-url" type="url" placeholder="https://"><div class="dialog-actions"><button value="cancel" data-i18n="Cancel"></button><button id="unlink" type="button" data-i18n="Remove link"></button><button id="apply-link" type="button" class="primary" data-i18n="Apply"></button></div></form></dialog>`;
+<dialog id="link-dialog"><form method="dialog"><h2 data-i18n="Link address"></h2><label class="sr-only" for="link-url" data-i18n="Link address"></label><input id="link-url" type="url" placeholder="https://"><div class="dialog-actions"><button value="cancel" data-i18n="Cancel"></button><button id="unlink" type="button" data-i18n="Remove link"></button><button id="apply-link" type="button" class="primary" data-i18n="Apply"></button></div></form></dialog>
+<dialog id="template-dialog"><h2 data-i18n="Template name"></h2><label class="sr-only" for="template-name" data-i18n="Template name"></label><input id="template-name" type="text" autocomplete="off"><div class="dialog-actions"><button id="cancel-template" type="button" data-i18n="Cancel"></button><button id="apply-template" type="button" class="primary" data-i18n="Save"></button></div></dialog>`;
 const el = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const input = (id: string) => el<HTMLInputElement>(id);
@@ -369,8 +371,7 @@ el("discard").onclick = () => {
   dirty = false;
   post({ type: "close" });
 };
-el("send").onclick = () => {
-  if (pending) return;
+function collectDraft() {
   let to: string[], cc: string[], bcc: string[];
   try {
     to = parseAddresses(input("to").value);
@@ -378,33 +379,67 @@ el("send").onclick = () => {
     bcc = parseAddresses(input("bcc").value);
   } catch {
     feedback(t("Check the recipient addresses."));
-    return;
+    return null;
   }
   if (to.length + cc.length + bcc.length === 0) {
     feedback(t("Enter at least one valid recipient."));
     input("to").focus();
-    return;
+    return null;
   }
   const account = el<HTMLSelectElement>("from").value;
   if (!accounts.some((a) => a.id === account)) {
     feedback(t("No account available"));
-    return;
+    return null;
   }
-  const body_html = editor.getHTML(),
-    body_text = editor.getText({ blockSeparator: "\n\n" });
-  sending(true);
-  feedback(t("Sending…"));
-  post({
-    type: "send",
+  return {
     account,
     to,
     cc,
     bcc,
     subject: input("subject").value,
-    body_text,
-    body_html,
-  });
+    body_text: editor.getText({ blockSeparator: "\n\n" }),
+    body_html: editor.getHTML(),
+  };
+}
+el("send").onclick = () => {
+  if (pending) return;
+  const draft = collectDraft();
+  if (!draft) return;
+  sending(true);
+  feedback(t("Sending…"));
+  post({ type: "send", ...draft });
 };
+el("save-draft").onclick = () => {
+  if (pending) return;
+  const draft = collectDraft();
+  if (!draft) return;
+  post({ type: "save_draft", ...draft });
+  feedback(t("Draft saved"));
+};
+let pendingTemplate: ReturnType<typeof collectDraft> = null;
+el("save-template").onclick = () => {
+  if (pending) return;
+  pendingTemplate = collectDraft();
+  if (!pendingTemplate) return;
+  input("template-name").value = "";
+  el<HTMLDialogElement>("template-dialog").showModal();
+  input("template-name").focus();
+};
+el("cancel-template").onclick = () =>
+  el<HTMLDialogElement>("template-dialog").close();
+el("apply-template").onclick = () => {
+  const name = input("template-name").value.trim();
+  if (!name) {
+    input("template-name").setCustomValidity(t("Template name"));
+    input("template-name").reportValidity();
+    return;
+  }
+  post({ type: "save_template", name, content: pendingTemplate });
+  el<HTMLDialogElement>("template-dialog").close();
+  feedback(t("Template saved"));
+};
+input("template-name").oninput = () =>
+  input("template-name").setCustomValidity("");
 document
   .querySelectorAll(".addresses input,.addresses select")
   .forEach((n) => n.addEventListener("input", setDirty));

@@ -42,6 +42,8 @@ fn main() -> Result<(), slint::PlatformError> {
     apply_theme(&ui, &config.theme);
     i18n::select(&config.language);
     state.refresh_folders(&ui, &store);
+    state::load_drafts(&ui, &store);
+    state::load_templates(&ui, &store);
     if ui.get_account_count() > 0 {
         state.selected_folder.store(
             bang_core::UNIFIED_INBOX_ID,
@@ -61,6 +63,7 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_selection(&ui, &store, &state, bridge.clone());
     wire_compose(&ui, &store, bridge.clone());
     wire_attachments(&ui, &store);
+    wire_drafts(&ui, &store, bridge.clone());
     wire_settings(&ui, &store, &state, bridge);
     let weak = ui.as_weak();
     ui.window().on_close_requested({
@@ -553,6 +556,117 @@ fn wire_attachments(ui: &BangApp, store: &Arc<bang_core::Store>) {
             }
         }
     });
+}
+
+/// Connect the drafts and templates dialogs to the store and the composer.
+fn wire_drafts(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bridge) {
+    ui.on_drafts_opened({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                state::load_drafts(&ui, &store);
+                ui.set_drafts_open(true);
+            }
+        }
+    });
+    ui.on_templates_opened({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                state::load_templates(&ui, &store);
+                ui.set_templates_open(true);
+            }
+        }
+    });
+    ui.on_draft_row_clicked({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        let bridge = bridge.clone();
+        move |id| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_drafts_open(false);
+                resume_draft(&ui, &store, &bridge, i64::from(id));
+            }
+        }
+    });
+    ui.on_draft_row_delete({
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
+        move |id| {
+            if let Some(ui) = weak.upgrade() {
+                bridge.send(bang_core::UiCommand::DeleteDraft { id: i64::from(id) });
+                ui.set_status_message(tr("Draft deleted").into());
+            }
+        }
+    });
+    ui.on_template_row_clicked({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        let bridge = bridge.clone();
+        move |id| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_templates_open(false);
+                resume_template(&ui, &store, &bridge, i64::from(id));
+            }
+        }
+    });
+    ui.on_template_row_delete({
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
+        move |id| {
+            if let Some(ui) = weak.upgrade() {
+                bridge.send(bang_core::UiCommand::DeleteTemplate { id: i64::from(id) });
+                ui.set_status_message(tr("Template deleted").into());
+            }
+        }
+    });
+    ui.on_drafts_dialog_close({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_drafts_open(false);
+                ui.set_templates_open(false);
+            }
+        }
+    });
+}
+
+/// Open a saved draft in the composer, then remove it from the list.
+fn resume_draft(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Bridge, id: i64) {
+    let Ok(Some(request)) = store.get_draft(id) else {
+        return;
+    };
+    let prefill = composer::Prefill {
+        to: request.to.clone(),
+        subject: request.subject.clone(),
+        body_html: request.body_html.clone().unwrap_or_default(),
+        in_reply_to: request.in_reply_to.clone(),
+        references: request.references.clone(),
+    };
+    if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill)) {
+        ui.set_status_message(format!("{} {e}", tr("Compose unavailable:")).into());
+        return;
+    }
+    bridge.send(bang_core::UiCommand::DeleteDraft { id });
+}
+
+/// Open a saved template in the composer (the template stays in the list).
+fn resume_template(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Bridge, id: i64) {
+    let Ok(Some(request)) = store.get_template(id) else {
+        return;
+    };
+    let prefill = composer::Prefill {
+        to: request.to.clone(),
+        subject: request.subject.clone(),
+        body_html: request.body_html.clone().unwrap_or_default(),
+        in_reply_to: None,
+        references: None,
+    };
+    if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill)) {
+        ui.set_status_message(format!("{} {e}", tr("Compose unavailable:")).into());
+    }
 }
 
 /// Connect the account wizard's callbacks to the mail core.

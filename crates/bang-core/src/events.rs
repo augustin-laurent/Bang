@@ -83,6 +83,25 @@ pub enum UiCommand {
         /// The email to send.
         request: SendRequest,
     },
+    /// Save a draft.
+    SaveDraft(SendRequest),
+    /// Delete a draft by local store id.
+    DeleteDraft {
+        /// Local store id of the draft.
+        id: i64,
+    },
+    /// Save a named template.
+    SaveTemplate {
+        /// Template name.
+        name: String,
+        /// The template content.
+        request: SendRequest,
+    },
+    /// Delete a template by local store id.
+    DeleteTemplate {
+        /// Local store id of the template.
+        id: i64,
+    },
     /// Send an email.
     SendEmail(SendRequest),
     /// Search messages in an account.
@@ -207,6 +226,10 @@ pub enum MailEvent {
         /// Unix timestamp (seconds) at which the email is sent.
         send_at: i64,
     },
+    /// The drafts list changed; the UI should reload it.
+    DraftsUpdated,
+    /// The templates list changed; the UI should reload it.
+    TemplatesUpdated,
     /// A non-fatal error to display.
     Error {
         /// Account the error relates to, if any.

@@ -110,5 +110,17 @@
   "Save failed": "Échec de l’enregistrement :",
   "Reply": "Répondre",
   "Forward": "Transférer",
-  "Reply unavailable:": "Réponse indisponible :"
+  "Reply unavailable:": "Réponse indisponible :",
+  "Drafts": "Brouillons",
+  "Templates": "Modèles",
+  "No drafts": "Aucun brouillon",
+  "No templates": "Aucun modèle",
+  "Draft deleted": "Brouillon supprimé",
+  "Template deleted": "Modèle supprimé",
+  "Save draft": "Enregistrer le brouillon",
+  "Save as template": "Enregistrer comme modèle",
+  "Draft saved": "Brouillon enregistré",
+  "Template saved": "Modèle enregistré",
+  "Template name": "Nom du modèle",
+  "Save": "Enregistrer"
 }

@@ -116,6 +116,32 @@ pub struct Folder {
     pub unread: u32,
 }
 
+/// A saved draft, for listing in the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Draft {
+    /// Local store id.
+    pub id: i64,
+    /// Account the draft was composed for.
+    pub account_id: String,
+    /// Recipients (display string).
+    pub to: String,
+    /// Subject line.
+    pub subject: String,
+    /// Unix timestamp (seconds) of the last edit.
+    pub updated_at: i64,
+}
+
+/// A saved template, for listing in the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Template {
+    /// Local store id.
+    pub id: i64,
+    /// Template name.
+    pub name: String,
+    /// Subject line.
+    pub subject: String,
+}
+
 /// A send-later email waiting to be dispatched.
 ///
 /// Lightweight view of a pending send, for listing in the UI.
