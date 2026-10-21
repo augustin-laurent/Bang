@@ -21,6 +21,7 @@ type Host = {
   to?: string[];
   subject?: string;
   body_html?: string;
+  from?: string;
 };
 declare global {
   interface Window {
@@ -249,6 +250,8 @@ window.bangReceive = (msg: Host) => {
     document.documentElement.dataset.theme = msg.dark ? "dark" : "light";
     localize();
   } else if (msg.type === "prefill") {
+    if (msg.from && accounts.some((a) => a.id === msg.from))
+      el<HTMLSelectElement>("from").value = msg.from;
     input("to").value = (msg.to || []).join(", ");
     input("subject").value = msg.subject || "";
     editor.commands.setContent(msg.body_html || "", { emitUpdate: false });

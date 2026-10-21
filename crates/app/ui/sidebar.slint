@@ -6,7 +6,6 @@ export component Sidebar inherits Rectangle {
     background: Theme.sidebar-bg;
     in property <[FolderRow]> folders;
     in property <int> selected-folder: -1;
-    in property <string> account-status;
     callback add-account; callback settings; callback hide;
     callback folder-clicked(int); callback account-toggled(string);
     VerticalLayout {
@@ -37,12 +36,12 @@ export component Sidebar inherits Rectangle {
                         }
                     }
                     Text { text: folder.name; color: folder.is-header ? Theme.text-secondary : Theme.text; font-size: folder.is-header ? 11px : 13px; font-weight: folder.is-header ? 600 : 400; overflow: elide; vertical-alignment: center; }
+                    if folder.is-header && folder.status != "": Text { text: folder.status; color: Theme.text-secondary; font-size: 10px; vertical-alignment: center; }
                     if folder.unread > 0 && !folder.is-header: Text { text: folder.unread; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; }
                 }
                 TouchArea { enabled: !Theme.blocked; clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } } }
             }
         }
-        if root.account-status != "": Text { text: root.account-status; color: Theme.text-secondary; font-size: 11px; wrap: word-wrap; }
         ActionButton { text: @tr("Add account"); icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
         ActionButton { text: @tr("Settings"); icon: @image-url("icons/settings.svg"); clicked => { root.settings(); } }
     }

@@ -29,8 +29,8 @@ export component DraftsDialog inherits Rectangle {
                 min-height: 0px; vertical-stretch: 1;
                 content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 VerticalLayout { spacing: 4px;
-                    if root.kind == "drafts" && root.drafts.length == 0: Text { text: @tr("No drafts"); color: Theme.text-secondary; font-size: 13px; padding-top: 12px; padding-bottom: 12px; }
-                    if root.kind == "templates" && root.templates.length == 0: Text { text: @tr("No templates"); color: Theme.text-secondary; font-size: 13px; padding-top: 12px; padding-bottom: 12px; }
+                    if root.kind == "drafts" && root.drafts.length == 0: VerticalLayout { padding-top: 12px; padding-bottom: 12px; Text { text: @tr("No drafts"); color: Theme.text-secondary; font-size: 13px; } }
+                    if root.kind == "templates" && root.templates.length == 0: VerticalLayout { padding-top: 12px; padding-bottom: 12px; Text { text: @tr("No templates"); color: Theme.text-secondary; font-size: 13px; } }
                     if root.kind == "drafts": VerticalLayout { spacing: 4px;
                         for d in root.drafts: Rectangle {
                             height: 48px;

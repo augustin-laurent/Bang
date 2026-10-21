@@ -27,6 +27,8 @@ struct Session {
 
 /// Draft fields to prefill the composer with (reply / forward).
 pub struct Prefill {
+    /// Account to select as sender, if any.
+    pub from: Option<String>,
     /// Recipients for the To field.
     pub to: Vec<String>,
     /// Subject line.
@@ -105,6 +107,7 @@ pub fn open(
                 write(
                     &mut s,
                     &HostMessage::Prefill {
+                        from: p.from,
                         to: p.to,
                         subject: p.subject,
                         body_html: p.body_html,
@@ -177,6 +180,7 @@ pub fn open(
                         let _ = write(
                             &mut s,
                             &HostMessage::Prefill {
+                                from: p.from,
                                 to: p.to,
                                 subject: p.subject,
                                 body_html: p.body_html,
@@ -429,6 +433,8 @@ pub fn reply_or_forward(
         store,
         bridge,
         Some(Prefill {
+            // Reply from the account that received the message.
+            from: Some(full.summary.account_id.clone()),
             to,
             subject,
             body_html,

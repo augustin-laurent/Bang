@@ -639,6 +639,7 @@ fn resume_draft(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Br
         return;
     };
     let prefill = composer::Prefill {
+        from: Some(request.account.0.clone()),
         to: request.to.clone(),
         subject: request.subject.clone(),
         body_html: request.body_html.clone().unwrap_or_default(),
@@ -658,6 +659,7 @@ fn resume_template(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge:
         return;
     };
     let prefill = composer::Prefill {
+        from: Some(request.account.0.clone()),
         to: request.to.clone(),
         subject: request.subject.clone(),
         body_html: request.body_html.clone().unwrap_or_default(),

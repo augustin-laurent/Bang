@@ -45,6 +45,8 @@ pub enum HostMessage {
     },
     /// Prefill the draft fields (reply / forward).
     Prefill {
+        /// Account to select as sender, if any.
+        from: Option<String>,
         /// Recipients to prefill in the To field.
         to: Vec<String>,
         /// Subject to prefill.

@@ -1,7 +1,7 @@
 //! UI state: selection and application of core events to the window.
 
 use crate::i18n::tr;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
 
@@ -24,6 +24,8 @@ pub struct UiState {
     pub search_active: AtomicBool,
     /// Account sections collapsed by the user.
     pub collapsed_accounts: Mutex<HashSet<String>>,
+    /// Last connection status per account (empty = connected/idle).
+    pub account_status: Mutex<HashMap<String, String>>,
 }
 
 impl UiState {
@@ -34,6 +36,7 @@ impl UiState {
             selected_message: AtomicI64::new(-1),
             search_active: AtomicBool::new(false),
             collapsed_accounts: Mutex::new(HashSet::new()),
+            account_status: Mutex::new(HashMap::new()),
         }
     }
 
@@ -78,6 +81,7 @@ impl UiState {
             });
         }
         let collapsed = self.collapsed_accounts.lock().unwrap();
+        let status = self.account_status.lock().unwrap();
         for account in accounts {
             let hidden = collapsed.contains(&account.id.0);
             rows.push(FolderRow {
@@ -86,6 +90,7 @@ impl UiState {
                 account_id: account.id.0.clone().into(),
                 is_header: true,
                 collapsed: hidden,
+                status: status.get(&account.id.0).cloned().unwrap_or_default().into(),
                 ..Default::default()
             });
             if !hidden {
@@ -109,16 +114,18 @@ impl UiState {
     /// Must be called on the Slint event loop thread.
     pub fn apply(&self, ui: &BangApp, store: &Store, event: MailEvent) {
         match event {
-            MailEvent::AccountStatus { status, .. } => {
-                ui.set_account_status(
-                    tr(match status {
-                        bang_core::AccountStatus::Disconnected => "Disconnected",
-                        bang_core::AccountStatus::Connected => "Connected",
-                        bang_core::AccountStatus::Syncing => "Syncing…",
-                        bang_core::AccountStatus::Reconnecting => "Reconnecting…",
-                    })
-                    .into(),
-                );
+            MailEvent::AccountStatus { account, status } => {
+                // Only non-idle states are shown; connected is the default.
+                let label = match status {
+                    bang_core::AccountStatus::Disconnected => tr("Disconnected"),
+                    bang_core::AccountStatus::Connected => String::new(),
+                    bang_core::AccountStatus::Syncing => tr("Syncing…"),
+                    bang_core::AccountStatus::Reconnecting => tr("Reconnecting…"),
+                };
+                self.account_status
+                    .lock()
+                    .unwrap()
+                    .insert(account.0, label);
                 self.refresh_folders(ui, store);
                 if ui.get_wizard_open() && matches!(status, bang_core::AccountStatus::Connected) {
                     ui.set_wizard_open(false);

@@ -23,7 +23,7 @@ export component BangApp inherits Window {
     in property <int> selected-folder: -1; in property <int> selected-message: -1;
     in property <string> folder-name; in-out property <string> search-text;
     in property <bool> search-active: false;
-    in property <string> account-status; in property <string> status-message;
+    in property <string> status-message;
     in property <string> message-sender; in property <string> message-subject;
     in property <string> message-date; in property <string> message-body;
     in property <string> message-sender-address; in property <string> message-recipients;
@@ -107,7 +107,7 @@ export component BangApp inherits Window {
         }
     Sidebar {
         visible: root.show-nav; x: 0px; y: 0px; width: root.nav-width; height: parent.height;
-        folders: root.folders; selected-folder: root.selected-folder; account-status: root.account-status;
+        folders: root.folders; selected-folder: root.selected-folder;
         hide => { root.sidebar-hidden = true; }
         add-account => { root.wizard-open = true; }
         settings => { root.settings-opened(); }
@@ -191,7 +191,7 @@ export component BangApp inherits Window {
     if root.sidebar-overlay: Rectangle {
         background: #00000044;
         TouchArea { clicked => { root.sidebar-overlay = false; } }
-        Sidebar { width: 260px; folders: root.folders; selected-folder: root.selected-folder; account-status: root.account-status;
+        Sidebar { width: 260px; folders: root.folders; selected-folder: root.selected-folder;
             hide => { root.sidebar-overlay = false; }
             add-account => { root.sidebar-overlay = false; root.wizard-open = true; }
             settings => { root.sidebar-overlay = false; root.settings-opened(); }
