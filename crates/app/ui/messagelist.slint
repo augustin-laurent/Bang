@@ -5,6 +5,7 @@ export component MessageList inherits Rectangle {
     background: Theme.bg;
     in property <[MessageRow]> messages;
     in property <int> selected-message: -1;
+    private property <length> swipe-threshold: 60px;
     callback message-clicked(int);
     callback message-action(int, string);
     list := ListView {
@@ -21,7 +22,16 @@ export component MessageList inherits Rectangle {
                 Text { x: 22px; y: 29px; width: parent.width - 36px; text: msg.subject; font-size: 12px; color: msg.id == root.selected-message ? white : Theme.text; overflow: elide; }
                 Text { x: 22px; y: 47px; width: parent.width - 40px; height: 34px; text: msg.preview; max-lines: 2; wrap: word-wrap; font-size: 12px; color: msg.id == root.selected-message ? white : Theme.text-secondary; }
                 Image { visible: msg.has-attachments; x: parent.width - 22px; y: 50px; width: 12px; height: 12px; source: @image-url("icons/clip.svg"); colorize: msg.id == root.selected-message ? white : Theme.text-secondary; }
-                area := TouchArea { enabled: !Theme.blocked; clicked => { root.message-clicked(msg.id); } }
+                area := TouchArea {
+                    enabled: !Theme.blocked;
+                    // Swipe right stars, left deletes; a short press selects.
+                    clicked => {
+                        let dx = self.mouse-x - self.pressed-x;
+                        if dx > root.swipe-threshold { root.message-action(msg.id, "star"); }
+                        else if dx < -root.swipe-threshold { root.message-action(msg.id, "delete"); }
+                        else { root.message-clicked(msg.id); }
+                    }
+                }
                 accessible-role: button; accessible-enabled: !Theme.blocked; accessible-label: msg.sender + ", " + msg.subject;
                 accessible-action-default => { if !Theme.blocked { root.message-clicked(msg.id); } }
             }
