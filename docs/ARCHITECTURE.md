@@ -119,8 +119,9 @@ Notes:
 2. `sync_folders` — `LIST` folders, reconcile with the store (upsert + delete
    missing), then `sync_folder` for each.
 3. `sync_folder` — `SELECT`, read the stored sync state `(last_uid,
-   uidvalidity)`, decide full vs. incremental, `UID FETCH` metadata for the
-   relevant UID range, upsert messages, record the new sync state, and emit
+   uidvalidity)`, fetch envelopes only for new mail and refresh `(UID FLAGS)`
+   for the last 200 cached UIDs. Skip unchanged flag writes and events, record
+   the new sync state, and emit
    `MessagesAppended` / `MessagesUpdated`.
 4. `idle_loop` — `SELECT` the INBOX (or first folder), then repeatedly:
    process pending commands (`SetFlags`, `FetchBody`, `Quit`), then `IDLE`
@@ -131,7 +132,16 @@ Notes:
 
 A fresh folder has sync state `(0, None)`; the syncer treats `last_uid == 0`
 (or a changed UIDVALIDITY) as a full sync of the most recent `SYNC_WINDOW`
-(200) messages.
+(200) messages. Initial FETCH uses sequence numbers so UID gaps do not shrink
+that window. Incremental metadata requests use a bounded UID range when UIDNEXT
+is available; no metadata request is sent when there is no new mail. A changed
+UIDVALIDITY discards cached bodies, attachments and the checkpoint before fetching
+replacement messages, preventing reused UIDs from displaying old content.
+
+Sync never fetches body parts or previews. `OpenMessage` fetches the full MIME
+message with `BODY.PEEK[]` on demand and later opens use the local cache, including
+empty and HTML-only bodies. SQL NULL means unfetched; an empty string means
+fetched and empty. Full-text body search covers only bodies already downloaded.
 
 ## IMAP client
 

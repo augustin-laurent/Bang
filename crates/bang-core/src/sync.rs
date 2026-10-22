@@ -175,31 +175,52 @@ fn sync_folder(
         _ => last_uid == 0,
     };
 
-    let uid_next = status.uid_next.unwrap_or(0);
+    if full && last_validity.is_some() {
+        store.reset_folder_sync(folder.id)?;
+    }
+
+    let mut updated = Vec::new();
     let metas: Vec<MetaMessage> = if full {
-        // Most recent SYNC_WINDOW messages.
-        let start = uid_next.saturating_sub(SYNC_WINDOW).max(1);
-        if uid_next == 0 {
-            Vec::new()
-        } else {
-            conn.fetch_meta(&format!("{start}:*"))?
-        }
+        conn.fetch_recent_meta(status.exists, SYNC_WINDOW)?
     } else {
-        // New messages since last_uid, plus a flag refresh of the recent window.
-        let mut metas = Vec::new();
-        if last_uid < uid_next {
-            metas.extend(conn.fetch_meta(&format!("{}:*", last_uid + 1))?);
+        // Cached envelopes are immutable while UIDVALIDITY stays the same.
+        // Refresh only flags, and avoid writes/events for unchanged messages.
+        let uids = store.recent_message_uids(folder.id, SYNC_WINDOW)?;
+        if !uids.is_empty() {
+            let set = uids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            for (uid, flags) in conn.fetch_flags(&set)? {
+                if let Some(id) = store.refresh_message_flags(folder.id, uid, flags)? {
+                    updated.push(id);
+                }
+            }
         }
-        let start = uid_next.saturating_sub(SYNC_WINDOW).max(1);
-        if start <= last_uid {
-            metas.extend(conn.fetch_meta(&format!("{start}:{last_uid}"))?);
+        match last_uid.checked_add(1) {
+            Some(first) if status.uid_next.is_none_or(|next| first < next) => {
+                // A bounded range avoids IMAP's reversed n:* range returning
+                // the last existing message when there is no new mail.
+                let end = status
+                    .uid_next
+                    .map(|n| (n - 1).to_string())
+                    .unwrap_or("*".into());
+                conn.fetch_meta(&format!("{first}:{end}"))?
+                    .into_iter()
+                    .filter(|m| m.uid > last_uid)
+                    .collect()
+            }
+            _ => Vec::new(),
         }
-        metas
     };
 
-    let new_last_uid = metas.iter().map(|m| m.uid).max().unwrap_or(last_uid);
+    let new_last_uid = metas
+        .iter()
+        .map(|m| m.uid)
+        .max()
+        .unwrap_or(if full { 0 } else { last_uid });
     let mut appended = Vec::new();
-    let mut updated = Vec::new();
     for meta in metas {
         let existing = store
             .get_message_by_uid(&config.id.0, folder.id, meta.uid)?
@@ -223,7 +244,7 @@ fn sync_folder(
             messages: appended,
         });
     }
-    if !updated.is_empty() {
+    if !updated.is_empty() || (full && last_validity.is_some()) {
         let _ = events_tx.send(MailEvent::MessagesUpdated {
             account: config.id.clone(),
             folder_id: folder.id,

@@ -679,6 +679,83 @@ impl Store {
         })
     }
 
+    /// Get the most recent cached UIDs, including snoozed messages.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn recent_message_uids(&self, folder_id: i64, limit: u32) -> Result<Vec<u32>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT uid FROM messages WHERE folder_id = ?1 ORDER BY uid DESC LIMIT ?2")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let uids = stmt
+            .query_map(params![folder_id, limit], |r| r.get(0))
+            .map_err(|e| Error::Store(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(uids)
+    }
+
+    /// Replace cached flags and return the message id only when they changed.
+    ///
+    /// Unknown UIDs are ignored; summaries and cached bodies are preserved.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn refresh_message_flags(
+        &self,
+        folder_id: i64,
+        uid: u32,
+        flags: MessageFlags,
+    ) -> Result<Option<i64>> {
+        self.lock()?.query_row(
+            "UPDATE messages SET flags = ?3 WHERE folder_id = ?1 AND uid = ?2 AND flags != ?3 RETURNING id",
+            params![folder_id, uid, flags.bits()], |r| r.get(0),
+        ).optional().map_err(|e| Error::Store(e.to_string()))
+    }
+
+    /// Discard a folder's cached messages after its UIDVALIDITY changes.
+    ///
+    /// Reset the checkpoint in the same transaction so a failed re-sync cannot
+    /// associate an old body with a reused UID on the next connection.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database or attachment cleanup failure.
+    pub fn reset_folder_sync(&self, folder_id: i64) -> Result<()> {
+        let mut conn = self.lock()?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let ids = {
+            let mut stmt = transaction
+                .prepare("SELECT id FROM messages WHERE folder_id = ?1")
+                .map_err(|e| Error::Store(e.to_string()))?;
+            let ids = stmt
+                .query_map([folder_id], |r| r.get::<_, i64>(0))
+                .map_err(|e| Error::Store(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            ids
+        };
+        transaction
+            .execute("DELETE FROM messages WHERE folder_id = ?1", [folder_id])
+            .map_err(|e| Error::Store(e.to_string()))?;
+        transaction
+            .execute(
+                "UPDATE folders SET last_uid = 0, uidvalidity = NULL WHERE id = ?1",
+                [folder_id],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        transaction
+            .commit()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        drop(conn);
+        for id in ids {
+            self.delete_attachment_files(id)?;
+        }
+        Ok(())
+    }
+
     /// Add or remove flags on messages.
     ///
     /// # Errors
@@ -1124,6 +1201,9 @@ impl Store {
 
     /// Get a fully loaded message (summary + bodies + attachments).
     ///
+    /// Return `None` if the message is absent or its body has not been fetched.
+    /// A fetched empty body is cached and returned normally.
+    ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
     pub fn get_message_full(&self, id: i64) -> Result<Option<MessageFull>> {
@@ -1146,6 +1226,9 @@ impl Store {
             // Deleted between the two reads.
             return Ok(None);
         };
+        if body_text.is_none() && body_html.is_none() {
+            return Ok(None);
+        }
         let mut stmt = conn
             .prepare(
                 "SELECT id, message_id, filename, content_type, size, path

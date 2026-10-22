@@ -149,6 +149,44 @@ impl<T: Read + Write> ImapSession<T> {
         Ok(fetches.iter().filter_map(convert_fetch).collect())
     }
 
+    /// Fetch metadata for the last `limit` messages in a selected mailbox.
+    ///
+    /// `exists` is the message count returned by SELECT. Sequence numbers,
+    /// unlike UIDs, count messages even when deleted mail leaves UID gaps.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_recent_meta(&mut self, exists: u32, limit: u32) -> Result<Vec<MetaMessage>> {
+        if exists == 0 || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let start = exists.saturating_sub(limit).saturating_add(1);
+        let fetches = self.session.fetch(
+            format!("{start}:{exists}"),
+            "(UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)",
+        )?;
+        Ok(fetches.iter().filter_map(convert_fetch).collect())
+    }
+
+    /// Fetch only UIDs and flags for a set of cached messages.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_flags(&mut self, uid_set: &str) -> Result<Vec<(u32, MessageFlags)>> {
+        let fetches = self.session.uid_fetch(uid_set, "(UID FLAGS)")?;
+        Ok(fetches
+            .iter()
+            .filter_map(|f| {
+                Some((
+                    f.uid?,
+                    f.flags().iter().fold(MessageFlags::empty(), |flags, flag| {
+                        flags | flag_to_flags(flag)
+                    }),
+                ))
+            })
+            .collect())
+    }
+
     /// Fetch the first `max_bytes` of the text part (for previews).
     ///
     /// # Errors
@@ -275,6 +313,28 @@ impl ImapConn {
         match self {
             ImapConn::Tls(s) => s.fetch_meta(uid_set),
             ImapConn::Plain(s) => s.fetch_meta(uid_set),
+        }
+    }
+
+    /// Fetch metadata for the last `limit` messages in the selected mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_recent_meta(&mut self, exists: u32, limit: u32) -> Result<Vec<MetaMessage>> {
+        match self {
+            ImapConn::Tls(s) => s.fetch_recent_meta(exists, limit),
+            ImapConn::Plain(s) => s.fetch_recent_meta(exists, limit),
+        }
+    }
+
+    /// Fetch only UIDs and flags for a set of cached messages.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_flags(&mut self, uid_set: &str) -> Result<Vec<(u32, MessageFlags)>> {
+        match self {
+            ImapConn::Tls(s) => s.fetch_flags(uid_set),
+            ImapConn::Plain(s) => s.fetch_flags(uid_set),
         }
     }
 

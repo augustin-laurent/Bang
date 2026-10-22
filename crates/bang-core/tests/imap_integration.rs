@@ -42,6 +42,8 @@ struct TestMsg {
 #[derive(Default)]
 struct ServerState {
     folders: Vec<(String, Vec<TestMsg>)>,
+    commands: Vec<String>,
+    uid_validity: u32,
 }
 
 /// A minimal single-user IMAP server bound to 127.0.0.1.
@@ -57,7 +59,7 @@ impl MiniImap {
     fn start(folders: Vec<(String, Vec<TestMsg>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test port");
         let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(ServerState { folders }));
+        let state = Arc::new(Mutex::new(ServerState { folders, commands: Vec::new(), uid_validity: 1 }));
         let push_flag = Arc::new(AtomicBool::new(false));
         let thread_state = state.clone();
         let thread_push = push_flag.clone();
@@ -128,6 +130,9 @@ fn unquote(s: &str) -> &str {
 
 /// Expand a UID set (`N`, `N:*`, `N:M`) against the folder's UIDs.
 fn expand_uid_set(set: &str, msgs: &[TestMsg]) -> Vec<u32> {
+    if set.contains(',') {
+        return set.split(',').flat_map(|part| expand_uid_set(part, msgs)).collect();
+    }
     let uids: Vec<u32> = msgs.iter().map(|m| m.uid).collect();
     let (lo_s, hi_s) = match set.split_once(':') {
         Some((a, b)) => (a, b),
@@ -162,6 +167,7 @@ fn handle_conn(
             Some(t) => t,
             None => continue,
         };
+        state.lock().unwrap().commands.push(rest.trim().into());
         let upper = rest.to_ascii_uppercase();
 
         if upper.starts_with("LOGIN") {
@@ -194,10 +200,26 @@ fn handle_conn(
                 &mut writer,
                 "* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)",
             );
-            write_line(&mut writer, "* OK [UIDVALIDITY 1] UIDs valid");
+            let validity = state.lock().unwrap().uid_validity;
+            write_line(&mut writer, &format!("* OK [UIDVALIDITY {validity}] UIDs valid"));
             let uid_next = msgs.last().map(|m| m.uid + 1).unwrap_or(1);
             write_line(&mut writer, &format!("* OK [UIDNEXT {uid_next}] Predicted next UID"));
             write_line(&mut writer, &format!("{tag} OK [READ-WRITE] SELECT completed"));
+        } else if upper.starts_with("FETCH") {
+            // Translate sequence numbers into the corresponding message UIDs.
+            let name = selected.clone().unwrap_or_default();
+            let args = rest.trim().strip_prefix("FETCH").unwrap().trim();
+            let (set, query) = args.split_once(' ').unwrap();
+            let st = state.lock().unwrap();
+            let msgs = &st.folders.iter().find(|(n, _)| *n == name).unwrap().1;
+            let sequence_msgs: Vec<_> = msgs.iter().enumerate().map(|(i, m)| {
+                let mut m = m.clone(); m.uid = i as u32 + 1; m
+            }).collect();
+            let uids = expand_uid_set(set, &sequence_msgs).iter()
+                .map(|seq| msgs[*seq as usize - 1].uid.to_string())
+                .collect::<Vec<_>>().join(",");
+            drop(st);
+            handle_uid_fetch(&mut writer, tag, &state, &selected, &format!("UID FETCH {uids} {query}"))?;
         } else if upper.starts_with("UID FETCH") {
             handle_uid_fetch(&mut writer, tag, &state, &selected, rest)?;
         } else if upper.starts_with("UID STORE") {
@@ -309,6 +331,8 @@ fn handle_uid_fetch(
                 .and_then(|_| writer.write_all(b"\r\n"))
                 .and_then(|_| writer.write_all(&msg.raw))
                 .and_then(|_| writer.write_all(b")\r\n"))?;
+        } else if query.trim() == "(UID FLAGS)" {
+            write_line(writer, &format!("* {seq} FETCH (UID {uid} FLAGS ({}))", imap_flags(msg.flags)));
         } else {
             let date = chrono::DateTime::from_timestamp(msg.date, 0)
                 .map(|d| d.format("%d-%b-%Y %H:%M:%S %z").to_string())
@@ -632,4 +656,158 @@ fn delete_removes_message_from_server_and_store() {
     assert_eq!(server_msgs[0].subject, "Keep me");
 
     cmd_tx.send(SyncerCommand::Quit).unwrap();
+}
+
+
+#[test]
+fn sync_fetches_metadata_only_and_preserves_lazy_cache_on_flag_refresh() {
+    use bang_core::events::UiCommand;
+    use bang_core::service::MailService;
+
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        vec![msg(1, "Original", MessageFlags::empty())],
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let summary = store.get_messages(folder.id, 10).unwrap().remove(0);
+    assert!(store.get_message_full(summary.id).unwrap().is_none());
+    assert!(server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .all(|c| !c.contains("BODY")));
+
+    tx.send(SyncerCommand::FetchBody {
+        message_id: summary.id,
+    })
+    .unwrap();
+    server.push_flag.store(true, Ordering::SeqCst);
+    wait_for_event(&mut events, Duration::from_secs(15), |e| {
+        matches!(e, MailEvent::MessageLoaded { .. })
+    })
+    .expect("lazy body fetch");
+    let before = store.get_message_full(summary.id).unwrap().unwrap();
+    let checkpoint = server.state.lock().unwrap().commands.len();
+    {
+        let mut st = server.state.lock().unwrap();
+        st.folders[0].1[0].flags = MessageFlags::SEEN | MessageFlags::FLAGGED;
+    }
+    server.push_inbox(msg(2, "New", MessageFlags::empty()));
+    wait_for_event(&mut events, Duration::from_secs(15), |e| matches!(e, MailEvent::MessagesAppended { messages, .. } if messages.iter().any(|m| m.uid == 2))).expect("incremental sync");
+    let after = store.get_message_full(summary.id).unwrap().unwrap();
+    assert_eq!(after.body_text, before.body_text);
+    assert_eq!(after.summary.subject, before.summary.subject);
+    assert_eq!(after.summary.preview, before.summary.preview);
+    assert_eq!(
+        after.summary.flags,
+        MessageFlags::SEEN | MessageFlags::FLAGGED
+    );
+    let commands = server.state.lock().unwrap().commands[checkpoint..].to_vec();
+    assert!(commands.iter().any(|c| c == "UID FETCH 1 (UID FLAGS)"));
+    assert!(commands
+        .iter()
+        .any(|c| c == "UID FETCH 2:2 (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)"));
+    assert!(commands.iter().all(|c| !c.contains("BODY")));
+
+    // A flags-only update with no new UID must not refetch any envelope.
+    let checkpoint = server.state.lock().unwrap().commands.len();
+    server.state.lock().unwrap().folders[0].1[0].flags = MessageFlags::empty();
+    server.push_flag.store(true, Ordering::SeqCst);
+    wait_for_event(&mut events, Duration::from_secs(15), |e| {
+        matches!(e, MailEvent::MessagesUpdated { .. })
+            && store
+                .get_message(summary.id)
+                .unwrap()
+                .unwrap()
+                .flags
+                .is_empty()
+    })
+    .expect("flags-only refresh");
+    let commands = server.state.lock().unwrap().commands[checkpoint..].to_vec();
+    assert!(commands.iter().any(|c| c.ends_with("(UID FLAGS)")));
+    assert!(commands
+        .iter()
+        .all(|c| !c.contains("ENVELOPE") && !c.contains("BODY")));
+
+    // Cached reopening also works with no account connection.
+    let (event_tx, mut cached_events) = unbounded_channel();
+    let service = MailService::new(store.clone(), event_tx);
+    for _ in 0..2 {
+        service.handle_command(UiCommand::OpenMessage {
+            account: AccountId("test@bang.test".into()),
+            message_id: summary.id,
+        });
+        assert!(matches!(
+            cached_events.try_recv().unwrap(),
+            MailEvent::MessageLoaded { .. }
+        ));
+    }
+    tx.send(SyncerCommand::Quit).unwrap();
+}
+
+#[test]
+fn initial_sync_limits_by_message_count_even_with_sparse_uids() {
+    let messages = (1..=250)
+        .map(|i| msg(i * 10, &format!("Message {i}"), MessageFlags::empty()))
+        .collect();
+    let server = MiniImap::start(vec![("INBOX".into(), messages)]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, _) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let uids = store.recent_message_uids(folder.id, 1000).unwrap();
+    assert_eq!(uids.len(), 200);
+    assert_eq!(uids.first(), Some(&2500));
+    assert_eq!(uids.last(), Some(&510));
+    assert!(server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .any(|c| c.starts_with("FETCH 51:250 ")));
+    tx.send(SyncerCommand::Quit).unwrap();
+}
+
+#[test]
+fn uidvalidity_change_discards_old_cached_bodies() {
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        vec![msg(1, "Old", MessageFlags::empty())],
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, _) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let id = store.get_messages(folder.id, 10).unwrap()[0].id;
+    store
+        .save_message_bodies(id, "Old cached body", "", &[])
+        .unwrap();
+    tx.send(SyncerCommand::Quit).unwrap();
+    // Wake IDLE and wait for the old syncer to drop its command receiver.
+    server.push_flag.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while tx.send(SyncerCommand::Quit).is_ok() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "old syncer did not stop"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    {
+        let mut st = server.state.lock().unwrap();
+        st.uid_validity = 2;
+        st.folders[0].1 = vec![msg(1, "Replacement", MessageFlags::empty())];
+    }
+    let (tx, _) = start_and_connect(&server, store.clone());
+    let replacement = store.get_messages(folder.id, 10).unwrap().remove(0);
+    assert_eq!(replacement.subject, "Replacement");
+    assert!(store.get_message_full(replacement.id).unwrap().is_none());
+    assert_eq!(
+        store.get_folder_sync_state(folder.id).unwrap(),
+        Some((1, Some(2)))
+    );
+    tx.send(SyncerCommand::Quit).unwrap();
 }

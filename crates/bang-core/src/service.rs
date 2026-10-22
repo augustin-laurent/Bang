@@ -221,7 +221,7 @@ impl MailService {
             UiCommand::SelectFolder { .. } => {}
             UiCommand::OpenMessage { message_id, .. } => {
                 match self.store.get_message_full(message_id) {
-                    Ok(Some(full)) if !full.body_text.is_empty() || !full.body_html.is_empty() => {
+                    Ok(Some(full)) => {
                         let _ = self
                             .events_tx
                             .send(MailEvent::MessageLoaded { message: full });
