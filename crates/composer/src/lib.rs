@@ -135,6 +135,13 @@ pub enum EditorMessage {
     },
     /// Save the current draft through the parent mail engine.
     SaveDraft(DraftContent),
+    /// Schedule the current draft to be sent at a later time.
+    Schedule {
+        /// Unix timestamp (seconds) at which the email is sent.
+        send_at: i64,
+        /// Draft content.
+        content: DraftContent,
+    },
     /// Save the current draft as a named template.
     SaveTemplate {
         /// Template name.

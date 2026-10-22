@@ -4,7 +4,7 @@ import { Theme } from "theme.slint";
 export { Theme } from "theme.slint";
 export { Palette } from "std-widgets.slint";
 import { ActionButton, SearchField } from "controls.slint";
-import { FolderRow, MessageRow, AccountRow, AttachmentRow, DraftRow, TemplateRow } from "models.slint";
+import { FolderRow, MessageRow, AccountRow, AttachmentRow, DraftRow, TemplateRow, PendingSendRow } from "models.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
@@ -38,7 +38,8 @@ export component BangApp inherits Window {
     in-out property <bool> save-open: false;
     in property <string> save-filename; in-out property <string> save-path;
     in-out property <bool> drafts-open: false; in-out property <bool> templates-open: false;
-    in property <[DraftRow]> drafts; in property <[TemplateRow]> templates;
+    in-out property <bool> sends-open: false;
+    in property <[DraftRow]> drafts; in property <[TemplateRow]> templates; in property <[PendingSendRow]> sends;
     in-out property <bool> wizard-open: false; in-out property <bool> wizard-manual: false; in property <string> wizard-status;
     in-out property <bool> settings-open: false;
     in property <[AccountRow]> settings-accounts; in property <string> settings-theme: "system";
@@ -52,15 +53,16 @@ export component BangApp inherits Window {
     callback message-selected(int); callback message-action(int, string);
     callback compose-clicked(); callback search-edited(string); callback navigate-message(int);
     callback attachment-clicked(int); callback attachment-save(string);
-    callback drafts-opened(); callback templates-opened();
+    callback drafts-opened(); callback templates-opened(); callback sends-opened();
     callback draft-row-clicked(int); callback draft-row-delete(int);
     callback template-row-clicked(int); callback template-row-delete(int);
+    callback send-row-delete(int);
     callback drafts-dialog-close();
     callback quit();
     callback settings-opened(); callback settings-theme-selected(string);
     callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
 
-    private property <bool> modal-open: root.wizard-open || root.settings-open || root.drafts-open || root.templates-open;
+    private property <bool> modal-open: root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open;
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
@@ -78,11 +80,11 @@ export component BangApp inherits Window {
     keyboard := FocusScope {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         key-pressed(e) => {
-            if root.settings-open || root.wizard-open || root.drafts-open || root.templates-open {
+            if root.settings-open || root.wizard-open || root.drafts-open || root.templates-open || root.sends-open {
                 if e.text == Key.Escape {
                     if root.wizard-open { root.wizard-cancel(); }
                     else if root.settings-open { root.settings-close(); }
-                    else { root.drafts-open = false; root.templates-open = false; }
+                    else { root.drafts-open = false; root.templates-open = false; root.sends-open = false; }
                     return accept;
                 }
                 return reject;
@@ -135,6 +137,7 @@ export component BangApp inherits Window {
                 ActionButton { framed: true; text: @tr("New message"); icon: @image-url("icons/compose.svg"); compact: true; clicked => { root.compose-clicked(); } }
                 ActionButton { framed: true; text: @tr("Drafts"); icon: @image-url("icons/file.svg"); compact: true; clicked => { root.drafts-opened(); } }
                 ActionButton { framed: true; text: @tr("Templates"); icon: @image-url("icons/folder.svg"); compact: true; clicked => { root.templates-opened(); } }
+                ActionButton { framed: true; text: @tr("Scheduled"); icon: @image-url("icons/clock.svg"); compact: true; clicked => { root.sends-opened(); } }
             }
         }
         list-search := SearchField { visible: root.narrow; x: 10px; y: 56px; width: parent.width - 20px; height: 30px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
@@ -164,13 +167,15 @@ export component BangApp inherits Window {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
             HorizontalLayout { padding: 10px; spacing: 4px;
                 if root.narrow: ActionButton { compact: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); clicked => { root.detail-open = false; } }
-                Rectangle { width: 184px; height: 32px; background: Theme.bg; border-width: 1px; border-color: Theme.border; border-radius: 12px;
+                Rectangle { width: 258px; height: 32px; background: Theme.bg; border-width: 1px; border-color: Theme.border; border-radius: 12px;
                     HorizontalLayout { spacing: 0px;
                 ActionButton { compact: true; text: @tr("Reply"); icon: @image-url("icons/back.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "reply"); } }
                 ActionButton { compact: true; text: @tr("Forward"); icon: @image-url("icons/send.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "forward"); } }
                 ActionButton { compact: true; text: @tr("Star"); icon: @image-url("icons/star.svg"); enabled: root.selected-message >= 0; active: root.message-starred; clicked => { root.message-action(root.selected-message, "star"); } }
                 ActionButton { compact: true; text: @tr("Read / unread"); icon: @image-url("icons/mail.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "read"); } }
                 ActionButton { compact: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "delete"); } }
+                ActionButton { compact: true; text: @tr("Snooze"); icon: @image-url("icons/clock.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "snooze"); } }
+                ActionButton { compact: true; text: @tr("Follow up"); icon: @image-url("icons/bell.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "follow-up"); } }
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -222,11 +227,11 @@ export component BangApp inherits Window {
         close => { root.save-open = false; }
     }
     DraftsDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;
-        open: root.drafts-open || root.templates-open;
-        kind: root.templates-open ? "templates" : "drafts";
-        drafts: root.drafts; templates: root.templates;
-        row-clicked(id) => { if root.templates-open { root.template-row-clicked(id); } else { root.draft-row-clicked(id); } }
-        row-delete(id) => { if root.templates-open { root.template-row-delete(id); } else { root.draft-row-delete(id); } }
+        open: root.drafts-open || root.templates-open || root.sends-open;
+        kind: root.sends-open ? "sends" : root.templates-open ? "templates" : "drafts";
+        drafts: root.drafts; templates: root.templates; sends: root.sends;
+        row-clicked(id) => { if root.templates-open { root.template-row-clicked(id); } else if !root.sends-open { root.draft-row-clicked(id); } }
+        row-delete(id) => { if root.sends-open { root.send-row-delete(id); } else if root.templates-open { root.template-row-delete(id); } else { root.draft-row-delete(id); } }
         close => { root.drafts-dialog-close(); }
     }
     }

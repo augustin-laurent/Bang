@@ -122,5 +122,14 @@
   "Draft saved": "Brouillon enregistré",
   "Template saved": "Modèle enregistré",
   "Template name": "Nom du modèle",
-  "Save": "Enregistrer"
+  "Save": "Enregistrer",
+  "Snooze": "Reporter",
+  "Follow up": "Suivi",
+  "Scheduled": "Programmés",
+  "No scheduled sends": "Aucun envoi programmé",
+  "Send cancelled": "Envoi annulé",
+  "Send at": "Envoyer à",
+  "Schedule": "Programmer",
+  "Send later": "Envoyer plus tard",
+  "Pick a future time.": "Choisissez une heure future."
 }

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use chrono::TimeZone;
 use slint::{include_modules, ComponentHandle, Global};
 
 include_modules!();
@@ -44,6 +45,7 @@ fn main() -> Result<(), slint::PlatformError> {
     state.refresh_folders(&ui, &store);
     state::load_drafts(&ui, &store);
     state::load_templates(&ui, &store);
+    state::load_sends(&ui, &store);
     if ui.get_account_count() > 0 {
         state.selected_folder.store(
             bang_core::UNIFIED_INBOX_ID,
@@ -282,6 +284,17 @@ fn wire_selection(
                 }
                 return;
             }
+            // Snooze and follow-up are local: no account needed.
+            if action == "snooze" || action == "follow-up" {
+                let at = tomorrow_at(9);
+                let command = if action == "snooze" {
+                    bang_core::UiCommand::Snooze { message_ids: vec![id], until: at }
+                } else {
+                    bang_core::UiCommand::SetFollowUp { message_ids: vec![id], at }
+                };
+                bridge.send(command);
+                return;
+            }
             // The row does not carry the account; look it up locally.
             let Ok(Some(summary)) = store.get_message(id) else {
                 return;
@@ -340,6 +353,16 @@ fn load_folder_view(ui: &BangApp, store: &Arc<bang_core::Store>, id: i64) {
             ui.set_status_message(format!("{} {e}", tr("Folder load failed:")).into());
         }
     }
+}
+
+/// Tomorrow at the given local hour (snooze / follow-up default).
+fn tomorrow_at(hour: u32) -> i64 {
+    let now = chrono::Local::now();
+    let target = (now.date_naive() + chrono::Duration::days(1)).and_hms_opt(hour, 0, 0);
+    target
+        .and_then(|t| chrono::Local.from_local_datetime(&t).single())
+        .map(|t| t.timestamp())
+        .unwrap_or_else(|| now.timestamp() + 86_400)
 }
 
 /// Turn free text into a safe FTS5 MATCH expression: each word becomes a
@@ -622,12 +645,33 @@ fn wire_drafts(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Brid
             }
         }
     });
+    ui.on_sends_opened({
+        let weak = ui.as_weak();
+        let store = store.clone();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                state::load_sends(&ui, &store);
+                ui.set_sends_open(true);
+            }
+        }
+    });
+    ui.on_send_row_delete({
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
+        move |id| {
+            if let Some(ui) = weak.upgrade() {
+                bridge.send(bang_core::UiCommand::CancelSend { id: i64::from(id) });
+                ui.set_status_message(tr("Send cancelled").into());
+            }
+        }
+    });
     ui.on_drafts_dialog_close({
         let weak = ui.as_weak();
         move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_drafts_open(false);
                 ui.set_templates_open(false);
+                ui.set_sends_open(false);
             }
         }
     });

@@ -309,6 +309,23 @@ pub fn open(
                         }
                     }
                 }
+                EditorMessage::Schedule { send_at, content } => {
+                    let mut s = session.lock().unwrap();
+                    match build_request(&store, &s, &content) {
+                        Some(request) => bridge.send(bang_core::UiCommand::ScheduleSend {
+                            send_at,
+                            request,
+                        }),
+                        None => {
+                            let _ = write(
+                                &mut s,
+                                &HostMessage::Error {
+                                    message: i18n::tr("The account was removed.").into(),
+                                },
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }

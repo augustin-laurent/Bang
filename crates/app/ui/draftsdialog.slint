@@ -1,14 +1,16 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ActionButton } from "controls.slint";
-import { DraftRow, TemplateRow } from "models.slint";
+import { DraftRow, TemplateRow, PendingSendRow } from "models.slint";
 
-/// List of saved drafts or templates; a row click resumes it in the composer.
+/// List of saved drafts, templates, or pending sends; a row click resumes
+/// it in the composer (drafts/templates) or cancels it (sends).
 export component DraftsDialog inherits Rectangle {
     in property <bool> open: false;
-    in property <string> kind; // "drafts" | "templates"
+    in property <string> kind; // "drafts" | "templates" | "sends"
     in property <[DraftRow]> drafts;
     in property <[TemplateRow]> templates;
+    in property <[PendingSendRow]> sends;
     callback row-clicked(int);
     callback row-delete(int);
     callback close();
@@ -21,7 +23,7 @@ export component DraftsDialog inherits Rectangle {
         background: Theme.bg; border-radius: 12px;
         VerticalLayout { padding: 16px; spacing: 12px;
             HorizontalLayout { spacing: 8px;
-                Text { text: root.kind == "drafts" ? @tr("Drafts") : @tr("Templates"); font-size: 14px; font-weight: 600; color: Theme.text; horizontal-stretch: 1; }
+                Text { text: root.kind == "drafts" ? @tr("Drafts") : root.kind == "templates" ? @tr("Templates") : @tr("Scheduled"); font-size: 14px; font-weight: 600; color: Theme.text; horizontal-stretch: 1; }
                 ActionButton { modal: true; compact: true; framed: true; text: @tr("Close"); icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
             }
             Rectangle { height: 1px; background: Theme.border; }
@@ -54,6 +56,19 @@ export component DraftsDialog inherits Rectangle {
                                     Text { text: t.subtitle; font-size: 11px; color: Theme.text-secondary; overflow: elide; }
                                 }
                                 ActionButton { modal: true; compact: true; framed: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); clicked => { root.row-delete(t.id); } }
+                            }
+                        }
+                    }
+                    if root.kind == "sends" && root.sends.length == 0: VerticalLayout { padding-top: 12px; padding-bottom: 12px; Text { text: @tr("No scheduled sends"); color: Theme.text-secondary; font-size: 13px; } }
+                    if root.kind == "sends": VerticalLayout { spacing: 4px;
+                        for s in root.sends: Rectangle {
+                            height: 48px;
+                            HorizontalLayout { padding-top: 8px; padding-bottom: 8px; padding-left: 10px; padding-right: 10px; spacing: 8px;
+                                VerticalLayout { spacing: 2px; horizontal-stretch: 1;
+                                    Text { text: s.title; font-size: 13px; font-weight: 600; color: Theme.text; overflow: elide; }
+                                    Text { text: s.subtitle; font-size: 11px; color: Theme.text-secondary; overflow: elide; }
+                                }
+                                ActionButton { modal: true; compact: true; framed: true; text: @tr("Cancel"); icon: @image-url("icons/close.svg"); clicked => { root.row-delete(s.id); } }
                             }
                         }
                     }

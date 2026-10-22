@@ -44,6 +44,7 @@ const paths: Record<string, string> = {
   compose: '<path d="M14 4H4v16h16V10 M12 12l1-4 7-7 3 3-7 7-4 1z"/>',
   file: '<path d="M5 2h9l5 5v15H5V2z M14 2v6h5"/>',
   folder: '<path d="M3 5h6l2 2h10v12H3V5z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
   link: '<path d="m10 14 4-4 M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0 M16 8l2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"/>',
   highlight: '<path d="m14 3 7 7-10 10H4v-7L14 3z M10 7l7 7 M3 23h18"/>',
   bullet:
@@ -63,7 +64,7 @@ const post = (msg: unknown) => {
 const button = (id: string, key: string, content: string, extra = "") =>
   `<button type="button" id="${id}" data-label="${key}" ${extra}>${content}</button>`;
 app.innerHTML = `
-<header class="toolbar"><div class="title">${icon("compose")}<span data-i18n="New message"></span></div><div class="toolbar-actions">${button("attach", "Attach a file", icon("clip"))}${button("format", "Formatting", "Aa", 'aria-pressed="true"')}${button("save-draft", "Save draft", icon("file"))}${button("save-template", "Save as template", icon("folder"))}${button("send", "Send", icon("send"), 'class="primary"')}</div></header>
+<header class="toolbar"><div class="title">${icon("compose")}<span data-i18n="New message"></span></div><div class="toolbar-actions">${button("attach", "Attach a file", icon("clip"))}${button("format", "Formatting", "Aa", 'aria-pressed="true"')}${button("save-draft", "Save draft", icon("file"))}${button("save-template", "Save as template", icon("folder"))}${button("schedule", "Send later", icon("clock"))}${button("send", "Send", icon("send"), 'class="primary"')}</div></header>
 <section class="addresses" data-label="Message headers">
 <div class="field"><label for="to" data-i18n="To:"></label><input id="to" type="text" autocomplete="off" spellcheck="false"><button id="cc-toggle" type="button" aria-expanded="false">Cc / Cci ▾</button></div>
 <div class="field optional" hidden><label for="cc">Cc :</label><input id="cc" type="text" spellcheck="false"></div>
@@ -85,7 +86,8 @@ ${button("bullet", "Bullet list", icon("bullet"))}${button("ordered", "Numbered 
 <div id="editor-wrap"><div id="editor"></div></div>
 <dialog id="discard-dialog"><h2 data-i18n="Discard message?"></h2><p data-i18n="Your unsent changes will be lost."></p><div class="dialog-actions"><button id="keep" data-i18n="Keep editing"></button><button id="discard" class="danger" data-i18n="Discard"></button></div></dialog>
 <dialog id="link-dialog"><form method="dialog"><h2 data-i18n="Link address"></h2><label class="sr-only" for="link-url" data-i18n="Link address"></label><input id="link-url" type="url" placeholder="https://"><div class="dialog-actions"><button value="cancel" data-i18n="Cancel"></button><button id="unlink" type="button" data-i18n="Remove link"></button><button id="apply-link" type="button" class="primary" data-i18n="Apply"></button></div></form></dialog>
-<dialog id="template-dialog"><h2 data-i18n="Template name"></h2><label class="sr-only" for="template-name" data-i18n="Template name"></label><input id="template-name" type="text" autocomplete="off"><div class="dialog-actions"><button id="cancel-template" type="button" data-i18n="Cancel"></button><button id="apply-template" type="button" class="primary" data-i18n="Save"></button></div></dialog>`;
+<dialog id="template-dialog"><h2 data-i18n="Template name"></h2><label class="sr-only" for="template-name" data-i18n="Template name"></label><input id="template-name" type="text" autocomplete="off"><div class="dialog-actions"><button id="cancel-template" type="button" data-i18n="Cancel"></button><button id="apply-template" type="button" class="primary" data-i18n="Save"></button></div></dialog>
+<dialog id="schedule-dialog"><h2 data-i18n="Send at"></h2><label class="sr-only" for="schedule-when" data-i18n="Send at"></label><input id="schedule-when" type="datetime-local"><div class="dialog-actions"><button id="cancel-schedule" type="button" data-i18n="Cancel"></button><button id="apply-schedule" type="button" class="primary" data-i18n="Schedule"></button></div></dialog>`;
 const el = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const input = (id: string) => el<HTMLInputElement>(id);
@@ -443,6 +445,33 @@ el("apply-template").onclick = () => {
 };
 input("template-name").oninput = () =>
   input("template-name").setCustomValidity("");
+const toLocalInputValue = (d: Date) => {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+let pendingSchedule: ReturnType<typeof collectDraft> = null;
+el("schedule").onclick = () => {
+  if (pending) return;
+  pendingSchedule = collectDraft();
+  if (!pendingSchedule) return;
+  const d = new Date(Date.now() + 3600e3);
+  d.setSeconds(0, 0);
+  input("schedule-when").value = toLocalInputValue(d);
+  el<HTMLDialogElement>("schedule-dialog").showModal();
+};
+el("cancel-schedule").onclick = () =>
+  el<HTMLDialogElement>("schedule-dialog").close();
+el("apply-schedule").onclick = () => {
+  const when = input("schedule-when").value;
+  const ts = when ? new Date(when).getTime() : NaN;
+  if (!Number.isFinite(ts) || ts <= Date.now()) {
+    feedback(t("Pick a future time."));
+    return;
+  }
+  post({ type: "schedule", send_at: Math.floor(ts / 1000), ...pendingSchedule });
+  el<HTMLDialogElement>("schedule-dialog").close();
+  feedback(t("Message scheduled"));
+};
 document
   .querySelectorAll(".addresses input,.addresses select")
   .forEach((n) => n.addEventListener("input", setDirty));

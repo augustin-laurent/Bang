@@ -137,6 +137,7 @@ impl MailService {
                         if let Err(e) = store.remove_send(id) {
                             tracing::warn!("remove_send failed for {}: {e}", id);
                         }
+                        let _ = events_tx.send(MailEvent::SendsUpdated);
                         let _ = events_tx.send(MailEvent::SendResult {
                             account: request.account,
                             ok: true,
@@ -314,6 +315,17 @@ impl MailService {
                             message,
                         });
                     }
+                }
+                let _ = self.events_tx.send(MailEvent::SendsUpdated);
+            }
+            UiCommand::CancelSend { id } => {
+                if let Err(e) = self.store.remove_send(id) {
+                    let _ = self.events_tx.send(MailEvent::Error {
+                        account: None,
+                        message: e.to_string(),
+                    });
+                } else {
+                    let _ = self.events_tx.send(MailEvent::SendsUpdated);
                 }
             }
             UiCommand::SaveDraft(request) => match self.store.save_draft(&request) {

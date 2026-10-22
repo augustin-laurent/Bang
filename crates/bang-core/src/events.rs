@@ -83,6 +83,11 @@ pub enum UiCommand {
         /// The email to send.
         request: SendRequest,
     },
+    /// Cancel a pending send by local store id.
+    CancelSend {
+        /// Local store id of the pending send.
+        id: i64,
+    },
     /// Save a draft.
     SaveDraft(SendRequest),
     /// Delete a draft by local store id.
@@ -226,6 +231,8 @@ pub enum MailEvent {
         /// Unix timestamp (seconds) at which the email is sent.
         send_at: i64,
     },
+    /// The pending-sends list changed; the UI should reload it.
+    SendsUpdated,
     /// The drafts list changed; the UI should reload it.
     DraftsUpdated,
     /// The templates list changed; the UI should reload it.

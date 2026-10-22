@@ -12,7 +12,9 @@ use bang_core::events::MailEvent;
 use bang_core::message::{EmailAddress, MessageSummary};
 use bang_core::store::{Store, UNIFIED_INBOX_ID};
 
-use crate::{AttachmentRow, BangApp, DraftRow, FolderRow, MessageRow, TemplateRow};
+use crate::{
+    AttachmentRow, BangApp, DraftRow, FolderRow, MessageRow, PendingSendRow, TemplateRow,
+};
 
 /// Selection state shared between the UI callbacks and the event forwarder.
 pub struct UiState {
@@ -227,6 +229,9 @@ impl UiState {
             MailEvent::TemplatesUpdated => {
                 load_templates(ui, store);
             }
+            MailEvent::SendsUpdated => {
+                load_sends(ui, store);
+            }
             MailEvent::SearchResults { messages, .. } => {
                 let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
                 ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
@@ -376,6 +381,21 @@ pub(crate) fn load_templates(ui: &BangApp, store: &Store) {
         })
         .collect();
     ui.set_templates(slint::ModelRc::new(VecModel::from(rows)));
+}
+
+/// Reload the pending-sends list into the dialog's model.
+pub(crate) fn load_sends(ui: &BangApp, store: &Store) {
+    let rows: Vec<PendingSendRow> = store
+        .get_pending_sends()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| PendingSendRow {
+            id: s.id as i32,
+            title: s.subject.clone().into(),
+            subtitle: format!("{} · {}", s.from, format_date(s.send_at)).into(),
+        })
+        .collect();
+    ui.set_sends(slint::ModelRc::new(VecModel::from(rows)));
 }
 
 fn folder_kind(path: &str) -> &'static str {
