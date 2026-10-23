@@ -164,6 +164,7 @@ fn wire_selection(
                 };
                 if let Some(row) = model.row_data(next) {
                     ui.invoke_message_selected(row.id);
+                    ui.invoke_reveal_message(next as i32);
                 }
             }
         }
@@ -227,7 +228,8 @@ fn wire_selection(
                 Ok(messages) => {
                     ui.set_folder_name(format!("{} {query}", tr("Search:")).into());
                     let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
-                    ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));
+                    state::set_message_rows(&ui, rows);
+                    ui.invoke_reset_message_scroll();
                 }
                 Err(e) => {
                     ui.set_status_message(format!("{} {e}", tr("Search failed:")).into());
@@ -347,7 +349,8 @@ fn load_folder_view(ui: &BangApp, store: &Arc<bang_core::Store>, id: i64) {
     match messages {
         Ok(messages) => {
             let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
-            ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));
+            state::set_message_rows(ui, rows);
+            ui.invoke_reset_message_scroll();
         }
         Err(e) => {
             ui.set_status_message(format!("{} {e}", tr("Folder load failed:")).into());
@@ -490,7 +493,7 @@ fn wire_settings(
                     if let Ok(messages) = store.search_all(&fts_query(query.as_str()), 100) {
                         ui.set_folder_name(format!("{} {query}", tr("Search:")).into());
                         let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
-                        ui.set_messages(slint::ModelRc::new(slint::VecModel::from(rows)));
+                        state::set_message_rows(&ui, rows);
                     }
                 } else {
                     state.reload_messages(&ui, &store);

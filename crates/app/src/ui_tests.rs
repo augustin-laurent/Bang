@@ -265,3 +265,267 @@ fn rapid_message_selection_keeps_ui_stable() {
     );
     ui.hide().unwrap();
 }
+
+#[test]
+fn ten_thousand_messages_materialize_only_visible_rows() {
+    use std::{cell::Cell, rc::Rc};
+    struct LargeMailbox {
+        reads: Cell<usize>,
+        notify: slint::ModelNotify,
+    }
+    impl Model for LargeMailbox {
+        type Data = MessageRow;
+        fn row_count(&self) -> usize {
+            10_000
+        }
+        fn row_data(&self, row: usize) -> Option<MessageRow> {
+            self.reads.set(self.reads.get() + 1);
+            (row < self.row_count()).then(|| MessageRow {
+                id: row as i32 + 1,
+                sender: "Sender".into(),
+                subject: format!("Message {}", row + 1).into(),
+                ..Default::default()
+            })
+        }
+        fn model_tracker(&self) -> &dyn slint::ModelTracker {
+            &self.notify
+        }
+    }
+    let backend = i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    );
+    let logs = backend.debug_logs.clone();
+    slint::platform::set_platform(Box::new(backend)).unwrap();
+    let ui = BangApp::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.set_account_count(1);
+    let mailbox = Rc::new(LargeMailbox {
+        reads: Cell::new(0),
+        notify: Default::default(),
+    });
+    ui.set_messages(mailbox.clone().into());
+    ui.show().unwrap();
+    ui.window().take_snapshot().unwrap();
+    let initial_reads = mailbox.reads.replace(0);
+    assert!(
+        initial_reads < 100,
+        "initial render read {initial_reads} rows"
+    );
+    ui.invoke_reveal_message(9999);
+    ui.window().take_snapshot().unwrap();
+    let seek_reads = mailbox.reads.get();
+    assert!(seek_reads < 100, "direct seek read {seek_reads} rows");
+    let last = ElementHandle::find_by_accessible_label(&ui, "Sender, Message 10000")
+        .next()
+        .unwrap();
+    assert!(last.absolute_position().y >= 53.);
+    assert!(
+        last.absolute_position().y + last.size().height <= 900.,
+        "last row position {:?}, size {:?}",
+        last.absolute_position(),
+        last.size()
+    );
+    let live_rows = ElementHandle::find_by_element_type_name(&ui, "Rectangle")
+        .filter(|e| {
+            e.accessible_label()
+                .is_some_and(|s| s.starts_with("Sender, Message "))
+        })
+        .count();
+    assert!(
+        live_rows <= 12,
+        "instantiated {live_rows} rows for one viewport"
+    );
+    eprintln!("10000 messages: {initial_reads} initial row reads, {seek_reads} seek reads, {live_rows} live delegates");
+    ui.invoke_reset_message_scroll();
+    ui.window().take_snapshot().unwrap();
+    assert!(
+        ElementHandle::find_by_accessible_label(&ui, "Sender, Message 1")
+            .next()
+            .is_some()
+    );
+    assert!(logs.borrow().is_empty(), "{:?}", logs.borrow());
+    ui.hide().unwrap();
+}
+
+#[test]
+fn list_refresh_preserves_visible_delegates_and_scroll() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.set_account_count(1);
+    let mut rows: Vec<_> = (1..=10_000)
+        .map(|id| MessageRow {
+            id,
+            sender: "Sender".into(),
+            subject: format!("Message {id}").into(),
+            ..Default::default()
+        })
+        .collect();
+    crate::state::set_message_rows(&ui, rows.clone());
+    ui.show().unwrap();
+    ui.invoke_reveal_message(4999);
+    let visible = ElementHandle::find_by_accessible_label(&ui, "Sender, Message 5000")
+        .next()
+        .unwrap();
+    let y = visible.absolute_position().y;
+    let model = ui.get_messages();
+    rows[4999].starred = true;
+    crate::state::set_message_rows(&ui, rows.clone());
+    assert!(ui.get_messages() == model);
+    assert!(visible.is_valid());
+    assert_eq!(visible.absolute_position().y, y);
+    // A new head row and eviction of the oldest row preserve the viewport.
+    rows.insert(
+        0,
+        MessageRow {
+            id: 10_001,
+            sender: "New sender".into(),
+            ..Default::default()
+        },
+    );
+    rows.pop();
+    crate::state::set_message_rows(&ui, rows.clone());
+    ElementHandle::find_by_accessible_label(&ui, "Sender, Message 5000")
+        .next()
+        .unwrap();
+    assert!(visible.is_valid());
+    assert_eq!(visible.absolute_position().y, y);
+    rows.remove(0);
+    crate::state::set_message_rows(&ui, rows);
+    ElementHandle::find_by_accessible_label(&ui, "Sender, Message 5000")
+        .next()
+        .unwrap();
+    assert!(visible.is_valid());
+    assert_eq!(visible.absolute_position().y, y);
+    crate::state::set_message_rows(&ui, Vec::new());
+    assert_eq!(model.row_count(), 0);
+    ui.hide().unwrap();
+}
+
+#[test]
+fn sync_events_keep_a_sorted_bounded_model_and_clear_removed_selection() {
+    use bang_core::{
+        AccountConfig, AccountId, AuthMethod, EmailAddress, Folder, ImapConfig, MailEvent,
+        MessageFlags, MessageSummary, SmtpConfig, TlsMode,
+    };
+    use std::sync::atomic::Ordering;
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
+    store
+        .save_account(&AccountConfig {
+            id: AccountId("test".into()),
+            email: "test@example.test".into(),
+            imap: ImapConfig {
+                host: "localhost".into(),
+                port: 143,
+                tls: TlsMode::Plaintext,
+            },
+            smtp: SmtpConfig {
+                host: "localhost".into(),
+                port: 25,
+                tls: TlsMode::Plaintext,
+            },
+            auth: AuthMethod::Password {
+                username: "test".into(),
+                password: "test".into(),
+            },
+        })
+        .unwrap();
+    store
+        .upsert_folder(&Folder {
+            id: 0,
+            account_id: "test".into(),
+            path: "INBOX".into(),
+            name: "INBOX".into(),
+            unread: 0,
+        })
+        .unwrap();
+    let folder_id = store.get_folders("test").unwrap()[0].id;
+    let mut summary = MessageSummary {
+        id: 0,
+        account_id: "test".into(),
+        folder_id,
+        uid: 0,
+        message_id: String::new(),
+        from: EmailAddress {
+            name: "Sender".into(),
+            address: "sender@example.test".into(),
+        },
+        to: vec![],
+        cc: vec![],
+        subject: "Message".into(),
+        date: 0,
+        flags: MessageFlags::empty(),
+        preview: String::new(),
+        has_attachments: false,
+    };
+    for uid in 1..=225 {
+        summary.uid = uid;
+        summary.date = uid as i64;
+        summary.id = store.upsert_message(&summary).unwrap();
+    }
+    let state = crate::state::UiState::new();
+    state.selected_folder.store(folder_id, Ordering::SeqCst);
+    state.reload_messages(&ui, &store);
+    let model = ui.get_messages();
+    let head = model.row_data(0).unwrap().id;
+    assert_eq!(model.row_count(), 200);
+    // Repeat an append event: the store is authoritative, not the event order.
+    for _ in 0..2 {
+        state.apply(
+            &ui,
+            &store,
+            MailEvent::MessagesAppended {
+                account: AccountId("test".into()),
+                folder_id,
+                messages: vec![summary.clone()],
+            },
+        );
+        assert!(ui.get_messages() == model);
+        assert_eq!(model.row_count(), 200);
+    }
+    let folders = ui.get_folders();
+    summary.uid = 226;
+    summary.date = 0;
+    summary.id = store.upsert_message(&summary).unwrap();
+    state.apply(
+        &ui,
+        &store,
+        MailEvent::MessagesAppended {
+            account: AccountId("test".into()),
+            folder_id,
+            messages: vec![summary],
+        },
+    );
+    assert_eq!(model.row_data(0).unwrap().id, head);
+    assert!(ui.get_folders() == folders);
+    store
+        .set_message_flags(&[i64::from(head)], MessageFlags::SEEN, true)
+        .unwrap();
+    state.apply(
+        &ui,
+        &store,
+        MailEvent::MessagesUpdated {
+            account: AccountId("test".into()),
+            folder_id,
+            message_ids: vec![i64::from(head)],
+        },
+    );
+    assert!(ui.get_messages() == model);
+    assert!(!model.row_data(0).unwrap().unread);
+    state
+        .selected_message
+        .store(i64::from(head), Ordering::SeqCst);
+    ui.set_selected_message(head);
+    store.snooze_messages(&[i64::from(head)], i64::MAX).unwrap();
+    state.reload_messages(&ui, &store);
+    assert_eq!(ui.get_selected_message(), -1);
+    assert_eq!(state.selected_message.load(Ordering::SeqCst), -1);
+    assert_eq!(model.row_count(), 200);
+    assert!(!model.iter().any(|row| row.id == head));
+}

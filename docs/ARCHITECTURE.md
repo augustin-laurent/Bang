@@ -207,6 +207,25 @@ viewing the affected folder. `main.rs` wires the window callbacks (folder
 selection, message selection, search, the wizard, compose, settings) to the
 store and the `Bridge`.
 
+### List rendering
+
+The message list keeps 90-pixel rows and lets Slint manage the virtual content
+height, preserving its fast path for distant seeks. Horizontal scrolling is
+disabled. Keyboard navigation reveals the selected row; changing folders or
+search queries resets the scroll position.
+
+Message and folder refreshes reconcile stable identity keys in the existing
+`VecModel`: unchanged rows emit no updates, changed rows update in place, and
+arrivals/removals preserve surviving delegates and their viewport. Reordering a
+view resets its contents once. Account headers use the account id in their key.
+Append events reload the sorted cache view, capped at 200 messages, so repeated
+events cannot duplicate entries or grow the model indefinitely. This cap is
+independent of rendering virtualization; older server mail still needs paging.
+
+UI regression tests render a synthetic 10,000-message model, bound the number of
+model reads and live delegates for initial rendering and direct seeks, and check
+viewport preservation during flag changes, arrivals and removals.
+
 ### Reading the store directly
 
 For folder contents the UI reads the local store directly (no

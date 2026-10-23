@@ -6,14 +6,30 @@ export component MessageList inherits Rectangle {
     in property <[MessageRow]> messages;
     in property <int> selected-message: -1;
     private property <length> swipe-threshold: 60px;
+    private property <length> row-height: 90px;
+    public function reset-scroll() { list.content-y = 0px; }
+    public function reveal-row(index: int) {
+        if index < 0 || index >= root.messages.length { return; }
+        let top = index * root.row-height;
+        let bottom = top + root.row-height;
+        if top < -list.content-y { list.content-y = -top; }
+        else if bottom > -list.content-y + list.visible-height {
+            // Slint rounds distant seeks to rows; round toward visibility.
+            list.content-y = -ceil((bottom - list.visible-height) / root.row-height) * root.row-height;
+        }
+        list.content-y = clamp(list.content-y, -ceil(max(0px, list.content-height - list.visible-height) / root.row-height) * root.row-height, 0px);
+    }
     callback message-clicked(int);
     callback message-action(int, string);
     list := ListView {
         // GTK may deliver events before the first size allocation. Preserve
         // the ScrollView minimum so its inset viewport never becomes negative.
         height: max(50px, root.height);
+        content-width: self.visible-width;
+        // ListView must own content-height to skip rows on distant seeks.
+        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
         for msg in root.messages: Rectangle {
-            height: 90px;
+            height: root.row-height;
             background: Theme.bg;
             Rectangle {
                 x: 6px; y: 3px; width: parent.width - 12px; height: 84px;

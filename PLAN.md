@@ -209,7 +209,7 @@ OAuth tokens live in the DB, file perms `0600` (MVP); `keyring` integration is a
 | # | Commit |
 |---|---|
 | 38 | `perf(core): metadata-only sync and lazy body fetch` — completed |
-| 39 | `perf(ui): list virtualization tuning` |
+| 39 | `perf(ui): list virtualization tuning` — completed |
 | 40 | `build: package deb/rpm/appimage` |
 | 41 | `feat(ui): tray icon and autostart` |
 | 42 | `ci: ubuntu build and package pipeline` |

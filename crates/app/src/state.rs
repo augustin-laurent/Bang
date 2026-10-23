@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
 
 use chrono::TimeZone;
-use slint::{Model, VecModel};
+use slint::{Model, ModelRc, VecModel};
 
 use bang_core::events::MailEvent;
 use bang_core::message::{EmailAddress, MessageSummary};
@@ -64,7 +64,7 @@ impl UiState {
                 set_message_header(ui, summary);
             }
             let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
-            ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
+            set_message_rows(ui, rows);
         }
     }
 
@@ -108,7 +108,11 @@ impl UiState {
                 }
             }
         }
-        ui.set_folders(slint::ModelRc::new(VecModel::from(rows)));
+        let old = ui.get_folders();
+        let model = reconcile_rows(&old, rows, |r| (r.is_header, r.account_id.clone(), r.id));
+        if model != old {
+            ui.set_folders(model);
+        }
     }
 
     /// Apply a core event to the window.
@@ -154,18 +158,10 @@ impl UiState {
                 if self.search_active.load(Ordering::SeqCst) {
                     return;
                 }
-                if selected == UNIFIED_INBOX_ID {
-                    // It spans every account's INBOX, so append is not enough.
+                if selected == UNIFIED_INBOX_ID || selected == folder_id {
+                    // Reconcile the bounded, date-sorted cache view. Repeated
+                    // append events must not duplicate rows or grow it forever.
                     self.reload_messages(ui, store);
-                    return;
-                }
-                if selected != folder_id {
-                    return;
-                }
-                // Newest first: insert at the front.
-                let model = ui.get_messages();
-                for msg in messages.iter().rev() {
-                    let _ = model.insert_row(0, to_row(msg));
                 }
             }
             MailEvent::MessagesUpdated { folder_id, .. } => {
@@ -199,6 +195,13 @@ impl UiState {
                 ui.set_message_sender(display_name(&message.summary.from).into());
                 ui.set_message_subject(message.summary.subject.clone().into());
                 ui.set_message_date(format_date(message.summary.date).into());
+                let model = ui.get_messages();
+                if let Some(index) = model.iter().position(|r| i64::from(r.id) == message.summary.id) {
+                    let row = to_row(&message.summary);
+                    if model.row_data(index).as_ref() != Some(&row) {
+                        model.set_row_data(index, row);
+                    }
+                }
                 // HTML-only messages are rendered as structured text.
                 ui.set_message_body(if message.body_text.is_empty() {
                     bang_core::mime::render_html_subset(&message.body_html).into()
@@ -234,7 +237,7 @@ impl UiState {
             }
             MailEvent::SearchResults { messages, .. } => {
                 let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
-                ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
+                set_message_rows(ui, rows);
             }
             MailEvent::SendResult { ok, error, .. } => {
                 crate::composer::send_result(ok, error.clone());
@@ -252,6 +255,58 @@ impl UiState {
             }
         }
     }
+}
+
+/// Refresh message rows without replacing the model or unchanged delegates.
+pub(crate) fn set_message_rows(ui: &BangApp, rows: Vec<MessageRow>) {
+    let old = ui.get_messages();
+    let model = reconcile_rows(&old, rows, |r| r.id);
+    if model != old {
+        ui.set_messages(model);
+    }
+}
+
+// Keep surviving rows in place for flag updates, arrivals and deletions.
+// A different ordering (e.g. a new search ranking) needs one model reset.
+fn reconcile_rows<T, K>(current: &ModelRc<T>, rows: Vec<T>, key: impl Fn(&T) -> K) -> ModelRc<T>
+where
+    T: Clone + PartialEq + 'static,
+    K: Clone + Eq + std::hash::Hash,
+{
+    let Some(model) = current.as_any().downcast_ref::<VecModel<T>>() else {
+        return ModelRc::new(VecModel::from(rows));
+    };
+    let old_keys: Vec<_> = model.iter().map(|r| key(&r)).collect();
+    let new_keys: Vec<_> = rows.iter().map(&key).collect();
+    let old_set: HashSet<_> = old_keys.iter().cloned().collect();
+    let new_set: HashSet<_> = new_keys.iter().cloned().collect();
+    if (!old_keys.is_empty() && !new_keys.is_empty() && old_set.is_disjoint(&new_set))
+        || old_set.len() != old_keys.len()
+        || new_set.len() != new_keys.len()
+        || !old_keys
+            .iter()
+            .filter(|k| new_set.contains(*k))
+            .eq(new_keys.iter().filter(|k| old_set.contains(*k)))
+    {
+        model.set_vec(rows);
+        return current.clone();
+    }
+    for index in (0..old_keys.len()).rev() {
+        if !new_set.contains(&old_keys[index]) {
+            model.remove(index);
+        }
+    }
+    for (index, row) in rows.into_iter().enumerate() {
+        match model.row_data(index) {
+            Some(old) if key(&old) == key(&row) => {
+                if old != row {
+                    model.set_row_data(index, row);
+                }
+            }
+            _ => model.insert(index, row),
+        }
+    }
+    current.clone()
 }
 
 /// Convert a message summary to a list row.
@@ -420,5 +475,55 @@ mod presentation_tests {
         assert_eq!(super::folder_kind("INBOX"), "inbox");
         assert_eq!(super::folder_kind("[Gmail]/Sent"), "sent");
         assert_eq!(super::folder_kind("My projects"), "folder");
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[test]
+    fn reconcile_matches_snapshots_across_updates_and_view_changes() {
+        let mut model = ModelRc::new(VecModel::from(vec![(1, false), (2, false), (3, false)]));
+        let original = model.clone();
+        for rows in [
+            vec![(1, false), (2, true), (3, false)],
+            vec![(4, false), (1, false), (2, true)],
+            vec![(4, false), (2, false)],
+            vec![(2, false), (4, false)],
+            vec![],
+            vec![(7, true)],
+            vec![(8, false), (9, true)],
+        ] {
+            model = reconcile_rows(&model, rows.clone(), |r| r.0);
+            assert!(model == original);
+            assert_eq!(model.iter().collect::<Vec<_>>(), rows);
+        }
+    }
+
+    #[test]
+    fn folder_header_identity_includes_account() {
+        let rows = vec![
+            FolderRow {
+                id: -1,
+                is_header: true,
+                account_id: "personal".into(),
+                ..Default::default()
+            },
+            FolderRow {
+                id: -1,
+                is_header: true,
+                account_id: "work".into(),
+                ..Default::default()
+            },
+        ];
+        let model = ModelRc::new(VecModel::from(rows.clone()));
+        let mut updated = rows;
+        updated[1].status = "Syncing".into();
+        let next = reconcile_rows(&model, updated.clone(), |r| {
+            (r.is_header, r.account_id.clone(), r.id)
+        });
+        assert!(next == model);
+        assert_eq!(model.iter().collect::<Vec<_>>(), updated);
     }
 }
