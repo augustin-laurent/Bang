@@ -9,6 +9,9 @@ export component MessageList inherits Rectangle {
     callback message-clicked(int);
     callback message-action(int, string);
     list := ListView {
+        // GTK may deliver events before the first size allocation. Preserve
+        // the ScrollView minimum so its inset viewport never becomes negative.
+        height: max(50px, root.height);
         for msg in root.messages: Rectangle {
             height: 90px;
             background: Theme.bg;

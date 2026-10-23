@@ -141,3 +141,127 @@ fn native_navigation_resize_and_grouping() {
     state.apply(&ui, &store, bang_core::MailEvent::MessageLoaded { message });
     assert_eq!(ui.get_selected_message(), -1);
 }
+
+#[test]
+fn rapid_message_selection_keeps_ui_stable() {
+    use std::sync::atomic::Ordering;
+    let backend = i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    );
+    let logs = backend.debug_logs.clone();
+    slint::platform::set_platform(Box::new(backend)).unwrap();
+    let ui = BangApp::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.set_account_count(1);
+    let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let state = std::rc::Rc::new(crate::state::UiState::new());
+    let messages: Vec<bang_core::MessageFull> = (1..=200).map(|id| {
+        serde_json::from_value(serde_json::json!({
+            "summary": {"id":id,"account_id":"test","folder_id":1,
+                "uid":id,"message_id":"test","from":{"name":"Camille","address":"camille@example.test"},
+                "to":[],"cc":[],"subject":format!("Message {id}"),"date":0,"flags":"",
+                "preview":"Preview","has_attachments":false},
+            "body_text":"A long body\n".repeat(id as usize * 5),
+            "body_html":if id % 2 == 0 { "<p>HTML mail</p>" } else { "" },
+            "attachments":if id % 3 == 0 { serde_json::json!([{
+                "id":1,"message_id":id,"filename":"report.pdf","content_type":"application/pdf",
+                "size":42,"path":"","content_id":"","disposition":"attachment"
+            }]) } else { serde_json::json!([]) }
+        })).unwrap()
+    }).collect();
+    ui.set_messages(slint::ModelRc::new(VecModel::from(
+        messages
+            .iter()
+            .map(|m| crate::state::to_row(&m.summary))
+            .collect::<Vec<_>>(),
+    )));
+    // GTK can instantiate the populated list before assigning its real size.
+    ui.window().dispatch_event(WindowEvent::Resized {
+        size: LogicalSize::new(1., 1.),
+    });
+    ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(0., 0.),
+    });
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.on_message_selected({
+        let weak = ui.as_weak();
+        let state = state.clone();
+        move |id| {
+            let ui = weak.upgrade().unwrap();
+            state
+                .selected_message
+                .store(i64::from(id), Ordering::SeqCst);
+            ui.set_selected_message(id);
+            ui.set_message_attachments(slint::ModelRc::default());
+            ui.set_message_loading(true);
+            ui.set_message_body("".into());
+        }
+    });
+    ui.show().unwrap();
+    for width in [1440., 1024., 720.] {
+        ui.window().set_size(LogicalSize::new(width, 900.));
+        for id in [1, 2, 3, 4, 1, 3, 2, 4] {
+            // Escape returns to the list when using the narrow layout.
+            ui.window().dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Escape.into(),
+            });
+            ElementHandle::find_by_accessible_label(&ui, &format!("Camille, Message {id}"))
+                .next()
+                .unwrap()
+                .mock_single_click(PointerEventButton::Left);
+            assert_eq!(ui.get_selected_message(), id);
+            ui.window().take_snapshot().unwrap();
+            state.apply(
+                &ui,
+                &store,
+                bang_core::MailEvent::MessageLoaded {
+                    message: messages[id as usize - 1].clone(),
+                },
+            );
+            // Read/unread events rebuild the list model while keeping its viewport.
+            ui.set_messages(slint::ModelRc::new(VecModel::from(
+                messages
+                    .iter()
+                    .map(|m| crate::state::to_row(&m.summary))
+                    .collect::<Vec<_>>(),
+            )));
+            ui.window().take_snapshot().unwrap();
+        }
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        ui.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(if width >= 1120. { 350. } else { 100. }, 200.),
+            delta_x: 0.,
+            delta_y: -1800.,
+        });
+        ui.window().take_snapshot().unwrap();
+        for _ in 0..8 {
+            ui.set_messages(slint::ModelRc::new(VecModel::from(
+                messages
+                    .iter()
+                    .map(|m| crate::state::to_row(&m.summary))
+                    .collect::<Vec<_>>(),
+            )));
+            ui.window().take_snapshot().unwrap();
+        }
+        ui.window().dispatch_event(WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(if width >= 1120. { 350. } else { 100. }, 200.),
+            delta_x: 0.,
+            delta_y: 20000.,
+        });
+    }
+    assert!(
+        !logs
+            .borrow()
+            .iter()
+            .any(|log| log.contains("long callback/instantiation chain")),
+        "{:?}",
+        logs.borrow()
+    );
+    ui.hide().unwrap();
+}
