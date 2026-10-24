@@ -6,12 +6,14 @@
 #![warn(missing_docs)]
 
 pub mod account;
+pub mod avatars;
 pub mod error;
 pub mod events;
 pub mod imap;
 pub mod message;
 pub mod mime;
 pub mod oauth;
+pub mod organization;
 pub mod service;
 pub mod smtp;
 pub mod store;

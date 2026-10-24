@@ -1,0 +1,67 @@
+import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
+import { ComboBox, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+import { LabelRow } from "models.slint";
+export component OrganizationDialog inherits Rectangle {
+    in property <bool> open;
+    in-out property <bool> managing: false;
+    in property <[LabelRow]> labels;
+    in-out property <int> category-index: 0;
+    in property <string> effective-category;
+    in property <bool> message-override;
+    in property <bool> sender-override;
+    in property <string> error;
+    private property <int> scope-index: 0;
+    private property <int> edit-id: -1;
+    private property <string> edit-name;
+    private property <int> edit-color: 0;
+    callback category-saved(int, bool);
+    callback label-assigned(int, bool);
+    callback label-saved(int, string, string);
+    callback label-deleted(int);
+    callback close;
+    changed open => { if self.open { self.scope-index = 0; self.edit-id = -1; self.edit-name = ""; self.edit-color = 0; } }
+    visible: root.open; background: #00000044; TouchArea { }
+    Rectangle {
+        width: min(520px, parent.width - 40px); height: min(620px, parent.height - 32px);
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        background: Theme.bg; border-radius: 16px;
+        VerticalLayout { padding: 24px; spacing: 12px;
+            Text { text: root.managing ? @tr("Manage labels") : @tr("Classify message"); color: Theme.text; font-size: 20px; font-weight: 600; }
+            if !root.managing: VerticalLayout { spacing: 8px;
+                Text { text: @tr("Category") + ": " + root.effective-category; color: Theme.text-secondary; font-size: 12px; }
+                if root.message-override || root.sender-override: Text { text: root.message-override ? @tr("This message has its own category correction.") : @tr("A sender rule applies to this message."); color: Theme.text-secondary; font-size: 11px; wrap: word-wrap; }
+                ComboBox { model: [@tr("Automatic"), @tr("Primary"), @tr("Transactions"), @tr("Updates"), @tr("Promotions")]; current-index <=> root.category-index; }
+                ComboBox { model: [@tr("This message"), @tr("All messages from this sender")]; current-index <=> root.scope-index; }
+                ActionButton { modal: true; framed: true; text: @tr("Apply category"); clicked => { root.category-saved(root.category-index, root.scope-index == 1); } }
+            }
+            HorizontalLayout {
+                Text { text: @tr("Labels"); color: Theme.text; font-weight: 600; vertical-alignment: center; }
+                if !root.managing: ActionButton { modal: true; text: @tr("Manage labels"); clicked => { root.managing = true; } }
+            }
+            ScrollView { min-height: 60px; vertical-stretch: 1; content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout { width: parent.width; height: self.preferred-height; spacing: 5px;
+                    if root.labels.length == 0: Text { text: @tr("No labels yet"); color: Theme.text-secondary; font-size: 13px; }
+                    for label in root.labels: HorizontalLayout { height: 34px; spacing: 8px;
+                        Rectangle { width: 10px; Rectangle { width: 10px; height: 10px; y: (parent.height - self.height) / 2; border-radius: 5px; background: label.tint; } }
+                        if !root.managing: CheckBox { text: label.name; checked: label.assigned; toggled => { root.label-assigned(label.id, self.checked); } }
+                        if root.managing: Text { text: label.name; color: Theme.text; overflow: elide; vertical-alignment: center; }
+                        if root.managing: ActionButton { modal: true; compact: true; text: @tr("Edit label"); icon: @image-url("icons/compose.svg"); clicked => { root.edit-id = label.id; root.edit-name = label.name; root.edit-color = label.color-index; } }
+                        if root.managing: ActionButton { modal: true; compact: true; text: @tr("Delete label"); icon: @image-url("icons/trash.svg"); clicked => { root.label-deleted(label.id); } }
+                    }
+                }
+            }
+            if root.managing: VerticalLayout { spacing: 8px;
+                Text { text: root.edit-id < 0 ? @tr("New label") : @tr("Edit label"); color: Theme.text; font-size: 13px; font-weight: 600; }
+                LineEdit { accessible-label: @tr("Label name"); placeholder-text: @tr("Label name"); text <=> root.edit-name; }
+                ComboBox { model: [@tr("Blue"), @tr("Green"), @tr("Orange"), @tr("Red"), @tr("Purple"), @tr("Gray")]; current-index <=> root.edit-color; }
+                HorizontalLayout { spacing: 8px;
+                    ActionButton { modal: true; framed: true; enabled: root.edit-name != ""; text: @tr("Save label"); clicked => { root.label-saved(root.edit-id, root.edit-name, root.edit-color == 1 ? "#30845b" : root.edit-color == 2 ? "#b96c17" : root.edit-color == 3 ? "#ba4655" : root.edit-color == 4 ? "#8555a6" : root.edit-color == 5 ? "#6b7280" : "#3977b8"); } }
+                    ActionButton { modal: true; text: @tr("New label"); clicked => { root.edit-id = -1; root.edit-name = ""; root.edit-color = 0; } }
+                }
+            }
+            if root.error != "": Text { text: root.error; color: Theme.danger; wrap: word-wrap; font-size: 12px; }
+            ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
+        }
+    }
+}

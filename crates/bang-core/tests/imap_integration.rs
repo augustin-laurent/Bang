@@ -358,14 +358,14 @@ fn handle_uid_fetch(
                 "Bob", "bob",
                 msg.from_addr,
             );
-            write_line(
-                writer,
-                &format!(
-                    "* {seq} FETCH (UID {uid} FLAGS ({}) INTERNALDATE \"{date}\" ENVELOPE {envelope} RFC822.SIZE {})",
-                    imap_flags(msg.flags),
-                    msg.raw.len(),
-                ),
-            );
+            let prefix = format!("* {seq} FETCH (UID {uid} FLAGS ({}) INTERNALDATE \"{date}\" ENVELOPE {envelope} RFC822.SIZE {}", imap_flags(msg.flags), msg.raw.len());
+            if query.contains("HEADER.FIELDS") {
+                let raw = String::from_utf8_lossy(&msg.raw);
+                let headers = raw.split("\r\n\r\n").next().unwrap_or("").lines().filter(|line| ["list-id:","list-unsubscribe:","precedence:","auto-submitted:"].iter().any(|field|line.to_ascii_lowercase().starts_with(field))).collect::<Vec<_>>().join("\r\n") + "\r\n\r\n";
+                write!(writer,"{prefix} BODY[HEADER.FIELDS (LIST-ID LIST-UNSUBSCRIBE PRECEDENCE AUTO-SUBMITTED)] {{{}}}\r\n",headers.len())?;
+                writer.write_all(headers.as_bytes())?;
+                writer.write_all(b")\r\n")?;
+            } else {write_line(writer,&format!("{prefix})"));}
         }
     }
     write_line(writer, &format!("{tag} OK UID FETCH completed"));
@@ -677,6 +677,50 @@ fn delete_removes_message_from_server_and_store() {
     cmd_tx.send(SyncerCommand::Quit).unwrap();
 }
 
+#[test]
+fn encoded_metadata_and_body_are_decoded_over_imap() {
+    let mut encoded = msg(
+        1,
+        "=?UTF-8?Q?S=C3=A9curit=C3=A9_d=C3=A9j=C3=A0?=",
+        MessageFlags::empty(),
+    );
+    encoded.from_name = "=?UTF-8?B?T3Bow6lsaWU=?=".into();
+    encoded.raw = b"From: =?UTF-8?Q?Oph=C3=A9lie?= <alice@bang.test>\r\nTo: =?ISO-8859-1?Q?Andr=E9?= <andre@bang.test>\r\nSubject: =?UTF-8?Q?S=C3=A9curit=C3=A9_d=C3=A9j=C3=A0?=\r\nContent-Type: text/plain; charset=windows-1252\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nJusqu=92=E0 30 =80\r\n".to_vec();
+    let server = MiniImap::start(vec![
+        ("INBOX".into(), vec![encoded]),
+        ("Messages envoy&AOk-s".into(), vec![]),
+    ]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folders = store.get_folders("test@bang.test").unwrap();
+    let sent = folders
+        .iter()
+        .find(|f| f.path == "Messages envoy&AOk-s")
+        .unwrap();
+    assert_eq!(sent.name, "Messages envoyés");
+    let inbox = folders.iter().find(|f| f.path == "INBOX").unwrap();
+    let summary = store.get_messages(inbox.id, 10).unwrap().remove(0);
+    assert_eq!(summary.subject, "Sécurité déjà");
+    assert_eq!(summary.from.name, "Ophélie");
+    tx.send(SyncerCommand::FetchBody {
+        message_id: summary.id,
+    })
+    .unwrap();
+    let event = wait_for_event(&mut events, Duration::from_secs(15), |e| {
+        matches!(e, MailEvent::MessageLoaded { .. })
+    })
+    .expect("body fetch");
+    if let MailEvent::MessageLoaded { message } = event {
+        assert_eq!(message.summary.to[0].name, "André");
+        assert!(message.body_text.contains("Jusqu’à 30 €"));
+        assert!(message.summary.preview.contains("Jusqu’à 30 €"));
+        let cached = store.get_message_full(summary.id).unwrap().unwrap();
+        assert_eq!(cached.summary.to, message.summary.to);
+        assert_eq!(cached.body_text, message.body_text);
+    }
+    tx.send(SyncerCommand::Quit).unwrap();
+}
+
 
 #[test]
 fn sync_fetches_metadata_only_and_preserves_lazy_cache_on_flag_refresh() {
@@ -698,7 +742,7 @@ fn sync_fetches_metadata_only_and_preserves_lazy_cache_on_flag_refresh() {
         .unwrap()
         .commands
         .iter()
-        .all(|c| !c.contains("BODY")));
+        .all(|c| !c.contains("BODY.PEEK[]") && !c.contains("BODY.PEEK[TEXT]")));
 
     tx.send(SyncerCommand::FetchBody {
         message_id: summary.id,
@@ -729,8 +773,8 @@ fn sync_fetches_metadata_only_and_preserves_lazy_cache_on_flag_refresh() {
     assert!(commands.iter().any(|c| c == "UID FETCH 1 (UID FLAGS)"));
     assert!(commands
         .iter()
-        .any(|c| c == "UID FETCH 2:2 (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)"));
-    assert!(commands.iter().all(|c| !c.contains("BODY")));
+        .any(|c| c == "UID FETCH 2:2 (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (LIST-ID LIST-UNSUBSCRIBE PRECEDENCE AUTO-SUBMITTED)])"));
+    assert!(commands.iter().all(|c| !c.contains("BODY.PEEK[]") && !c.contains("BODY.PEEK[TEXT]")));
 
     // A flags-only update with no new UID must not refetch any envelope.
     let checkpoint = server.state.lock().unwrap().commands.len();
@@ -1021,4 +1065,19 @@ fn interactive_fetch_refuses_a_reused_uid_before_background_resync() {
         .commands
         .iter()
         .any(|c| c.contains("BODY.PEEK[]")));
+}
+
+#[test]
+fn list_headers_classify_without_fetching_a_body() {
+    let mut message=msg(1,"Project briefing",MessageFlags::empty());
+    message.raw=[b"List-Id: <weekly.bang.test>\r\nList-Unsubscribe: <https://example.com/unsubscribe>\r\n".as_slice(),&message.raw].concat();
+    let server=MiniImap::start(vec![("INBOX".into(),vec![message])]);
+    let store=Arc::new(Store::open_in_memory().unwrap());
+    let (tx,_events)=start_and_connect(&server,store.clone());
+    let message=store.get_unified_inbox(10).unwrap().remove(0);
+    assert_eq!(store.message_organization(message.id).unwrap().category,bang_core::organization::MailCategory::Updates);
+    assert!(store.get_message_full(message.id).unwrap().is_none());
+    assert!(server.state.lock().unwrap().commands.iter().any(|c|c.contains("BODY.PEEK[HEADER.FIELDS")));
+    assert!(server.state.lock().unwrap().commands.iter().all(|c|!c.contains("BODY.PEEK[]")));
+    tx.send(SyncerCommand::Quit).unwrap();
 }

@@ -14,7 +14,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
         )))
         .map_err(|e| slint::PlatformError::Other(e.to_string()))?;
     }
+    if std::env::var_os("BANG_SNAPSHOT").is_none() { crate::gtk_host::init()?; }
     let ui = BangApp::new()?;
+    if std::env::var_os("BANG_SNAPSHOT").is_none() { crate::gtk_host::attach(&ui, None, None); }
     crate::i18n::select(&std::env::var("BANG_LANGUAGE").unwrap_or("fr".into()));
     Theme::get(&ui).set_dark(std::env::var("BANG_THEME").unwrap_or_default() == "dark");
     Theme::get(&ui).invoke_sync_palette();
@@ -76,24 +78,45 @@ pub fn run() -> Result<(), slint::PlatformError> {
         "Retour utilisateur",
         "Prochaines étapes",
     ];
-    let rows:Vec<_>=names.iter().enumerate().map(|(i,name)|MessageRow {id:i as i32+1,sender:(*name).into(),subject:subjects[i].into(),date:if i==0 {"10:42".into()}else if i==1 {"09:18".into()}else {"31/10/2026".into()},preview:"Voici un récapitulatif des dernières pistes que nous avons évoquées, avec quelques ajustements…".into(),unread:i==1||i==2,..Default::default()}).collect();
+    let rows:Vec<_>=names.iter().enumerate().map(|(i,name)|MessageRow {id:i as i32+1,sender:(*name).into(),sender_address:format!("sender{i}@example.test").into(),initials:crate::avatars::initials(name, "").into(),avatar_tint:crate::avatars::tint(&format!("sender{i}@example.test")),subject:subjects[i].into(),date:if i==0 {"10:42".into()}else if i==1 {"09:18".into()}else {"31/10/2026".into()},preview:"Voici un récapitulatif des dernières pistes que nous avons évoquées, avec quelques ajustements…".into(),unread:i==1||i==2,..Default::default()}).collect();
     ui.set_messages(slint::ModelRc::new(VecModel::from(rows)));
     ui.set_message_sender(names[0].into());
     ui.set_message_subject(subjects[0].into());
     ui.set_message_recipients("augustin@example.fr".into());
     ui.set_message_initials("CM".into());
+    ui.set_message_avatar_tint(crate::avatars::tint("sender0@example.test"));
+    ui.set_categories_visible(true);
+    ui.set_categories(slint::ModelRc::new(VecModel::from(vec![
+        crate::CategoryRow{key:"".into(),name:crate::i18n::tr("All").into(),short_name:crate::i18n::tr("All").into(),unread:2},
+        crate::CategoryRow{key:"primary".into(),name:crate::i18n::tr("Primary").into(),short_name:crate::i18n::tr("Primary").into(),unread:1},
+        crate::CategoryRow{key:"transactions".into(),name:crate::i18n::tr("Transactions").into(),short_name:crate::i18n::tr("Orders").into(),unread:0},
+        crate::CategoryRow{key:"updates".into(),name:crate::i18n::tr("Updates").into(),short_name:crate::i18n::tr("Updates").into(),unread:1},
+        crate::CategoryRow{key:"promotions".into(),name:crate::i18n::tr("Promotions").into(),short_name:crate::i18n::tr("Offers").into(),unread:0},
+    ])));
+    ui.set_labels(slint::ModelRc::new(VecModel::from(vec![
+        crate::LabelRow{id:1,name:"Travail".into(),tint:crate::organization::color("#3977b8"),assigned:true,..Default::default()},
+        crate::LabelRow{id:2,name:"Personnel".into(),tint:crate::organization::color("#30845b"),color_index:1,..Default::default()},
+    ])));
     ui.set_message_date("10:42".into());
     ui.set_message_body("Bonjour Augustin,\n\nVoici un récapitulatif des dernières pistes que nous avons évoquées, avec quelques ajustements sur les proportions finales. L’ensemble reste volontairement sobre pour conserver une navigation lisible et agréable au quotidien.\n\nN’hésite pas à me dire ce que tu en penses et si tu vois d’autres points à affiner avant la prochaine itération.\n\nÀ bientôt,\nCamille".into());
     ui.set_settings_accounts(slint::ModelRc::new(VecModel::from(vec![
         AccountRow {
+            provider: "".into(),
             id: "1".into(),
             email: "augustin@example.fr".into(),
         },
         AccountRow {
+            provider: "".into(),
             id: "2".into(),
             email: "augustin@atelier.example".into(),
         },
     ])));
+    let weak=ui.as_weak();
+    ui.on_category_selected(move|key|{if let Some(ui)=weak.upgrade(){ui.set_selected_category(key);}});
+    let weak=ui.as_weak();
+    ui.on_organization_opened(move|manage|{if let Some(ui)=weak.upgrade(){ui.set_managing_labels(manage);ui.set_organization_effective(crate::i18n::tr("Primary").into());ui.set_organization_open(true);}});
+    let weak=ui.as_weak();
+    ui.on_organization_close(move||{if let Some(ui)=weak.upgrade(){ui.set_organization_open(false);}});
     let weak = ui.as_weak();
     ui.on_settings_opened(move || {
         if let Some(ui) = weak.upgrade() {
@@ -121,6 +144,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     });
     let weak = ui.as_weak();
+    ui.on_wizard_provider_selected(move |provider| {
+        if let Some(ui) = weak.upgrade() { crate::accounts::select_provider(&ui, &provider); }
+    });
+    let weak = ui.as_weak();
     ui.on_wizard_cancel(move || {
         if let Some(ui) = weak.upgrade() {
             ui.set_wizard_open(false);
@@ -128,8 +155,27 @@ pub fn run() -> Result<(), slint::PlatformError> {
     });
     if let Ok(surface) = std::env::var("BANG_SURFACE") {
         ui.set_settings_open(surface == "settings");
+        ui.set_organization_open(surface == "organization" || surface == "labels");
+        ui.set_managing_labels(surface == "labels");
+        ui.set_organization_effective(crate::i18n::tr("Primary").into());
         ui.set_wizard_open(surface.starts_with("wizard"));
         ui.set_wizard_manual(surface == "wizard-manual");
+        if surface == "wizard-google" { ui.set_wizard_provider("google".into()); }
+        if surface == "wizard-busy" { ui.set_wizard_provider("microsoft".into()); ui.set_wizard_busy(true); ui.set_wizard_status(crate::i18n::tr("Waiting for browser sign-in…").into()); }
+        if surface == "wizard-error" { ui.set_wizard_provider("google".into()); ui.set_wizard_status(crate::i18n::tr("Google sign-in is not configured. Follow docs/ACCOUNTS.md to add your desktop OAuth client.").into()); }
+    }
+    if std::env::var_os("BANG_HTML_PREVIEW").is_some() {
+        let message: bang_core::MessageFull = serde_json::from_value(serde_json::json!({
+            "summary": {"id":1,"account_id":"preview","folder_id":1,"uid":1,
+                "message_id":"preview","from":{"name":"Atelier été","address":"atelier@example.test"},
+                "to":[],"cc":[],"subject":"Les offres d’été — déjà disponibles","date":0,"flags":"","preview":"","has_attachments":false},
+            "body_text":"Les offres d’été\nUne mise en page lisible, avec des accents corrects.\n3,14 €",
+            "body_html":"<html><body style='background:#fff;color:#222'><table style='max-width:620px;margin:auto;border-collapse:collapse;width:100%'><tr><td style='padding:28px;background:#174f47;color:#fff'><h1>Les offres d’été</h1><p>Déjà disponibles, à découvrir aujourd’hui.</p></td></tr><tr><td style='padding:28px'><p>Bonjour Augustin,</p><p>Une mise en page lisible, avec des accents corrects.</p><table style='width:100%'><tr><td style='background:#f0e9d9;padding:20px'>Livraison incluse</td><td style='background:#e1eddf;padding:20px'>À partir de <b>3,14 €</b></td></tr></table><p><a href='https://example.test'>Voir les nouveautés</a></p></td></tr></table></body></html>","attachments":[]
+        })).unwrap();
+        ui.set_message_sender(message.summary.from.name.clone().into());
+        ui.set_message_subject(message.summary.subject.clone().into());
+        ui.set_message_body(message.body_text.clone().into());
+        crate::reader::load(&ui, &message);
     }
     if let Ok(width) = std::env::var("BANG_WIDTH") {
         ui.window().set_size(slint::LogicalSize::new(

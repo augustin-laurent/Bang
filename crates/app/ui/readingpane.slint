@@ -1,23 +1,32 @@
 import { ScrollView } from "std-widgets.slint";
+import { ActionButton } from "controls.slint";
+import { SenderAvatar } from "avatar.slint";
 import { Theme } from "theme.slint";
 import { AttachmentRow } from "models.slint";
 export component ReadingPane inherits Rectangle {
     background: Theme.reading-bg;
     in property <string> sender; in property <string> sender-address;
+    in property <bool> avatar-loaded; in property <image> avatar; in property <color> avatar-tint;
     in property <string> recipients; in property <string> initials;
     in property <string> subject; in property <string> date; in property <string> body;
     in property <[AttachmentRow]> attachments;
     in property <bool> selected: false; in property <bool> loading: false;
+    in property <bool> html-active: false;
+    in property <bool> remote-images: false;
+    out property <length> body-x: body-area.absolute-position.x;
+    out property <length> body-y: body-area.absolute-position.y;
+    out property <length> body-width: body-area.width;
+    out property <length> body-height: body-area.height;
+    callback load-images();
     callback attachment-clicked(int);
     if !root.selected: Text { text: @tr("Select a message to read it"); color: Theme.text-secondary; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; }
-    if root.selected: VerticalLayout {
+    VerticalLayout {
+        visible: root.selected;
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         padding: 24px; spacing: 16px;
         HorizontalLayout {
             height: 74px; spacing: 12px;
-            Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Theme.hover;
-                Text { text: root.initials; font-size: 12px; color: Theme.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-            }
+            SenderAvatar { width: 40px; height: 40px; photo: root.avatar; has-photo: root.avatar-loaded; initials: root.initials; tint: root.avatar-tint; }
             VerticalLayout { spacing: 4px; alignment: start; horizontal-stretch: 1;
                 Text { text: root.sender; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
                 Text { text: root.subject; color: Theme.text; font-size: 13px; wrap: word-wrap; }
@@ -27,23 +36,34 @@ export component ReadingPane inherits Rectangle {
             Text { text: root.date; color: Theme.text-secondary; font-size: 11px; vertical-alignment: top; horizontal-stretch: 0; }
         }
         Rectangle { height: 1px; background: Theme.border; }
-        ScrollView {
+        if root.html-active && !root.remote-images: HorizontalLayout {
+            height: 28px; spacing: 12px;
+            Text { text: @tr("Remote images are blocked"); color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            ActionButton { horizontal-stretch: 0; text: @tr("Load images"); framed: true; clicked => { root.load-images(); } }
+        }
+        body-area := Rectangle {
             min-height: 0px; vertical-stretch: 1;
-            content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-            VerticalLayout { x: 0px; y: 0px; width: min(parent.width, 800px); height: self.preferred-height; spacing: 16px;
-                Text { width: parent.width; height: self.preferred-height; vertical-alignment: top; text: root.loading ? @tr("Loading…") : root.body; color: root.loading ? Theme.text-secondary : Theme.text; font-size: 15px; wrap: word-wrap; }
-                if root.attachments.length > 0: VerticalLayout { spacing: 8px;
-                    Text { text: @tr("Attachments"); color: Theme.text-secondary; font-size: 12px; font-weight: 600; }
-                    HorizontalLayout { spacing: 8px;
-                        for att [i] in root.attachments: Rectangle {
-                            border-radius: 8px; border-width: 1px; border-color: Theme.border; background: Theme.bg;
-                            HorizontalLayout { spacing: 6px; padding-top: 6px; padding-bottom: 6px; padding-left: 10px; padding-right: 10px;
-                                Text { text: att.filename; font-size: 12px; color: Theme.text; overflow: elide; }
-                                Text { text: att.size; font-size: 11px; color: Theme.text-secondary; }
-                            }
-                            TouchArea { mouse-cursor: pointer; clicked => { root.attachment-clicked(i); } }
-                        }
+            if !root.html-active: ScrollView {
+                content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                Text { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; vertical-alignment: top;
+                    text: root.loading ? @tr("Loading…") : root.body;
+                    color: root.loading ? Theme.text-secondary : Theme.text; font-size: 15px; wrap: word-wrap;
+                }
+            }
+        }
+        if root.attachments.length > 0: ScrollView {
+            height: 76px; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            content-width: self.visible-width;
+            VerticalLayout { width: parent.width; height: self.preferred-height; spacing: 4px;
+                Text { text: @tr("Attachments"); color: Theme.text-secondary; font-size: 12px; font-weight: 600; }
+                for att [i] in root.attachments: Rectangle {
+                    height: 28px; border-radius: 6px; background: Theme.bg;
+                    HorizontalLayout { spacing: 6px; padding-left: 10px; padding-right: 10px;
+                        Text { text: att.filename; font-size: 12px; color: Theme.text; overflow: elide; }
+                        Text { text: att.size; font-size: 11px; color: Theme.text-secondary; horizontal-stretch: 0; }
                     }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.attachment-clicked(i); } }
                 }
             }
         }

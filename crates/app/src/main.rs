@@ -7,6 +7,11 @@ use slint::{include_modules, ComponentHandle, Global};
 
 include_modules!();
 
+mod accounts;
+mod avatars;
+mod organization;
+mod gtk_host;
+mod reader;
 mod attachments;
 mod bridge;
 mod composer;
@@ -34,12 +39,17 @@ fn main() -> Result<(), slint::PlatformError> {
             .map_err(|e| slint::PlatformError::Other(e.to_string()))?,
     );
 
+    gtk_host::init()?;
     let ui = BangApp::new()?;
     let state = Arc::new(state::UiState::new());
     let bridge = bridge::Bridge::start(&ui, store.clone(), state.clone());
 
     // Apply the saved theme (light / dark / system).
     let config = config::Config::load();
+    ui.set_online_avatars(config.online_avatars);
+    bridge.send(bang_core::UiCommand::SetOnlineAvatars(config.online_avatars));
+    avatars::wire(&ui, bridge.clone());
+    organization::wire(&ui, &store, &state, bridge.clone());
     apply_theme(&ui, &config.theme);
     i18n::select(&config.language);
     state.refresh_folders(&ui, &store);
@@ -61,7 +71,8 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }
 
-    wire_wizard(&ui, bridge.clone(), config);
+    gtk_host::attach(&ui, Some(store.clone()), Some(bridge.clone()));
+    accounts::wire(&ui, bridge.clone());
     wire_selection(&ui, &store, &state, bridge.clone());
     wire_compose(&ui, &store, bridge.clone());
     wire_attachments(&ui, &store);
@@ -181,6 +192,9 @@ fn wire_selection(
             state
                 .selected_folder
                 .store(id, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selected_label(-1);
+            ui.set_selected_category("".into());
+            state.selected_message.store(-1, std::sync::atomic::Ordering::SeqCst);
             // Selecting a folder leaves search mode.
             ui.set_search_text("".into());
             state
@@ -209,9 +223,8 @@ fn wire_selection(
                 let id = state
                     .selected_folder
                     .load(std::sync::atomic::Ordering::SeqCst);
-                if id != -1 {
-                    load_folder_view(&ui, &store, id);
-                }
+                state.selected_message.store(-1, std::sync::atomic::Ordering::SeqCst);
+                load_folder_view(&ui, &store, id);
                 return;
             }
             // Live results straight from the local store (FTS5).
@@ -219,6 +232,7 @@ fn wire_selection(
                 .search_active
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             ui.set_search_active(true);
+            reader::clear(&ui);
             ui.set_selected_message(-1);
             ui.set_message_sender("".into());
             ui.set_message_subject("".into());
@@ -259,6 +273,8 @@ fn wire_selection(
                 ui.set_message_date(state::format_date(summary.date).into());
                 // The body arrives via MessageLoaded (store cache or IMAP fetch).
                 state::set_message_header(&ui, &summary);
+                reader::clear(&ui);
+                ui.set_message_attachments(slint::ModelRc::default());
                 ui.set_message_loading(true);
                 ui.set_message_body("".into());
                 bridge.send(bang_core::UiCommand::OpenMessage {
@@ -329,6 +345,7 @@ fn wire_selection(
 /// Load a folder's contents into the message list (local-cache read).
 fn load_folder_view(ui: &BangApp, store: &Arc<bang_core::Store>, id: i64) {
     ui.set_selected_folder(id as i32);
+    reader::clear(ui);
     ui.set_selected_message(-1);
     // Clear the reading pane.
     ui.set_message_sender("".into());
@@ -336,16 +353,7 @@ fn load_folder_view(ui: &BangApp, store: &Arc<bang_core::Store>, id: i64) {
     ui.set_message_date("".into());
     ui.set_message_body("".into());
     ui.set_message_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::new())));
-    let messages = if id == bang_core::UNIFIED_INBOX_ID {
-        ui.set_folder_name(tr("All Inboxes").into());
-        store.get_unified_inbox(200)
-    } else {
-        match store.get_folder_by_id(id) {
-            Ok(Some(folder)) => ui.set_folder_name(folder.name.into()),
-            _ => ui.set_folder_name("".into()),
-        }
-        store.get_messages(id, 200)
-    };
+    let messages = organization::messages(ui, store, id);
     match messages {
         Ok(messages) => {
             let rows: Vec<MessageRow> = messages.iter().map(state::to_row).collect();
@@ -423,6 +431,11 @@ fn account_rows(store: &Arc<bang_core::Store>) -> Vec<AccountRow> {
         .unwrap_or_default()
         .into_iter()
         .map(|a| AccountRow {
+            provider: match a.auth {
+                bang_core::AuthMethod::OAuth2 { provider: bang_core::OAuthProvider::Google, .. } => "google",
+                bang_core::AuthMethod::OAuth2 { .. } => "microsoft",
+                _ => "",
+            }.into(),
             id: a.id.0.clone().into(),
             email: a.email.clone().into(),
         })
@@ -716,114 +729,4 @@ fn resume_template(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge:
     if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill)) {
         ui.set_status_message(format!("{} {e}", tr("Compose unavailable:")).into());
     }
-}
-
-/// Connect the account wizard's callbacks to the mail core.
-fn wire_wizard(ui: &BangApp, bridge: bridge::Bridge, config: config::Config) {
-    ui.on_wizard_oauth_clicked({
-        let bridge = bridge.clone();
-        let weak = ui.as_weak();
-        move |provider: slint::SharedString| {
-            let provider = match provider.as_str() {
-                "google" => bang_core::OAuthProvider::Google,
-                "microsoft" => bang_core::OAuthProvider::Microsoft,
-                _ => return,
-            };
-            let Some(ui) = weak.upgrade() else {
-                return;
-            };
-            let client_id = match provider {
-                bang_core::OAuthProvider::Google => config.oauth.google.client_id.clone(),
-                bang_core::OAuthProvider::Microsoft => config.oauth.microsoft.client_id.clone(),
-            };
-            if client_id.is_empty() {
-                ui.set_wizard_status(tr("OAuth client ID missing in config.toml").into());
-                return;
-            }
-            ui.set_wizard_status(tr("Waiting for browser sign-in…").into());
-            bridge.send(bang_core::UiCommand::OAuthLogin {
-                provider,
-                client_id,
-            });
-        }
-    });
-
-    ui.on_wizard_add_generic({
-        let bridge = bridge.clone();
-        let weak = ui.as_weak();
-        move || {
-            let Some(ui) = weak.upgrade() else {
-                return;
-            };
-            let email = ui.get_email().to_string();
-            if email.is_empty() {
-                ui.set_wizard_status(tr("Email address is required").into());
-                return;
-            }
-            if ui.get_imap_host().trim().is_empty()
-                || ui.get_smtp_host().trim().is_empty()
-                || ui.get_password().is_empty()
-                || ui
-                    .get_imap_port()
-                    .parse::<u16>()
-                    .ok()
-                    .filter(|p| *p > 0)
-                    .is_none()
-                || ui
-                    .get_smtp_port()
-                    .parse::<u16>()
-                    .ok()
-                    .filter(|p| *p > 0)
-                    .is_none()
-            {
-                ui.set_wizard_status(tr("Check the servers, ports and password.").into());
-                return;
-            }
-            let starttls = ui.get_starttls();
-            let tls = |starttls: bool| {
-                if starttls {
-                    bang_core::TlsMode::Starttls
-                } else {
-                    bang_core::TlsMode::Tls
-                }
-            };
-            let config = bang_core::AccountConfig {
-                id: bang_core::AccountId(email.clone()),
-                email: email.clone(),
-                imap: bang_core::ImapConfig {
-                    host: ui.get_imap_host().to_string(),
-                    port: ui.get_imap_port().parse().unwrap_or(993),
-                    tls: tls(starttls),
-                },
-                smtp: bang_core::SmtpConfig {
-                    host: ui.get_smtp_host().to_string(),
-                    port: ui.get_smtp_port().parse().unwrap_or(465),
-                    tls: tls(starttls),
-                },
-                auth: bang_core::AuthMethod::Password {
-                    username: if ui.get_username().trim().is_empty() {
-                        email.clone()
-                    } else {
-                        ui.get_username().to_string()
-                    },
-                    password: ui.get_password().to_string(),
-                },
-            };
-            bridge.send(bang_core::UiCommand::AddAccount(config));
-            ui.set_wizard_open(false);
-            ui.set_wizard_status("".into());
-            ui.set_password("".into());
-        }
-    });
-
-    ui.on_wizard_cancel({
-        let weak = ui.as_weak();
-        move || {
-            if let Some(ui) = weak.upgrade() {
-                ui.set_wizard_open(false);
-                ui.set_wizard_status("".into());
-                ui.set_password("".into());
-            }
-        }
-    });
 }

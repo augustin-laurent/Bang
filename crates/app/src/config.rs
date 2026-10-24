@@ -14,6 +14,9 @@ pub struct Config {
     /// UI language: system, fr or en.
     #[serde(default = "default_theme")]
     pub language: String,
+    /// Fetch sender photos and logos online.
+    #[serde(default = "default_online_avatars")]
+    pub online_avatars: bool,
 }
 
 impl Default for Config {
@@ -22,9 +25,12 @@ impl Default for Config {
             oauth: OAuthConfig::default(),
             theme: default_theme(),
             language: default_theme(),
+            online_avatars: true,
         }
     }
 }
+
+fn default_online_avatars() -> bool { true }
 
 fn default_theme() -> String {
     "system".into()
@@ -47,6 +53,9 @@ pub struct ProviderConfig {
     /// OAuth2 client id (empty = not configured).
     #[serde(default)]
     pub client_id: String,
+    /// Optional desktop secret issued with a Google OAuth client.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_secret: String,
 }
 
 impl Config {
@@ -85,6 +94,9 @@ mod tests {
         let cfg: super::Config = toml::from_str("theme = 'dark'").unwrap();
         assert_eq!(cfg.language, "system");
         assert_eq!(cfg.theme, "dark");
+        assert!(cfg.online_avatars);
+        let disabled: super::Config = toml::from_str("online_avatars = false").unwrap();
+        assert!(!disabled.online_avatars);
         let default = super::Config::default();
         assert_eq!(default.theme, "system");
         assert_eq!(default.language, "system");
@@ -103,12 +115,14 @@ mod tests {
         let path = dir.join("nested/config.toml");
         let mut config = super::Config::default();
         config.oauth.google.client_id = "local-test-client".into();
+        config.online_avatars = false;
         for language in ["system", "fr", "en"] {
             config.language = language.into();
             config.save_to(&path).unwrap();
             let restored: super::Config =
                 toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(restored.language, language);
+            assert!(!restored.online_avatars);
             assert_eq!(restored.oauth.google.client_id, "local-test-client");
         }
         std::fs::remove_dir_all(dir).unwrap();

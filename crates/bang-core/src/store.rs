@@ -16,8 +16,62 @@ use crate::message::{
     PendingSend, Template,
 };
 
+// This runs inside the schema transaction. UPDATE triggers rebuild the affected
+// FTS rows; invalid recipient JSON is preserved rather than discarded.
+fn repair_metadata(conn: &Connection) -> rusqlite::Result<()> {
+    let mut statement = conn.prepare("SELECT id, subject, from_name, \"to\", cc FROM messages")?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    let decode_addresses = |json: String| match serde_json::from_str::<Vec<EmailAddress>>(&json) {
+        Ok(mut addresses) => {
+            for a in &mut addresses {
+                a.name = crate::mime::decode_header(a.name.as_bytes());
+            }
+            serde_json::to_string(&addresses).unwrap_or(json)
+        }
+        Err(_) => json,
+    };
+    for (id, subject, name, to, cc) in rows {
+        conn.execute(
+            "UPDATE messages SET subject=?2, from_name=?3, \"to\"=?4, cc=?5 WHERE id=?1",
+            params![
+                id,
+                crate::mime::decode_header(subject.as_bytes()),
+                crate::mime::decode_header(name.as_bytes()),
+                decode_addresses(to),
+                decode_addresses(cc)
+            ],
+        )?;
+    }
+    let mut statement = conn.prepare("SELECT id, name FROM folders")?;
+    let rows = statement
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (id, name) in rows {
+        conn.execute(
+            "UPDATE folders SET name=?2 WHERE id=?1",
+            params![id, crate::mime::decode_folder_name(&name)],
+        )?;
+    }
+    Ok(())
+}
+
 /// Current schema version.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 6;
+
+#[path = "store_organization.rs"]
+mod organization;
 
 /// Special folder id for the unified inbox (all accounts' INBOXes).
 ///
@@ -181,6 +235,7 @@ impl Store {
     #[cfg(any(test, feature = "integration"))]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(|e| Error::Store(e.to_string()))?;
+        conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| Error::Store(e.to_string()))?;
         let store = Self {
             conn: Mutex::new(conn),
             attachments_dir: None,
@@ -191,37 +246,58 @@ impl Store {
 
     fn migrate(&self) -> Result<()> {
         let conn = self.lock()?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
-        )
-        .map_err(|e| Error::Store(e.to_string()))?;
-        let version: i64 = conn
+        let transaction = conn
+            .unchecked_transaction()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        transaction
+            .execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")
+            .map_err(|e| Error::Store(e.to_string()))?;
+        let version: i64 = transaction
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap_or(0);
         if version >= SCHEMA_VERSION {
+            transaction
+                .commit()
+                .map_err(|e| Error::Store(e.to_string()))?;
             return Ok(());
         }
         if version < 1 {
-            conn.execute_batch(MIGRATION_V1)
+            transaction
+                .execute_batch(MIGRATION_V1)
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
         if version < 2 {
-            conn.execute_batch(MIGRATION_V2)
+            transaction
+                .execute_batch(MIGRATION_V2)
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
         if version < 3 {
-            conn.execute_batch(MIGRATION_V3)
+            transaction
+                .execute_batch(MIGRATION_V3)
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
         if version < 4 {
-            conn.execute_batch(MIGRATION_V4)
+            transaction
+                .execute_batch(MIGRATION_V4)
                 .map_err(|e| Error::Store(e.to_string()))?;
         }
-        conn.execute(
-            "INSERT INTO schema_version (version) VALUES (?1)",
-            params![SCHEMA_VERSION],
-        )
-        .map_err(|e| Error::Store(e.to_string()))?;
+        if version < 5 {
+            transaction.execute_batch("ALTER TABLE attachments ADD COLUMN content_id TEXT NOT NULL DEFAULT ''; ALTER TABLE attachments ADD COLUMN disposition TEXT NOT NULL DEFAULT '';")
+                .map_err(|e| Error::Store(e.to_string()))?;
+            repair_metadata(&transaction).map_err(|e| Error::Store(e.to_string()))?;
+        }
+        if version < 6 {
+            organization::migrate(&transaction).map_err(|e| Error::Store(e.to_string()))?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![SCHEMA_VERSION],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        transaction
+            .commit()
+            .map_err(|e| Error::Store(e.to_string()))?;
         Ok(())
     }
 
@@ -482,8 +558,9 @@ impl Store {
                 subject = excluded.subject,
                 date = excluded.date,
                 flags = excluded.flags,
-                preview = excluded.preview,
-                has_attachments = excluded.has_attachments",
+                preview = CASE WHEN excluded.preview != '' THEN excluded.preview ELSE messages.preview END,
+                has_attachments = CASE WHEN messages.body_text IS NOT NULL OR messages.body_html IS NOT NULL
+                    THEN messages.has_attachments ELSE excluded.has_attachments END",
             params![
                 msg.account_id,
                 msg.folder_id,
@@ -508,6 +585,7 @@ impl Store {
                 |r| r.get(0),
             )
             .map_err(|e| Error::Store(e.to_string()))?;
+        organization::refresh(&conn, id, None)?;
         Ok(id)
     }
 
@@ -1182,17 +1260,17 @@ impl Store {
     ) -> Result<()> {
         let conn = self.lock()?;
         conn.execute(
-            "UPDATE messages SET body_text = ?2, body_html = ?3 WHERE id = ?1",
-            params![id, body_text, body_html],
+            "UPDATE messages SET body_text = ?2, body_html = ?3, preview = ?4, has_attachments = ?5 WHERE id = ?1",
+            params![id, body_text, body_html, crate::mime::extract_preview(body_text, 200), attachments.iter().any(|a| a.disposition != "inline")],
         )
         .map_err(|e| Error::Store(e.to_string()))?;
         conn.execute("DELETE FROM attachments WHERE message_id = ?1", params![id])
             .map_err(|e| Error::Store(e.to_string()))?;
         for a in attachments {
             conn.execute(
-                "INSERT INTO attachments (message_id, filename, content_type, size, path)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![a.message_id, a.filename, a.content_type, a.size as i64, a.path],
+                "INSERT INTO attachments (message_id, filename, content_type, size, path, content_id, disposition)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![a.message_id, a.filename, a.content_type, a.size as i64, a.path, a.content_id, a.disposition],
             )
             .map_err(|e| Error::Store(e.to_string()))?;
         }
@@ -1231,7 +1309,7 @@ impl Store {
         }
         let mut stmt = conn
             .prepare(
-                "SELECT id, message_id, filename, content_type, size, path
+                "SELECT id, message_id, filename, content_type, size, path, content_id, disposition
                  FROM attachments WHERE message_id = ?1",
             )
             .map_err(|e| Error::Store(e.to_string()))?;
@@ -1244,6 +1322,8 @@ impl Store {
                     content_type: r.get(3)?,
                     size: r.get::<_, i64>(4)? as u64,
                     path: r.get(5)?,
+                    content_id: r.get(6)?,
+                    disposition: r.get(7)?,
                 })
             })
             .map_err(|e| Error::Store(e.to_string()))?
@@ -1512,6 +1592,88 @@ mod tests {
         store.set_folder_unread(id, 5).unwrap();
         let folders = store.get_folders("alice").unwrap();
         assert_eq!(folders[0].unread, 5);
+    }
+
+    #[test]
+    fn migration_v5_repairs_cached_metadata_without_losing_messages() {
+        let conn = Connection::open_in_memory().unwrap();
+        for migration in [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch("CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(4);").unwrap();
+        let store = Store {
+            conn: Mutex::new(conn),
+            attachments_dir: None,
+        };
+        store.save_account(&test_account("alice")).unwrap();
+        let mut folder = test_folder("alice", "Messages envoy&AOk-s");
+        folder.name = folder.path.clone();
+        store.upsert_folder(&folder).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+        let mut msg = test_summary("alice", folder_id, 1, "=?UTF-8?Q?S=C3=A9curit=C3=A9?=");
+        msg.from.name = "=?UTF-8?Q?Oph=C3=A9lie?=".into();
+        msg.to = vec![EmailAddress {
+            name: "=?ISO-8859-1?Q?Andr=E9?=".into(),
+            address: "andre@example.test".into(),
+        }];
+        store.lock().unwrap().execute("INSERT INTO messages(account_id,folder_id,uid,subject,from_name,from_email,\"to\") VALUES(?1,?2,?3,?4,?5,?6,?7)", params![msg.account_id,msg.folder_id,msg.uid,msg.subject,msg.from.name,msg.from.address,serde_json::to_string(&msg.to).unwrap()]).unwrap();
+        let id = store.lock().unwrap().last_insert_rowid();
+        store.lock().unwrap().execute("UPDATE messages SET body_text='Corps conservé', body_html='<p>Corps conservé</p>', snoozed_until=42 WHERE id=?1", [id]).unwrap();
+        store.migrate().unwrap();
+        store.migrate().unwrap(); // Restarting must not decode metadata twice.
+        let full = store.get_message_full(id).unwrap().unwrap();
+        assert_eq!(full.summary.subject, "Sécurité");
+        assert_eq!(full.summary.from.name, "Ophélie");
+        assert_eq!(full.summary.to[0].name, "André");
+        assert_eq!(full.body_text, "Corps conservé");
+        let folder = store.get_folder_by_id(folder_id).unwrap().unwrap();
+        assert_eq!(folder.path, "Messages envoy&AOk-s");
+        assert_eq!(folder.name, "Messages envoyés");
+        assert_eq!(store.search_all("Sécurité", 20).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT snoozed_until FROM messages WHERE id=?1",
+                    [id],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            42
+        );
+    }
+
+    #[test]
+    fn body_preview_and_cid_metadata_survive_metadata_refresh() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        store.upsert_folder(&test_folder("alice", "INBOX")).unwrap();
+        let folder_id = store.get_folders("alice").unwrap()[0].id;
+        let msg = test_summary("alice", folder_id, 1, "Été");
+        let id = store.upsert_message(&msg).unwrap();
+        let attachment = Attachment {
+            id: 0,
+            message_id: id,
+            filename: "logo.png".into(),
+            content_type: "image/png".into(),
+            size: 5,
+            path: "/tmp/logo.png".into(),
+            content_id: "logo".into(),
+            disposition: "attachment".into(),
+        };
+        store
+            .save_message_bodies(id, "Été\n déjà prêt", "<p>Été</p>", &[attachment])
+            .unwrap();
+        let mut refresh = msg;
+        refresh.preview.clear();
+        refresh.has_attachments = false;
+        store.upsert_message(&refresh).unwrap();
+        let full = store.get_message_full(id).unwrap().unwrap();
+        assert_eq!(full.summary.preview, "Été déjà prêt");
+        assert!(full.summary.has_attachments);
+        assert_eq!(full.attachments[0].content_id, "logo");
+        assert_eq!(full.attachments[0].disposition, "attachment");
     }
 
     #[test]
@@ -1928,5 +2090,166 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+    #[test]
+    fn organization_filters_before_limit_and_preserves_manual_rules() {
+        use crate::organization::{ClassificationSignals, MailCategory as C};
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("alice")).unwrap();
+        store.save_account(&test_account("bob")).unwrap();
+        store.upsert_folder(&test_folder("alice", "INBOX")).unwrap();
+        let folder = store.get_folders("alice").unwrap()[0].id;
+        store.upsert_folder(&test_folder("bob", "INBOX")).unwrap();
+        let other = store.get_folders("bob").unwrap()[0].id;
+        for uid in 1..=220 {
+            let mut m = test_summary("alice", folder, uid, "Bonjour");
+            m.date += i64::from(uid);
+            store.upsert_message(&m).unwrap();
+        }
+        let original = test_summary("alice", folder, 221, "Votre facture");
+        let id = store.upsert_message(&original).unwrap();
+        assert_eq!(
+            store
+                .organized_messages(None, None, Some(C::Transactions), 200)
+                .unwrap()[0]
+                .id,
+            id
+        );
+        assert_eq!(store.category_counts(None).unwrap(), [220, 1, 0, 0]);
+        store.set_category(id, Some(C::Promotions), true).unwrap();
+        assert_eq!(store.category_counts(None).unwrap(), [0, 0, 0, 221]);
+        store.set_category(id, Some(C::Primary), false).unwrap();
+        store
+            .update_classification(
+                id,
+                &ClassificationSignals {
+                    mailing_list: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store.upsert_message(&original).unwrap();
+        assert_eq!(store.message_organization(id).unwrap().category, C::Primary);
+        let future = store
+            .upsert_message(&test_summary("bob", other, 1, "Future message"))
+            .unwrap();
+        assert_eq!(
+            store.message_organization(future).unwrap().category,
+            C::Promotions
+        );
+        store.set_category(id, None, false).unwrap();
+        assert_eq!(
+            store.message_organization(id).unwrap().category,
+            C::Promotions
+        );
+        store.set_category(id, None, true).unwrap();
+        assert_eq!(
+            store.message_organization(id).unwrap().category,
+            C::Transactions
+        );
+        assert_eq!(
+            store.message_organization(future).unwrap().category,
+            C::Primary
+        );
+    }
+
+    #[test]
+    fn labels_span_accounts_and_delete_only_assignments() {
+        let store = Store::open_in_memory().unwrap();
+        let mut ids = Vec::new();
+        for account in ["alice", "bob"] {
+            store.save_account(&test_account(account)).unwrap();
+            store
+                .upsert_folder(&test_folder(account, "Archive"))
+                .unwrap();
+            let folder = store.get_folders(account).unwrap()[0].id;
+            ids.push(
+                store
+                    .upsert_message(&test_summary(account, folder, 1, "Hello"))
+                    .unwrap(),
+            );
+        }
+        store.save_label(None, "Travail", "#3977b8").unwrap();
+        store.save_label(None, "Personnel", "#30845b").unwrap();
+        assert!(store.save_label(None, "travail", "#3977b8").is_err());
+        assert!(store.save_label(None, " ", "#3977b8").is_err());
+        assert!(store.save_label(None, "Broken", "blue").is_err());
+        let labels = store.labels().unwrap();
+        let work = labels.iter().find(|l| l.name == "Travail").unwrap().id;
+        let personal = labels.iter().find(|l| l.name == "Personnel").unwrap().id;
+        for id in &ids {
+            store.set_message_label(*id, work, true).unwrap();
+        }
+        store.set_message_label(ids[0], personal, true).unwrap();
+        assert_eq!(store.message_organization(ids[0]).unwrap().labels.len(), 2);
+        assert_eq!(
+            store
+                .organized_messages(None, Some(work), None, 200)
+                .unwrap()
+                .len(),
+            2
+        );
+        store.save_label(Some(work), "Bureau", "#8555a6").unwrap();
+        assert!(store.labels().unwrap().iter().any(|l| l.name == "Bureau"));
+        store.set_message_label(ids[0], work, false).unwrap();
+        assert_eq!(
+            store
+                .organized_messages(None, Some(work), None, 200)
+                .unwrap()
+                .len(),
+            1
+        );
+        store.delete_label(work).unwrap();
+        assert!(store.get_message(ids[1]).unwrap().is_some());
+        assert!(store
+            .message_organization(ids[1])
+            .unwrap()
+            .labels
+            .is_empty());
+    }
+
+    #[test]
+    fn v5_upgrade_backfills_and_organization_survives_restart() {
+        use crate::organization::MailCategory as C;
+        let path = std::env::temp_dir().join(format!("bang-org-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        for sql in [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.execute_batch("ALTER TABLE attachments ADD COLUMN content_id TEXT NOT NULL DEFAULT ''; ALTER TABLE attachments ADD COLUMN disposition TEXT NOT NULL DEFAULT ''; CREATE TABLE schema_version(version INTEGER NOT NULL); INSERT INTO schema_version VALUES(5);").unwrap();
+        conn.execute(
+            "INSERT INTO accounts(id,email,config,created_at) VALUES('alice','alice@example.com',?1,0)",
+            [serde_json::to_string(&test_account("alice")).unwrap()],
+        )
+        .unwrap();
+        conn.execute_batch("INSERT INTO folders(id,account_id,path,name) VALUES(1,'alice','INBOX','Inbox'); INSERT INTO messages(id,account_id,folder_id,uid,from_email,subject,body_text) VALUES(1,'alice',1,1,' Alice@EXAMPLE.com ','Votre facture','Preserved body');").unwrap();
+        drop(conn);
+        {
+            let store = Store::open(&path).unwrap();
+            assert_eq!(
+                store.message_organization(1).unwrap().category,
+                C::Transactions
+            );
+            assert_eq!(
+                store.get_message_full(1).unwrap().unwrap().body_text,
+                "Preserved body"
+            );
+            store.set_category(1, Some(C::Promotions), true).unwrap();
+            store.set_category(1, Some(C::Primary), false).unwrap();
+            store.save_label(None, "Important", "#3977b8").unwrap();
+            let label = store.labels().unwrap()[0].id;
+            store.set_message_label(1, label, true).unwrap();
+        }
+        {
+            let store = Store::open(&path).unwrap();
+            let organization = store.message_organization(1).unwrap();
+            assert_eq!(organization.category, C::Primary);
+            assert!(organization.sender_override);
+            assert_eq!(organization.labels.len(), 1);
+            assert_eq!(store.search_all("facture", 10).unwrap().len(), 1);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
 }
 

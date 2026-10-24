@@ -9,6 +9,14 @@ description = "Bang desktop mail client UI (Slint) and tokio/Slint bridge."
 preview-renderer = ["dep:i-slint-backend-testing"]
 
 [dependencies]
+dom_query = "0.27"
+gtk = "0.18"
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+soup = { package = "soup3", version = "0.5" }
+url = "2.5"
+percent-encoding = "2.3"
+webbrowser = "1.2"
+
 i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"], optional = true }
 anyhow = "1.0.104"
 bang-core = { path = "../bang-core" }
@@ -27,3 +35,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 [build-dependencies]
 slint-build = "1.18.1"
 serde_json = "1.0"
+
+[dev-dependencies]
+javascriptcore = { package = "javascriptcore-rs", version = "1.1", features = ["v2_28"] }

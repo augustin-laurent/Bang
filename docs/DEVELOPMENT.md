@@ -8,7 +8,7 @@ How to build, test, and extend Bang. For the system design see
 
 - A recent stable Rust toolchain, Node.js 20.19+ (or 22.12+), npm and pkg-config.
 - Linux with GTK3 and WebKitGTK 4.1 development packages. The Slint window uses
-  the software renderer; the composer uses the system WebKit engine.
+  the software renderer inside GTK; the HTML reader and composer use the system WebKit engine.
 
 Distribution packages:
 
@@ -107,6 +107,29 @@ Only `?preview` enables sample messages and simulated send failure. Normal nativ
 launches use neither fixtures nor simulated results. The in-page preview stores
 its last send in `#app[data-preview-send]` for export assertions.
 
+To exercise the real embedded reader, run the ignored native test separately
+under each display server (an X11/Wayland session and loopback access are needed):
+
+```sh
+GDK_BACKEND=x11 cargo test -p app --features preview-renderer reader::tests::native_html_reader -- --ignored --exact --test-threads=1
+GDK_BACKEND=wayland cargo test -p app --features preview-renderer reader::tests::native_html_reader -- --ignored --exact --test-threads=1
+```
+
+When running in isolated Xvfb (or Weston nested in Xvfb), set
+`BANG_NATIVE_POINTER_TEST=1` to also drive real mouse clicks through XTEST.
+This requires Python 3, libX11 and libXtst. `DISPLAY` must refer to that isolated
+server; the Wayland fixture uses an origin-aligned, undecorated Weston output.
+These checks cover compose, folders, opening/closing settings, narrow navigation,
+the image-consent button and WebKit itself, without calling UI click handlers.
+
+This uses a temporary mail store and a local image server, never real accounts.
+It checks CID images, remote-image consent including CSS backgrounds, blocked
+scripts/styles/redirects, stale selections, modal visibility, resize, theme,
+keyboard input and clipboard. Optional `BANG_NATIVE_SNAPSHOT=/tmp/reader.png`
+saves a native GTK screenshot on backends that support window capture.
+`BANG_HTML_PREVIEW=1 cargo run -p app -- --preview` opens a fictional HTML mail
+in the real GTK/WebKit host; `BANG_SNAPSHOT` remains the Slint-only fixture.
+
 ## Conventions
 
 - **Conventional Commits**: `type(scope): imperative description`. One logical
@@ -198,21 +221,12 @@ source.
 - **`directories` 6.0**: `ProjectDirs::from(qualifier, org, app)` (not `get`);
   the data dir is `~/.local/share/bang`.
 
-## OAuth client IDs
+## Account sign-in
 
-Gmail and Microsoft sign-in need your own OAuth2 client IDs (create them in the
-Google Cloud Console / Azure Portal). Put them in
-`~/.config/bang/config.toml`:
-
-```toml
-[oauth.google]
-client_id = "..."
-[oauth.microsoft]
-client_id = "..."
-```
-
-Without them the OAuth buttons show an error and you use the generic
-IMAP/SMTP account type instead.
+See [ACCOUNTS.md](ACCOUNTS.md) for desktop OAuth registration, loopback redirects,
+provider-specific settings and token-renewal work still required. Configuration
+is reloaded for each sign-in attempt. New accounts are validated asynchronously
+against IMAP and SMTP before they are persisted; no test message is sent.
 
 ## Debugging
 

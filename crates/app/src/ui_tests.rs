@@ -529,3 +529,439 @@ fn sync_events_keep_a_sorted_bounded_model_and_clear_removed_selection() {
     assert_eq!(model.row_count(), 200);
     assert!(!model.iter().any(|row| row.id == head));
 }
+
+#[test]
+fn categories_labels_dialog_and_late_avatars() {
+    use std::{cell::Cell, rc::Rc};
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.set_account_count(1);
+    ui.set_categories_visible(true);
+    ui.set_categories(slint::ModelRc::new(VecModel::from(vec![
+        crate::CategoryRow {
+            key: "".into(),
+            name: "All".into(),
+            short_name: "All".into(),
+            unread: 2,
+        },
+        crate::CategoryRow {
+            key: "transactions".into(),
+            name: "Transactions".into(),
+            short_name: "Orders".into(),
+            unread: 1,
+        },
+    ])));
+    let weak = ui.as_weak();
+    ui.on_category_selected(move |key| weak.upgrade().unwrap().set_selected_category(key));
+    ui.set_messages(slint::ModelRc::new(VecModel::from(vec![
+        MessageRow {
+            id: 1,
+            sender: "Alice".into(),
+            sender_address: "alice@example.test".into(),
+            initials: "A".into(),
+            avatar_tint: crate::avatars::tint("alice@example.test"),
+            ..Default::default()
+        },
+        MessageRow {
+            id: 2,
+            sender: "Bob".into(),
+            sender_address: "bob@example.test".into(),
+            ..Default::default()
+        },
+    ])));
+    ui.set_labels(slint::ModelRc::new(VecModel::from(vec![crate::LabelRow {
+        id: 1,
+        name: "Work".into(),
+        tint: crate::organization::color("#3977b8"),
+        ..Default::default()
+    }])));
+    ui.set_selected_message(2);
+    ui.set_message_sender_address("bob@example.test".into());
+    ui.set_native_reader_available(true);
+    ui.set_message_html("<p>Reader</p>".into());
+    let weak = ui.as_weak();
+    ui.on_organization_opened(move |manage| {
+        let ui = weak.upgrade().unwrap();
+        ui.set_managing_labels(manage);
+        ui.set_organization_open(true);
+    });
+    let weak = ui.as_weak();
+    ui.on_organization_close(move || weak.upgrade().unwrap().set_organization_open(false));
+    ui.show().unwrap();
+    ElementHandle::find_by_accessible_label(&ui, "Transactions, 1")
+        .next()
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert_eq!(ui.get_selected_category(), "transactions");
+    ElementHandle::find_by_accessible_label(&ui, "Classify message")
+        .next()
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert!(ui.get_organization_open());
+    assert!(!ui.get_reader_shown());
+    let assigned = Rc::new(Cell::new(false));
+    let assigned_cb = assigned.clone();
+    ui.on_label_assigned(move |id, value| {
+        assert_eq!(id, 1);
+        assigned_cb.set(value);
+    });
+    ElementHandle::find_by_accessible_label(&ui, "Work")
+        .find(|e| e.type_name().is_some_and(|name| name.contains("CheckBox")))
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert!(assigned.get());
+    ui.window().set_size(LogicalSize::new(720., 480.));
+    ui.window().take_snapshot().unwrap();
+    ui.invoke_organization_close();
+    assert!(!ui.get_organization_open());
+    let path = std::env::temp_dir().join(format!("bang-avatar-ui-{}.png", std::process::id()));
+    image::RgbaImage::from_pixel(80, 80, image::Rgba([10, 30, 60, 255]))
+        .save(&path)
+        .unwrap();
+    crate::avatars::ready(&ui, "alice@example.test", path.to_str().unwrap());
+    assert!(ui.get_messages().row_data(0).unwrap().has_avatar);
+    let mut unchanged=ui.get_messages().row_data(1).unwrap();
+    crate::avatars::decorate(&ui,&mut unchanged);
+    assert_eq!(unchanged,unchanged.clone(),"empty avatar rows must compare equal to prevent needless model updates");
+    assert!(!ui.get_messages().row_data(1).unwrap().has_avatar);
+    assert!(
+        !ui.get_message_avatar_loaded(),
+        "a late Alice result must not replace Bob's avatar"
+    );
+    ui.set_online_avatars(false);
+    crate::avatars::ready(&ui, "bob@example.test", path.to_str().unwrap());
+    assert!(!ui.get_message_avatar_loaded());
+    std::fs::remove_file(path).unwrap();
+    ui.hide().unwrap();
+}
+
+#[test]
+fn organization_views_suspend_filters_for_search_and_clear_removed_selection() {
+    use bang_core::{
+        organization::MailCategory, AccountConfig, AccountId, AuthMethod, EmailAddress, Folder,
+        ImapConfig, MessageFlags, MessageSummary, SmtpConfig, TlsMode,
+    };
+    use std::sync::atomic::Ordering;
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let account = AccountConfig {
+        id: AccountId("local".into()),
+        email: "me@example.test".into(),
+        imap: ImapConfig {
+            host: "localhost".into(),
+            port: 993,
+            tls: TlsMode::Tls,
+        },
+        smtp: SmtpConfig {
+            host: "localhost".into(),
+            port: 465,
+            tls: TlsMode::Tls,
+        },
+        auth: AuthMethod::Password {
+            username: "local".into(),
+            password: "test".into(),
+        },
+    };
+    store.save_account(&account).unwrap();
+    store
+        .upsert_folder(&Folder {
+            id: 0,
+            account_id: "local".into(),
+            name: "Inbox".into(),
+            path: "INBOX".into(),
+            unread: 0,
+        })
+        .unwrap();
+    let folder = store.get_folders("local").unwrap()[0].id;
+    let mut ids = Vec::new();
+    for (uid, subject) in [(1, "Votre facture"), (2, "Bonjour")] {
+        ids.push(
+            store
+                .upsert_message(&MessageSummary {
+                    id: 0,
+                    account_id: "local".into(),
+                    folder_id: folder,
+                    uid,
+                    message_id: format!("id-{uid}"),
+                    from: EmailAddress {
+                        name: "Alice".into(),
+                        address: "alice@example.test".into(),
+                    },
+                    to: vec![],
+                    cc: vec![],
+                    subject: subject.into(),
+                    date: i64::from(uid),
+                    flags: MessageFlags::empty(),
+                    preview: "".into(),
+                    has_attachments: false,
+                })
+                .unwrap(),
+        );
+    }
+    let state = crate::state::UiState::new();
+    state.selected_folder.store(-1, Ordering::SeqCst);
+    ui.set_selected_category("transactions".into());
+    state.reload_messages(&ui, &store);
+    assert_eq!(ui.get_messages().row_count(), 1);
+    state.selected_message.store(ids[0], Ordering::SeqCst);
+    ui.set_selected_message(ids[0] as i32);
+    store
+        .set_category(ids[0], Some(MailCategory::Primary), false)
+        .unwrap();
+    state.apply(&ui, &store, bang_core::MailEvent::OrganizationChanged);
+    assert_eq!(ui.get_messages().row_count(), 0);
+    assert_eq!(ui.get_selected_message(), -1);
+    store.save_label(None, "Work", "#3977b8").unwrap();
+    let label = store.labels().unwrap()[0].id;
+    store.set_message_label(ids[0], label, true).unwrap();
+    ui.set_selected_label(label as i32);
+    state.reload_messages(&ui, &store);
+    assert_eq!(ui.get_messages().row_data(0).unwrap().id, ids[0] as i32);
+    // Search uses global store results while the chosen label/category stay saved.
+    state.search_active.store(true, Ordering::SeqCst);
+    ui.set_search_active(true);
+    crate::state::set_message_rows(
+        &ui,
+        store
+            .search_all("Bonjour", 100)
+            .unwrap()
+            .iter()
+            .map(crate::state::to_row)
+            .collect(),
+    );
+    state.apply(&ui, &store, bang_core::MailEvent::OrganizationChanged);
+    assert_eq!(ui.get_messages().row_data(0).unwrap().id, ids[1] as i32);
+    state.search_active.store(false, Ordering::SeqCst);
+    ui.set_search_active(false);
+    state.reload_messages(&ui, &store);
+    assert_eq!(ui.get_selected_label(), label as i32);
+    assert_eq!(ui.get_selected_category(), "transactions");
+    assert_eq!(ui.get_messages().row_data(0).unwrap().id, ids[0] as i32);
+}
+
+
+#[test]
+fn sender_photos_fit_the_avatar_at_any_source_resolution() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.set_account_count(1);
+    ui.set_selected_message(1);
+    ui.show().unwrap();
+    for resolution in [80, 512] {
+        let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(resolution, resolution);
+        pixels.make_mut_slice().fill(slint::Rgba8Pixel {
+            r: 250,
+            g: 0,
+            b: 250,
+            a: 255,
+        });
+        let photo = slint::Image::from_rgba8(pixels);
+        ui.set_messages(slint::ModelRc::new(VecModel::from(vec![MessageRow {
+            id: 1,
+            sender: "Google".into(),
+            subject: "Message".into(),
+            avatar: photo.clone(),
+            has_avatar: true,
+            ..Default::default()
+        }])));
+        ui.set_message_avatar(photo);
+        ui.set_message_avatar_loaded(true);
+        let snapshot = ui.window().take_snapshot().unwrap();
+        let photos =
+            ElementHandle::find_by_element_id(&ui, "SenderAvatar::photo-image").collect::<Vec<_>>();
+        let mut sizes = photos
+            .iter()
+            .map(|p| {
+                (
+                    p.size().width.round() as u32,
+                    p.size().height.round() as u32,
+                )
+            })
+            .collect::<Vec<_>>();
+        sizes.sort_unstable();
+        assert_eq!(
+            sizes,
+            vec![(32, 32), (40, 40)],
+            "source resolution {resolution} must not control displayed size"
+        );
+        for (index, pixel) in snapshot.as_slice().iter().enumerate() {
+            if pixel.r > 240 && pixel.g < 10 && pixel.b > 240 {
+                let x = (index as u32 % snapshot.width()) as f32;
+                let y = (index as u32 / snapshot.width()) as f32;
+                assert!(
+                    photos.iter().any(|photo| {
+                        let pos = photo.absolute_position();
+                        let size = photo.size();
+                        x >= pos.x
+                            && x < pos.x + size.width
+                            && y >= pos.y
+                            && y < pos.y + size.height
+                    }),
+                    "avatar painted outside its bounds at {x},{y}"
+                );
+            }
+        }
+    }
+    ui.hide().unwrap();
+}
+
+
+#[test]
+fn account_wizard_provider_presets_theme_and_correlated_results() {
+    use slint::Global;
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    let weak = ui.as_weak();
+    ui.on_wizard_provider_selected(move |provider| {
+        crate::accounts::select_provider(&weak.upgrade().unwrap(), &provider)
+    });
+    let state = crate::state::UiState::new();
+    let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    ui.set_wizard_open(true);
+    ui.show().unwrap();
+    for dark in [true, false, true, false] {
+        crate::Theme::get(&ui).set_dark(dark);
+        ui.window().take_snapshot().unwrap();
+        assert_eq!(
+            crate::Palette::get(&ui).get_foreground().color().red() > 128,
+            dark,
+            "standard controls must follow the app theme"
+        );
+        let google = ElementHandle::find_by_accessible_label(&ui, "Google")
+            .next()
+            .unwrap();
+        google.mock_single_click(PointerEventButton::Left);
+        assert_eq!(ui.get_wizard_provider(), "google");
+        assert!(!ui.get_wizard_manual());
+        ElementHandle::find_by_accessible_label(&ui, "Back")
+            .next()
+            .unwrap()
+            .mock_single_click(PointerEventButton::Left);
+        assert_eq!(ui.get_wizard_provider(), "");
+    }
+    ElementHandle::find_by_accessible_label(&ui, "iCloud")
+        .next()
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert!(ui.get_wizard_manual());
+    assert_eq!(ui.get_imap_host(), "imap.mail.me.com");
+    assert_eq!(ui.get_imap_port(), "993");
+    assert!(!ui.get_starttls());
+    assert!(ui.get_smtp_starttls());
+    assert_eq!(ui.get_smtp_port(), "587");
+    ui.set_password("temporary".into());
+    ui.window().take_snapshot().unwrap();
+    let show = ElementHandle::find_by_accessible_label(&ui, "Show password")
+        .next()
+        .unwrap();
+    show.mock_single_click(PointerEventButton::Left);
+    assert!(
+        ElementHandle::find_by_accessible_label(&ui, "Hide password")
+            .next()
+            .is_some()
+    );
+    ui.set_password("".into());
+    slint::platform::update_timers_and_animations();
+    ui.window().take_snapshot().unwrap();
+    assert!(
+        ElementHandle::find_by_accessible_label(&ui, "Show password")
+            .next()
+            .is_some(),
+        "a new password must start masked"
+    );
+    ui.window().set_size(LogicalSize::new(720., 480.));
+    ui.window().take_snapshot().unwrap();
+    let connect = ElementHandle::find_by_accessible_label(&ui, "Connect account")
+        .next()
+        .unwrap();
+    assert!(connect.absolute_position().y + connect.size().height <= 480.);
+    let field = ElementHandle::find_by_accessible_label(&ui, "Email address")
+        .find(|field| {
+            field.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::TextInput)
+        })
+        .unwrap();
+    field.mock_single_click(PointerEventButton::Left);
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: "augustin@example.test".into(),
+    });
+    assert_eq!(ui.get_email(), "augustin@example.test");
+    ui.set_wizard_attempt(7);
+    ui.set_wizard_busy(true);
+    ui.set_password("do-not-persist".into());
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountStatus {
+            account: bang_core::AccountId("old@example.test".into()),
+            status: bang_core::AccountStatus::Connected,
+        },
+    );
+    assert!(
+        ui.get_wizard_open(),
+        "background sync cannot close account setup"
+    );
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 6,
+            error: None,
+        },
+    );
+    assert!(
+        ui.get_wizard_busy(),
+        "a stale attempt cannot change the current one"
+    );
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 7,
+            error: Some("rejected".into()),
+        },
+    );
+    assert!(!ui.get_wizard_busy());
+    assert!(ui.get_wizard_open());
+    assert!(!ui.get_wizard_status().is_empty());
+    assert_eq!(
+        ui.get_password(),
+        "do-not-persist",
+        "retry retains the form"
+    );
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 7,
+            error: None,
+        },
+    );
+    assert!(!ui.get_wizard_open());
+    assert_eq!(ui.get_password(), "");
+    assert_eq!(ui.get_wizard_provider(), "");
+}

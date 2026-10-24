@@ -1,0 +1,20 @@
+import { Theme } from "theme.slint";
+// Photos are validated, resized and circularly masked before entering Slint.
+export component SenderAvatar inherits Rectangle {
+    in property <image> photo;
+    in property <bool> has-photo: false;
+    in property <string> initials;
+    in property <color> tint: #527aa3;
+    clip: true;
+    border-radius: self.width / 2;
+    background: !root.has-photo ? root.tint : transparent;
+    // Image otherwise uses its intrinsic size, overflowing the avatar frame.
+    if root.has-photo: photo-image := Image {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        source: root.photo; image-fit: contain;
+    }
+    if !root.has-photo: Text {
+        text: root.initials; color: white; font-size: parent.width * 0.34; font-weight: 600;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+}

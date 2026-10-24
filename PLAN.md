@@ -218,11 +218,12 @@ OAuth tokens live in the DB, file perms `0600` (MVP); `keyring` integration is a
 
 ## 6. Key Risk: HTML Email Rendering
 
-Slint cannot render arbitrary HTML (no webview). Phased approach:
-
-1. **M1**: Convert HTML → Slint's built-in text markup (bold/italic/underline/links/colors) + plain text fallback.
-2. **M2+**: Custom HTML-subset renderer — parse with `markup5ever`, map a common subset (paragraphs, headings, lists, blockquotes, images, basic tables) to dynamic Slint elements. Budget 2–4 weeks.
-3. Full CSS-faithful HTML rendering stays out of scope.
+The reader now uses WebKitGTK 4.1 inside a GTK3 host shared with Slint's
+software renderer. Slint retains the existing navigation, message list, reader
+header, dialogs and plain-text fallback. This supports native embedded HTML on
+X11 and Wayland without reparenting a child window. Remote images require a
+per-message click; CID images load locally. See `docs/ARCHITECTURE.md` for the
+content policy and the GTK/Slint integration.
 
 ## 7. Other Risks & Mitigations
 

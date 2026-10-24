@@ -78,6 +78,8 @@ pub struct MetaMessage {
     pub subject: String,
     /// RFC822.SIZE in bytes, 0 if absent.
     pub size: u32,
+    /// Header-only classification hints, if supplied by the server.
+    pub classification: Option<crate::organization::ClassificationSignals>,
 }
 
 impl<T: Read + Write> ImapSession<T> {
@@ -145,7 +147,7 @@ impl<T: Read + Write> ImapSession<T> {
         // standard and accepted by all servers.
         let fetches = self
             .session
-            .uid_fetch(uid_set, "(UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)")?;
+            .uid_fetch(uid_set, "(UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (LIST-ID LIST-UNSUBSCRIBE PRECEDENCE AUTO-SUBMITTED)])")?;
         Ok(fetches.iter().filter_map(convert_fetch).collect())
     }
 
@@ -163,7 +165,7 @@ impl<T: Read + Write> ImapSession<T> {
         let start = exists.saturating_sub(limit).saturating_add(1);
         let fetches = self.session.fetch(
             format!("{start}:{exists}"),
-            "(UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)",
+            "(UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (LIST-ID LIST-UNSUBSCRIBE PRECEDENCE AUTO-SUBMITTED)])",
         )?;
         Ok(fetches.iter().filter_map(convert_fetch).collect())
     }
@@ -458,7 +460,7 @@ fn convert_fetch(f: &imap::types::Fetch) -> Option<MetaMessage> {
             message_id = String::from_utf8_lossy(mid).into_owned();
         }
         if let Some(subj) = env.subject {
-            subject = String::from_utf8_lossy(subj).into_owned();
+            subject = crate::mime::decode_header(subj);
         }
         if let Some(froms) = &env.from {
             if let Some(a) = froms.first() {
@@ -482,6 +484,7 @@ fn convert_fetch(f: &imap::types::Fetch) -> Option<MetaMessage> {
         cc,
         subject,
         size: f.size.unwrap_or(0),
+        classification: f.header().map(crate::organization::ClassificationSignals::from_headers),
     })
 }
 
@@ -501,7 +504,7 @@ fn flag_to_flags(flag: &Flag<'_>) -> MessageFlags {
 fn convert_address(a: &imap_proto::types::Address<'_>) -> EmailAddress {
     let name = a
         .name
-        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .map(crate::mime::decode_header)
         .unwrap_or_default();
     let address = match (&a.mailbox, &a.host) {
         (Some(m), Some(h)) => format!(

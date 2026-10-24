@@ -1,0 +1,31 @@
+import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
+import { CategoryRow } from "models.slint";
+export component CategoryBar inherits Rectangle {
+    in property <[CategoryRow]> categories;
+    in property <string> selected;
+    callback selected-category(string);
+    background: Theme.bg;
+    HorizontalLayout { padding: 6px; spacing: 2px;
+        for category in root.categories: Rectangle {
+            min-width: 42px; border-radius: 8px;
+            background: category.key == root.selected ? Theme.hover : transparent;
+            forward-focus: category-focus;
+            border-width: category-focus.has-focus ? 2px : 0px; border-color: Theme.accent;
+            category-focus := FocusScope { enabled: !Theme.blocked; key-pressed(e) => { if e.text == " " || e.text == "\n" { root.selected-category(category.key); return accept; } return reject; } }
+            accessible-role: button; accessible-label: category.name + ", " + category.unread;
+            accessible-enabled: !Theme.blocked;
+            accessible-action-default => { if !Theme.blocked { root.selected-category(category.key); } }
+            VerticalLayout { spacing: 2px; padding-top: 3px; padding-bottom: 3px;
+                HorizontalLayout { alignment: center; spacing: 3px;
+                    Image { width: 16px; height: 16px; source: category.key == "transactions" ? @image-url("icons/receipt.svg") : category.key == "updates" ? @image-url("icons/news.svg") : category.key == "promotions" ? @image-url("icons/offer.svg") : category.key == "primary" ? @image-url("icons/person.svg") : @image-url("icons/inbox.svg"); colorize: category.key == root.selected ? Theme.accent : Theme.text-secondary; }
+                    if category.unread > 0: Text { text: category.unread; font-size: 10px; color: Theme.text-secondary; vertical-alignment: center; }
+                }
+                Text { text: root.width < 440px ? category.short-name : category.name; font-size: 10px; horizontal-alignment: center; overflow: elide; color: category.key == root.selected ? Theme.accent : Theme.text-secondary; }
+            }
+            TouchArea { enabled: !Theme.blocked; clicked => { category-focus.focus(); root.selected-category(category.key); } }
+            Tooltip { Rectangle { background: Theme.text; border-radius: 6px; width: 120px; height: 28px; Text { text: category.name; color: Theme.bg; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; } } }
+        }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+}

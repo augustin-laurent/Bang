@@ -1,5 +1,4 @@
 import { Theme } from "theme.slint";
-import { LineEdit } from "std-widgets.slint";
 
 export component ActionButton inherits Rectangle {
     in property <string> text;
@@ -19,7 +18,7 @@ export component ActionButton inherits Rectangle {
     border-radius: 9px;
     background: primary ? Theme.selection : active || touch.has-hover ? Theme.hover : framed ? Theme.bg : transparent;
     border-width: focus.has-focus ? 2px : framed ? 1px : 0px;
-    border-color: focus.has-focus ? Theme.accent : Theme.border;
+    border-color: focus.has-focus ? Theme.accent : root.active ? Theme.control-border : Theme.border;
     opacity: can-activate ? 1 : 0.5;
     accessible-enabled: can-activate;
     accessible-role: button;
@@ -42,21 +41,50 @@ export component ActionButton inherits Rectangle {
         }
     }
     touch := TouchArea { enabled: root.can-activate; clicked => { focus.focus(); root.clicked(); } }
-    if touch.has-hover && root.compact: Rectangle {
-        y: parent.height + 6px; x: -24px; width: max(96px, label.preferred-width + 16px); height: 28px;
-        background: Theme.text; border-radius: 6px;
-        label := Text { text: root.text; color: Theme.bg; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    // Tooltips use an input-transparent overlay above sibling panes and lists.
+    if root.compact && root.can-activate: Tooltip {
+        Rectangle {
+            width: max(96px, label.preferred-width + 16px); height: 28px;
+            background: Theme.text; border-radius: 6px;
+            label := Text { text: root.text; color: Theme.bg; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+        }
     }
 }
 
+// Explicit theme colours keep form text and focus rings readable on both themes.
 export component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
     in property <bool> secret: false;
+    private property <bool> revealed: false;
+    changed text => { if self.text == "" { self.revealed = false; } }
+    in property <bool> enabled: true;
     in-out property <string> text;
     spacing: 6px;
     Text { text: root.label; color: Theme.text; font-size: 13px; font-weight: 500; }
-    LineEdit { accessible-label: root.label; text <=> root.text; placeholder-text: root.placeholder; input-type: root.secret ? InputType.password : InputType.text; min-height: 36px; preferred-height: 36px; }
+    Rectangle {
+        min-width: 60px; min-height: 40px; max-height: 40px;
+        background: Theme.field-bg; border-radius: 6px;
+        border-width: input.has-focus ? 2px : 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.control-border;
+        opacity: root.enabled ? 1 : 0.6;
+        forward-focus: input;
+        if root.text == "": Text { x: 12px; width: parent.width - 24px; height: parent.height;
+            text: root.placeholder; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; overflow: elide;
+        }
+        input := TextInput {
+            x: 12px; width: parent.width - (root.secret ? 52px : 24px); height: parent.height;
+            text <=> root.text; color: Theme.text; font-size: 13px; single-line: true;
+            read-only: !root.enabled; input-type: root.secret && !root.revealed ? InputType.password : InputType.text;
+            selection-background-color: Theme.selection; selection-foreground-color: Theme.selected-text;
+            vertical-alignment: center; accessible-label: root.label;
+        }
+        if root.secret: ActionButton { x: parent.width - 38px; y: 4px; width: 32px; height: 32px; modal: true; compact: true;
+            enabled: root.enabled; text: root.revealed ? @tr("Hide password") : @tr("Show password");
+            icon: @image-url("icons/eye.svg"); active: root.revealed;
+            clicked => { root.revealed = !root.revealed; }
+        }
+    }
 }
 
 export component SearchField inherits Rectangle {
@@ -77,4 +105,27 @@ export component SearchField inherits Rectangle {
         accessible-label: root.placeholder;
         edited => { root.edited(self.text); }
     }
+}
+
+// A visible unchecked outline is essential on the light surface.
+export component CheckControl inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    callback toggled();
+    min-height: 32px; max-height: 32px;
+    accessible-role: checkbox; accessible-label: root.text; accessible-checked: root.checked;
+    accessible-action-default => { root.checked = !root.checked; root.toggled(); }
+    forward-focus: focus;
+    HorizontalLayout { spacing: 10px;
+        Rectangle { width: 20px;
+            Rectangle { y: (parent.height - self.height) / 2; width: 20px; height: 20px; border-radius: 4px;
+                background: root.checked ? Theme.selection : Theme.field-bg;
+                border-width: focus.has-focus ? 2px : 1px; border-color: focus.has-focus ? Theme.accent : root.checked ? Theme.selection : Theme.control-border;
+                if root.checked: Image { x: 2px; y: 2px; width: 16px; height: 16px; source: @image-url("icons/check.svg"); colorize: Theme.selected-text; }
+            }
+        }
+        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+    }
+    focus := FocusScope { key-pressed(e) => { if e.text == " " { root.checked = !root.checked; root.toggled(); return accept; } return reject; } }
+    TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.checked = !root.checked; root.toggled(); } }
 }

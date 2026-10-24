@@ -3,6 +3,7 @@ import { Palette } from "std-widgets.slint";
 export global Theme {
     in property <bool> dark: false;
     in property <bool> blocked: false;
+    changed dark => { self.sync-palette(); }
     callback sync-palette();
     sync-palette => { Palette.color-scheme = self.dark ? ColorScheme.dark : ColorScheme.light; }
     out property <color> bg: dark ? #1c1c1e : #ffffff;
@@ -15,6 +16,8 @@ export global Theme {
     out property <color> selection: dark ? #075bca : #0864d6;
     out property <color> hover: dark ? #343438 : #e8e9ec;
     out property <color> border: dark ? #38383b : #e5e6e9;
+    out property <color> field-bg: dark ? #29292c : #ffffff;
+    out property <color> selected-text: #ffffff;
     out property <color> control-border: dark ? #66666b : #a6a7ae;
     out property <color> danger: dark ? #ff8a91 : #bd2635;
     out property <length> font-size-xs: 11px;

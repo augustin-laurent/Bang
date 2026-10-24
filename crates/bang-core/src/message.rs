@@ -86,6 +86,12 @@ pub struct Attachment {
     pub size: u64,
     /// Local path once downloaded (empty until then).
     pub path: String,
+    /// Content-ID of an embedded resource, without angle brackets.
+    #[serde(default)]
+    pub content_id: String,
+    /// MIME disposition (inline, attachment, or empty).
+    #[serde(default)]
+    pub disposition: String,
 }
 
 /// A fully loaded message, as shown in the reading pane.

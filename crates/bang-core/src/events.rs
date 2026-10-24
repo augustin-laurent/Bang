@@ -9,10 +9,25 @@ use serde::{Deserialize, Serialize};
 pub enum UiCommand {
     /// Add an account and start syncing it.
     AddAccount(AccountConfig),
+    /// Validate a new account before saving it; correlated with the open wizard.
+    ConnectAccount {
+        /// Wizard attempt number.
+        attempt: i32,
+        /// Account settings to validate.
+        config: AccountConfig,
+    },
+    /// Cancel the active account setup, including browser sign-in.
+    CancelAccountSetup,
     /// Run an interactive OAuth2 login and add the resulting account.
     OAuthLogin {
         /// Provider to authenticate against.
         provider: crate::account::OAuthProvider,
+        /// Wizard attempt number.
+        attempt: i32,
+        /// Mailbox address, required for Microsoft and used as a login hint.
+        email: String,
+        /// Optional desktop client secret required by some Google registrations.
+        client_secret: Option<String>,
         /// OAuth2 client id from the local config.
         client_id: String,
     },
@@ -116,6 +131,42 @@ pub enum UiCommand {
         /// Search query.
         query: String,
     },
+    /// Set a category correction. None restores automatic classification at this scope.
+    SetCategory {
+        /// Target message.
+        message_id: i64,
+        /// Correction or automatic.
+        category: Option<crate::organization::MailCategory>,
+        /// Apply a sender rule across accounts instead of a message override.
+        sender: bool,
+    },
+    /// Create or edit a local label.
+    SaveLabel {
+        /// None creates a label.
+        id: Option<i64>,
+        /// Display name.
+        name: String,
+        /// RGB color.
+        color: String,
+    },
+    /// Remove a label without removing mail.
+    DeleteLabel {
+        /// Label id.
+        id: i64,
+    },
+    /// Assign or unassign a local label.
+    SetMessageLabel {
+        /// Message id.
+        message_id: i64,
+        /// Label id.
+        label_id: i64,
+        /// Desired assignment state.
+        assigned: bool,
+    },
+    /// Request an avatar for a normalized sender address.
+    RequestAvatar(String),
+    /// Enable or disable online avatar requests.
+    SetOnlineAvatars(bool),
     /// Shut down the service.
     Quit,
 }
@@ -162,6 +213,18 @@ pub struct SendRequest {
 /// An event from the mail core to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MailEvent {
+    /// Sign-in completed; incoming/outgoing server validation is starting.
+    AccountSetupChecking {
+        /// Wizard attempt number.
+        attempt: i32,
+    },
+    /// Result of a single wizard attempt, independent from background account sync.
+    AccountSetupFinished {
+        /// Wizard attempt number.
+        attempt: i32,
+        /// Failure message; absent after the validated account has been saved.
+        error: Option<String>,
+    },
     /// Account connection status changed.
     AccountStatus {
         /// Account that changed.
@@ -237,6 +300,20 @@ pub enum MailEvent {
     DraftsUpdated,
     /// The templates list changed; the UI should reload it.
     TemplatesUpdated,
+    /// A local organization operation failed without changing the reading state.
+    OrganizationError {
+        /// A user-facing English translation key.
+        message: String,
+    },
+    /// Local categories or labels changed; reload affected views.
+    OrganizationChanged,
+    /// A validated local avatar is available.
+    AvatarReady {
+        /// Normalized sender identity, never a message selection id.
+        address: String,
+        /// Validated cached PNG path.
+        path: String,
+    },
     /// A non-fatal error to display.
     Error {
         /// Account the error relates to, if any.

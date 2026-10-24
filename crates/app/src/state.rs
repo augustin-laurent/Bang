@@ -47,15 +47,12 @@ impl UiState {
     /// Local-cache read: the unified inbox is a query, not a stored folder.
     pub fn reload_messages(&self, ui: &BangApp, store: &Store) {
         let folder_id = self.selected_folder.load(Ordering::SeqCst);
-        let messages = if folder_id == UNIFIED_INBOX_ID {
-            store.get_unified_inbox(200)
-        } else {
-            store.get_messages(folder_id, 200)
-        };
+        let messages = crate::organization::messages(ui, store, folder_id);
         if let Ok(messages) = messages {
             let selected = self.selected_message.load(Ordering::SeqCst);
             if selected >= 0 && !messages.iter().any(|m| m.id == selected) {
                 self.selected_message.store(-1, Ordering::SeqCst);
+                crate::reader::clear(ui);
                 ui.set_selected_message(-1);
                 ui.set_message_body("".into());
                 ui.set_message_attachments(slint::ModelRc::new(VecModel::from(Vec::new())));
@@ -108,6 +105,7 @@ impl UiState {
                 }
             }
         }
+        crate::organization::refresh(ui, store, self.selected_folder.load(Ordering::SeqCst));
         let old = ui.get_folders();
         let model = reconcile_rows(&old, rows, |r| (r.is_header, r.account_id.clone(), r.id));
         if model != old {
@@ -120,6 +118,41 @@ impl UiState {
     /// Must be called on the Slint event loop thread.
     pub fn apply(&self, ui: &BangApp, store: &Store, event: MailEvent) {
         match event {
+            MailEvent::AccountSetupChecking { attempt } => {
+                if attempt == ui.get_wizard_attempt() && ui.get_wizard_open() && ui.get_wizard_busy() {
+                    ui.set_wizard_status(tr("Checking incoming and outgoing servers…").into());
+                }
+            },
+            MailEvent::AccountSetupFinished { attempt, error } => {
+                if attempt != ui.get_wizard_attempt() || !ui.get_wizard_open() { return; }
+                ui.set_wizard_busy(false);
+                if let Some(error) = error {
+                    tracing::warn!("account setup: {error}");
+                    let message = if error.contains("declined") {
+                        "Sign-in was declined. You can try again."
+                    } else if error.contains("timed out") {
+                        "Connection timed out. Check your network and try again."
+                    } else if ui.get_wizard_manual() {
+                        "Connection failed. Check the servers, encryption and app password."
+                    } else { "Sign-in failed. Check your provider configuration and try again." };
+                    ui.set_wizard_status(tr(message).into());
+                } else {
+                    ui.set_wizard_open(false);
+                    ui.set_wizard_manual(false);
+                    ui.set_wizard_provider("".into());
+                    ui.set_wizard_status("".into());
+                    ui.set_password("".into());
+                    ui.set_status_message(tr("Account connected").into());
+                    self.refresh_folders(ui, store);
+                }
+            },
+            MailEvent::AvatarReady { address, path } => crate::avatars::ready(ui, &address, &path),
+            MailEvent::OrganizationError { message } => {ui.set_organization_error(tr(&message).into());},
+            MailEvent::OrganizationChanged => {
+                ui.set_organization_error("".into());
+                crate::organization::refresh(ui, store, self.selected_folder.load(Ordering::SeqCst));
+                if !self.search_active.load(Ordering::SeqCst) {self.reload_messages(ui, store);}
+            },
             MailEvent::AccountStatus { account, status } => {
                 // Only non-idle states are shown; connected is the default.
                 let label = match status {
@@ -133,9 +166,6 @@ impl UiState {
                     .unwrap()
                     .insert(account.0, label);
                 self.refresh_folders(ui, store);
-                if ui.get_wizard_open() && matches!(status, bang_core::AccountStatus::Connected) {
-                    ui.set_wizard_open(false);
-                }
             }
             MailEvent::FoldersUpdated { .. } => {
                 self.refresh_folders(ui, store);
@@ -158,7 +188,7 @@ impl UiState {
                 if self.search_active.load(Ordering::SeqCst) {
                     return;
                 }
-                if selected == UNIFIED_INBOX_ID || selected == folder_id {
+                if selected == UNIFIED_INBOX_ID || selected == folder_id || ui.get_selected_label() >= 0 {
                     // Reconcile the bounded, date-sorted cache view. Repeated
                     // append events must not duplicate rows or grow it forever.
                     self.reload_messages(ui, store);
@@ -172,7 +202,7 @@ impl UiState {
                     return;
                 }
                 let selected = self.selected_folder.load(Ordering::SeqCst);
-                if selected == UNIFIED_INBOX_ID {
+                if selected == UNIFIED_INBOX_ID || ui.get_selected_label() >= 0 {
                     self.reload_messages(ui, store);
                     return;
                 }
@@ -195,14 +225,17 @@ impl UiState {
                 ui.set_message_sender(display_name(&message.summary.from).into());
                 ui.set_message_subject(message.summary.subject.clone().into());
                 ui.set_message_date(format_date(message.summary.date).into());
+                crate::organization::refresh(ui, store, self.selected_folder.load(Ordering::SeqCst));
                 let model = ui.get_messages();
                 if let Some(index) = model.iter().position(|r| i64::from(r.id) == message.summary.id) {
-                    let row = to_row(&message.summary);
+                    let mut row = to_row(&message.summary);
+                    crate::avatars::decorate(ui, &mut row);
                     if model.row_data(index).as_ref() != Some(&row) {
                         model.set_row_data(index, row);
                     }
                 }
-                // HTML-only messages are rendered as structured text.
+                crate::reader::load(ui, &message);
+                // Also keep the text fallback for unavailable/failed native views.
                 ui.set_message_body(if message.body_text.is_empty() {
                     bang_core::mime::render_html_subset(&message.body_html).into()
                 } else {
@@ -211,6 +244,7 @@ impl UiState {
                 let atts: Vec<AttachmentRow> = message
                     .attachments
                     .iter()
+                    .filter(|a| a.disposition != "inline" || !a.content_type.starts_with("image/") || a.content_id.is_empty())
                     .map(|a| AttachmentRow {
                         filename: a.filename.clone().into(),
                         size: format_size(a.size).into(),
@@ -219,6 +253,7 @@ impl UiState {
                     })
                     .collect();
                 ui.set_message_attachments(slint::ModelRc::new(VecModel::from(atts)));
+                if !self.search_active.load(Ordering::SeqCst) {self.reload_messages(ui, store);}
             }
             MailEvent::FollowUpDue { subject, .. } => {
                 notify(&tr("Follow-up due"), &subject);
@@ -250,15 +285,14 @@ impl UiState {
             MailEvent::Error { message, .. } => {
                 ui.set_message_loading(false);
                 ui.set_status_message(format!("{} {}", tr("Error:"), message).into());
-                // The wizard stays open during OAuth; show failures there too.
-                ui.set_wizard_status(message.into());
             }
         }
     }
 }
 
 /// Refresh message rows without replacing the model or unchanged delegates.
-pub(crate) fn set_message_rows(ui: &BangApp, rows: Vec<MessageRow>) {
+pub(crate) fn set_message_rows(ui: &BangApp, mut rows: Vec<MessageRow>) {
+    for row in &mut rows {crate::avatars::decorate(ui, row); if ui.get_online_avatars() {ui.invoke_avatar_requested(row.sender_address.clone());}}
     let old = ui.get_messages();
     let model = reconcile_rows(&old, rows, |r| r.id);
     if model != old {
@@ -268,7 +302,7 @@ pub(crate) fn set_message_rows(ui: &BangApp, rows: Vec<MessageRow>) {
 
 // Keep surviving rows in place for flag updates, arrivals and deletions.
 // A different ordering (e.g. a new search ranking) needs one model reset.
-fn reconcile_rows<T, K>(current: &ModelRc<T>, rows: Vec<T>, key: impl Fn(&T) -> K) -> ModelRc<T>
+pub(crate) fn reconcile_rows<T, K>(current: &ModelRc<T>, rows: Vec<T>, key: impl Fn(&T) -> K) -> ModelRc<T>
 where
     T: Clone + PartialEq + 'static,
     K: Clone + Eq + std::hash::Hash,
@@ -314,6 +348,11 @@ pub(crate) fn to_row(m: &MessageSummary) -> MessageRow {
     MessageRow {
         id: m.id as i32,
         sender: display_name(&m.from).into(),
+        sender_address: m.from.address.clone().into(),
+        initials: crate::avatars::initials(&m.from.name, &m.from.address).into(),
+        avatar: crate::avatars::placeholder(),
+        has_avatar: false,
+        avatar_tint: crate::avatars::tint(&m.from.address),
         subject: m.subject.clone().into(),
         date: format_date(m.date).into(),
         preview: m.preview.clone().into(),
@@ -394,15 +433,11 @@ pub fn set_message_header(ui: &BangApp, summary: &MessageSummary) {
             .join(", ")
             .into(),
     );
-    ui.set_message_initials(
-        display_name(&summary.from)
-            .split_whitespace()
-            .take(2)
-            .filter_map(|w| w.chars().next())
-            .collect::<String>()
-            .to_uppercase()
-            .into(),
-    );
+    ui.set_message_initials(crate::avatars::initials(&summary.from.name, &summary.from.address).into());
+    ui.set_message_avatar_tint(crate::avatars::tint(&summary.from.address));
+    ui.set_message_avatar_loaded(ui.get_online_avatars() && crate::avatars::image(&summary.from.address).size().width > 0);
+    ui.set_message_avatar(if ui.get_online_avatars() {crate::avatars::image(&summary.from.address)} else {Default::default()});
+    if ui.get_online_avatars() {ui.invoke_avatar_requested(summary.from.address.clone().into());}
     ui.set_message_subject(summary.subject.clone().into());
     ui.set_message_date(format_date(summary.date).into());
     ui.set_message_starred(summary.flags.is_flagged());

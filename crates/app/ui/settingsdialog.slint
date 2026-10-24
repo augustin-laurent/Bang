@@ -1,9 +1,38 @@
-import { ScrollView, ListView, ComboBox } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ActionButton } from "controls.slint";
+import { ActionButton, CheckControl } from "controls.slint";
 import { AccountRow } from "models.slint";
+// Each miniature has its own palette; the selected label always uses the live theme.
+component ThemeOption inherits Rectangle {
+    in property <string> name; in property <string> mode; in property <bool> selected;
+    callback chosen();
+    height: 104px; border-radius: 8px;
+    border-width: root.selected || focus.has-focus ? 2px : 1px;
+    border-color: root.selected || focus.has-focus ? Theme.accent : Theme.control-border;
+    background: touch.has-hover ? Theme.hover : Theme.bg;
+    accessible-role: button; accessible-label: root.name;
+    accessible-action-default => { root.chosen(); }
+    forward-focus: focus;
+    Rectangle { x: 10px; y: 10px; width: parent.width - 20px; height: 52px;
+        clip: true; border-radius: 4px; background: root.mode == "dark" ? #242426 : #eceef1;
+        Rectangle { x: 0px; width: parent.width * 0.27; height: parent.height; background: root.mode == "dark" ? #353538 : #d9dde3; }
+        Rectangle { x: parent.width * 0.3; y: 6px; width: parent.width * 0.28; height: 40px; background: root.mode == "dark" ? #1c1c1e : #ffffff;
+            Rectangle { x: 3px; y: 5px; width: parent.width - 6px; height: 8px; border-radius: 2px; background: root.selected ? Theme.selection : root.mode == "dark" ? #66666b : #b9bec7; }
+            Rectangle { x: 3px; y: 19px; width: parent.width - 6px; height: 3px; background: root.mode == "dark" ? #66666b : #d9dde3; }
+        }
+        Rectangle { x: parent.width * 0.62; y: 6px; width: parent.width * 0.34; height: 40px; background: root.mode == "dark" || root.mode == "system" ? #1c1c1e : #ffffff;
+            Rectangle { x: 6px; y: 8px; width: parent.width - 12px; height: 3px; background: root.mode == "light" ? #b9bec7 : #929298; }
+            Rectangle { x: 6px; y: 16px; width: parent.width - 12px; height: 3px; background: root.mode == "light" ? #d9dde3 : #66666b; }
+        }
+    }
+    Text { y: 70px; height: 26px; text: root.name; color: Theme.text; font-size: 13px; font-weight: root.selected ? 600 : 400; horizontal-alignment: center; vertical-alignment: center; }
+    focus := FocusScope { key-pressed(e) => { if e.text == " " || e.text == "\n" { root.chosen(); return accept; } return reject; } }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.chosen(); } }
+}
+
 export component SettingsDialog inherits Rectangle {
     in property <bool> open; in property <[AccountRow]> accounts;
+    in property <bool> online-avatars: true; callback avatars-toggled(bool);
     in property <string> theme; in property <string> language;
     private property <string> remove-id; private property <string> remove-email;
     callback theme-selected(string); callback language-selected(string);
@@ -11,37 +40,34 @@ export component SettingsDialog inherits Rectangle {
     changed open => { if !self.open { self.remove-id = ""; } }
     visible: open; background: #00000044; TouchArea { }
     Rectangle {
-        width: min(540px, parent.width - 40px); height: min(680px, parent.height - 32px);
+        width: min(600px, parent.width - 40px); height: min(720px, parent.height - 32px);
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
         border-radius: 16px; background: Theme.bg;
         VerticalLayout { padding: 24px; spacing: 20px;
             Text { text: @tr("Settings"); color: Theme.text; font-size: 20px; font-weight: 600; }
             ScrollView { content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                VerticalLayout { spacing: 20px; padding: 4px;
+                VerticalLayout { spacing: 20px; padding: 4px; alignment: start;
                     Text { text: @tr("Appearance"); color: Theme.text; font-size: 14px; font-weight: 600; }
-                    HorizontalLayout { spacing: 8px;
-                        ActionButton { modal: true; text: @tr("System"); active: root.theme == "system"; clicked => { root.theme-selected("system"); } }
-                        ActionButton { modal: true; text: @tr("Light"); active: root.theme == "light"; clicked => { root.theme-selected("light"); } }
-                        ActionButton { modal: true; text: @tr("Dark"); active: root.theme == "dark"; clicked => { root.theme-selected("dark"); } }
+                    HorizontalLayout { spacing: 12px;
+                        ThemeOption { name: @tr("System"); mode: "system"; selected: root.theme == "system"; chosen => { root.theme-selected("system"); } }
+                        ThemeOption { name: @tr("Light"); mode: "light"; selected: root.theme == "light"; chosen => { root.theme-selected("light"); } }
+                        ThemeOption { name: @tr("Dark"); mode: "dark"; selected: root.theme == "dark"; chosen => { root.theme-selected("dark"); } }
                     }
-                    Rectangle { height: 88px; border-radius: 8px; background: Theme.sidebar-bg;
-                        Rectangle { x: 20px; y: 16px; width: 54px; height: 56px; background: Theme.hover; border-radius: 4px; }
-                        Rectangle { x: 80px; y: 16px; width: 100px; height: 56px; background: Theme.bg;
-                            Rectangle { x: 4px; y: 4px; width: 92px; height: 16px; border-radius: 3px; background: Theme.selection; }
-                        }
-                        Rectangle { x: 188px; y: 16px; width: parent.width - 208px; height: 56px; background: Theme.bg; }
-                    }
+                    CheckControl { text: @tr("Online avatars"); checked: root.online-avatars; toggled => { root.avatars-toggled(self.checked); } }
                     Text { text: @tr("Language"); color: Theme.text; font-size: 14px; font-weight: 600; }
-                    ComboBox { model: [@tr("System"), "Français", "English"]; current-index: root.language == "fr" ? 1 : root.language == "en" ? 2 : 0;
-                        selected(value) => { root.language-selected(self.current-index == 1 ? "fr" : self.current-index == 2 ? "en" : "system"); }
+                    HorizontalLayout { spacing: 8px;
+                        ActionButton { modal: true; text: @tr("System"); active: root.language == "system"; framed: true; clicked => { root.language-selected("system"); } }
+                        ActionButton { modal: true; text: "Français"; active: root.language == "fr"; framed: true; clicked => { root.language-selected("fr"); } }
+                        ActionButton { modal: true; text: "English"; active: root.language == "en"; framed: true; clicked => { root.language-selected("en"); } }
                     }
                     Text { text: @tr("Accounts"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     if root.accounts.length == 0: Text { text: @tr("No accounts"); color: Theme.text-secondary; font-size: 13px; }
-                    for acc in root.accounts: HorizontalLayout { height: 38px; spacing: 8px;
+                    for acc in root.accounts: HorizontalLayout { height: 48px; spacing: 12px;
+                        Rectangle { width: 24px; Image { y: (parent.height - self.height) / 2; width: 24px; height: 24px; source: acc.provider == "google" ? @image-url("icons/google.svg") : acc.provider == "microsoft" ? @image-url("icons/microsoft.svg") : @image-url("icons/mail.svg"); colorize: acc.provider == "" ? Theme.text-secondary : transparent; } }
                         Text { text: acc.email; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
                         ActionButton { modal: true; text: @tr("Remove"); icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
                     }
-                    ActionButton { modal: true; text: @tr("Add account"); icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
+                    ActionButton { modal: true; text: @tr("Add account"); framed: true; icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
                 }
             }
             ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
@@ -49,7 +75,7 @@ export component SettingsDialog inherits Rectangle {
     }
     if root.remove-id != "": Rectangle {
         background: #00000066; TouchArea { }
-        Rectangle { width: 400px; height: 210px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        Rectangle { width: min(400px, parent.width - 32px); height: 210px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             background: Theme.bg; border-radius: 16px;
             VerticalLayout { padding: 24px; spacing: 16px;
                 Text { text: @tr("Remove this account?"); color: Theme.text; font-size: 16px; font-weight: 600; }

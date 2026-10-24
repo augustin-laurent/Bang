@@ -1,11 +1,13 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ActionButton } from "controls.slint";
-import { FolderRow } from "models.slint";
+import { FolderRow, LabelRow } from "models.slint";
 export component Sidebar inherits Rectangle {
     background: Theme.sidebar-bg;
     in property <[FolderRow]> folders;
     in property <int> selected-folder: -1;
+    in property <[LabelRow]> labels; in property <int> selected-label: -1;
+    callback label-clicked(int); callback manage-labels;
     callback add-account; callback settings; callback hide;
     callback folder-clicked(int); callback account-toggled(string);
     VerticalLayout {
@@ -21,7 +23,7 @@ export component Sidebar inherits Rectangle {
             for folder in root.folders: Rectangle {
                 height: folder.is-header ? 44px : 32px;
                 border-radius: 7px;
-                background: !folder.is-header && folder.id == root.selected-folder ? Theme.hover : transparent;
+                background: !folder.is-header && root.selected-label < 0 && folder.id == root.selected-folder ? Theme.hover : transparent;
                 accessible-role: button; accessible-label: folder.name; accessible-enabled: !Theme.blocked;
                 accessible-action-default => { if Theme.blocked { return; } if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } }
                 HorizontalLayout {
@@ -40,6 +42,21 @@ export component Sidebar inherits Rectangle {
                     if folder.unread > 0 && !folder.is-header: Text { text: folder.unread; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; }
                 }
                 TouchArea { enabled: !Theme.blocked; clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } } }
+            }
+        }
+        HorizontalLayout { height: 32px;
+            Text { text: @tr("Labels"); color: Theme.text-secondary; font-size: 11px; vertical-alignment: center; }
+            ActionButton { compact: true; text: @tr("Manage labels"); icon: @image-url("icons/plus.svg"); clicked => { root.manage-labels(); } }
+        }
+        if root.labels.length > 0: ListView { height: min(160px, root.labels.length * 32px + 8px); vertical-stretch: 0; content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            for label in root.labels: Rectangle { height: 32px; border-radius: 7px; background: label.id == root.selected-label ? Theme.hover : transparent;
+                HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 8px;
+                    Rectangle { width: 10px; Rectangle { width: 10px; height: 10px; y: (parent.height - self.height) / 2; border-radius: 5px; background: label.tint; } }
+                    Text { text: label.name; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
+                }
+                accessible-role: button; accessible-label: label.name; accessible-enabled: !Theme.blocked;
+                accessible-action-default => { if !Theme.blocked { root.label-clicked(label.id); } }
+                TouchArea { enabled: !Theme.blocked; clicked => { root.label-clicked(label.id); } }
             }
         }
         ActionButton { text: @tr("Add account"); icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }

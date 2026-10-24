@@ -1,7 +1,7 @@
 //! MIME parsing and text extraction.
 
 use dom_query::{Document, NodeData, NodeRef};
-use mail_parser::{MessageParser, PartRole};
+use mail_parser::{Charset, HeaderForm, MessageParser, PartKind, PartRole};
 
 use crate::error::{Error, Result};
 use crate::message::{Attachment, EmailAddress};
@@ -40,6 +40,54 @@ pub struct AttachmentData {
     pub size: u64,
     /// Decoded content.
     pub data: Vec<u8>,
+    /// Content-ID for embedded resources (without angle brackets).
+    pub content_id: String,
+    /// Content-Disposition, or inferred inline disposition.
+    pub disposition: String,
+}
+
+/// Decode an unstructured RFC 2047 header with its declared charset.
+pub fn decode_header(bytes: &[u8]) -> String {
+    HeaderForm::Text
+        .parse(bytes)
+        .value()
+        .as_text()
+        .map(str::to_owned)
+        .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Decode an IMAP modified UTF-7 display name; preserve invalid sequences.
+/// Server paths must retain their original wire representation.
+pub fn decode_folder_name(name: &str) -> String {
+    let mut result = String::new();
+    let mut rest = name;
+    while let Some(start) = rest.find('&') {
+        result.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let Some(end) = rest.find('-') else { break };
+        if end == 1 {
+            result.push('&');
+        } else {
+            let encoded = &rest[1..end];
+            if !encoded
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b',')
+            {
+                result.push_str(&rest[..=end]);
+            } else {
+                let standard = format!("+{}-", encoded.replace(',', "/"));
+                let (decoded, malformed) = Charset::Utf7.decode_checked(standard.as_bytes());
+                if malformed {
+                    result.push_str(&rest[..=end]);
+                } else {
+                    result.push_str(&decoded);
+                }
+            }
+        }
+        rest = &rest[end + 1..];
+    }
+    result.push_str(rest);
+    result
 }
 
 /// Parse a raw email message.
@@ -76,17 +124,18 @@ pub fn parse(raw: &[u8]) -> Result<ParsedMessage> {
         .unwrap_or_default()
         .to_string();
 
-    let body_text = message
-        .text_bodies()
-        .collect::<Vec<_>>()
-        .join("\n");
+    let body_text = message.text_bodies().collect::<Vec<_>>().join("\n");
     let body_html = message
-        .html_bodies()
+        .html_body()
+        .filter(|p| matches!(p.kind(), PartKind::Html))
+        .filter_map(|p| p.text())
         .collect::<Vec<_>>()
         .join("\n");
 
     let mut attachments = Vec::new();
-    for part in message.attachments() {
+    for part in message.root().parts().filter(|p| {
+        p.is_attachment() || (!p.is_text() && (p.is_inline() || p.content_id().is_some()))
+    }) {
         if part.role() == PartRole::Container {
             continue;
         }
@@ -103,6 +152,21 @@ pub fn parse(raw: &[u8]) -> Result<ParsedMessage> {
             content_type,
             size: data.len() as u64,
             data: data.to_vec(),
+            content_id: part
+                .content_id()
+                .unwrap_or_default()
+                .trim_matches(['<', '>'])
+                .to_string(),
+            disposition: part
+                .content_disposition()
+                .map(|d| d.ctype().to_string())
+                .unwrap_or_else(|| {
+                    if part.is_inline() {
+                        "inline".into()
+                    } else {
+                        String::new()
+                    }
+                }),
         });
     }
 
@@ -127,12 +191,7 @@ pub fn extract_preview(body_text: &str, max_chars: usize) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    // Truncate on a char boundary.
-    let mut end = max_chars.min(collapsed.len());
-    while end > 0 && !collapsed.is_char_boundary(end) {
-        end -= 1;
-    }
-    collapsed[..end].to_string()
+    collapsed.chars().take(max_chars).collect()
 }
 
 /// Render a common HTML subset as structured plain text.
@@ -323,6 +382,8 @@ pub fn to_attachment_records(
             content_type: a.content_type.clone(),
             size: a.size,
             path: String::new(),
+            content_id: a.content_id.clone(),
+            disposition: a.disposition.clone(),
         })
         .collect()
 }
@@ -330,6 +391,88 @@ pub fn to_attachment_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_encoded_headers_and_folder_names() {
+        assert_eq!(
+            decode_header(b"=?UTF-8?Q?Oph=C3=A9lie?= =?UTF-8?B?IMOJdMOp?="),
+            "Ophélie Été"
+        );
+        assert_eq!(
+            decode_header(b"=?windows-1252?Q?Jusqu=92=E0_30_=80?="),
+            "Jusqu’à 30 €"
+        );
+        assert_eq!(
+            decode_header(b"=?UTF-8?Q?Feuille_de_calcul?=\r\n =?UTF-8?Q?_partag=C3=A9e?="),
+            "Feuille de calcul partagée"
+        );
+        assert_eq!(
+            decode_header("Bonjour déjà prêt".as_bytes()),
+            "Bonjour déjà prêt"
+        );
+        assert_eq!(
+            decode_header(b"broken =?UTF-8?Q?unterminated"),
+            "broken =?UTF-8?Q?unterminated"
+        );
+        assert_eq!(
+            decode_folder_name("Messages envoy&AOk-s"),
+            "Messages envoyés"
+        );
+        assert_eq!(
+            decode_folder_name("Projet &- notes + été"),
+            "Projet & notes + été"
+        );
+        assert_eq!(decode_folder_name("&ZeVnLIqe-"), "日本語");
+        assert_eq!(
+            decode_folder_name("A &bad?tail- &unfinished"),
+            "A &bad?tail- &unfinished"
+        );
+    }
+
+    #[test]
+    fn body_charsets_and_transfer_encodings() {
+        for (charset, encoding, body, expected) in [
+            (
+                "UTF-8",
+                "quoted-printable",
+                "=C3=89t=C3=A9 =C3=A0 3,14=E2=82=AC",
+                "Été à 3,14€",
+            ),
+            (
+                "ISO-8859-1",
+                "quoted-printable",
+                "=C9t=E9 d=E9j=E0",
+                "Été déjà",
+            ),
+            (
+                "windows-1252",
+                "quoted-printable",
+                "Jusqu=92=E0 30 =80",
+                "Jusqu’à 30 €",
+            ),
+            ("UTF-8", "base64", "w4l0w6kgw6AgMywxNOKCrA==", "Été à 3,14€"),
+        ] {
+            let raw = format!("From: alice@example.test\r\nSubject: Charset\r\nContent-Type: text/plain; charset={charset}\r\nContent-Transfer-Encoding: {encoding}\r\n\r\n{body}");
+            let parsed = parse(raw.as_bytes()).unwrap();
+            assert_eq!(parsed.body_text, expected, "{charset}");
+            assert!(
+                parsed.body_html.is_empty(),
+                "plain text must not become synthetic HTML"
+            );
+        }
+    }
+
+    #[test]
+    fn html_related_resources_keep_cid_and_disposition() {
+        let raw = b"From: Alice <alice@example.test>\r\nSubject: Related\r\nContent-Type: multipart/related; boundary=x\r\n\r\n--x\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<p>Hello</p><img src=\"cid:logo@example.test\">\r\n--x\r\nContent-Type: image/png\r\nContent-ID: <logo@example.test>\r\nContent-Disposition: inline\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n--x--\r\n";
+        let parsed = parse(raw).unwrap();
+        assert!(parsed.body_html.contains("cid:logo@example.test"));
+        assert_eq!(parsed.attachments.len(), 1);
+        let a = &parsed.attachments[0];
+        assert_eq!(a.content_id, "logo@example.test");
+        assert_eq!(a.disposition, "inline");
+        assert_eq!(a.data, b"hello");
+    }
 
     #[test]
     fn parse_simple_text_message() {
@@ -348,8 +491,7 @@ mod tests {
         // mail-parser strips the angle brackets from Message-ID.
         assert_eq!(msg.message_id, "1@example.com");
         assert!(msg.body_text.contains("Hi there!"));
-        // mail-parser converts text parts to HTML, so body_html holds the
-        // converted markup; the UI prefers body_text when it is non-empty.
+        assert!(msg.body_html.is_empty());
         assert!(msg.attachments.is_empty());
     }
 
@@ -459,8 +601,8 @@ mod tests {
     fn extract_preview_collapses_and_truncates() {
         let preview = extract_preview("Hello\n\nworld   foo", 11);
         assert_eq!(preview, "Hello world");
-        // Truncation respects char boundaries ("héllo" is 6 bytes).
-        let preview = extract_preview("héllo wörld", 6);
+        // Limits count Unicode characters, not UTF-8 bytes.
+        let preview = extract_preview("héllo wörld", 5);
         assert_eq!(preview, "héllo");
     }
 }

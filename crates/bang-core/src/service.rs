@@ -13,7 +13,6 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::account::{AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode};
 use crate::error::{Error, Result};
 use crate::events::{MailEvent, SendRequest, UiCommand};
-use crate::message::AccountStatus;
 use crate::store::Store;
 use crate::sync::{start_syncer, SyncerCommand};
 
@@ -23,6 +22,8 @@ use crate::sync::{start_syncer, SyncerCommand};
 /// OAuth logins) is spawned on the ambient tokio runtime.
 pub struct MailService {
     store: Arc<Store>,
+    account_setup: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    avatars: Arc<crate::avatars::AvatarCache>,
     events_tx: UnboundedSender<MailEvent>,
     syncers: Arc<Mutex<HashMap<String, std_mpsc::Sender<SyncerCommand>>>>,
 }
@@ -36,6 +37,8 @@ impl MailService {
     pub fn new(store: Arc<Store>, events_tx: UnboundedSender<MailEvent>) -> Self {
         Self {
             store,
+            account_setup: Mutex::new(None),
+            avatars: crate::avatars::AvatarCache::new(),
             events_tx,
             syncers: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -54,6 +57,59 @@ impl MailService {
         }
         let tx = start_syncer(config.clone(), self.store.clone(), self.events_tx.clone());
         syncers.insert(config.id.0.clone(), tx);
+    }
+
+    fn cancel_account_setup(&self) {
+        if let Some(task) = self.account_setup.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+
+    fn start_account_setup(
+        &self,
+        attempt: i32,
+        account: impl std::future::Future<Output = Result<AccountConfig>> + Send + 'static,
+    ) {
+        self.cancel_account_setup();
+        let store = self.store.clone();
+        let events = self.events_tx.clone();
+        let syncers = self.syncers.clone();
+        let task = tokio::spawn(async move {
+            let result = async {
+                let config = account.await?;
+                let _ = events.send(MailEvent::AccountSetupChecking { attempt });
+                // Do not persist invalid credentials or send a test message.
+                let check = config.clone();
+                tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    tokio::task::spawn_blocking(move || {
+                        crate::imap::ImapConn::connect(&check.imap, &check.auth, &check.email)
+                            .map(|_| ())
+                    })
+                    .await
+                    .map_err(|e| Error::Network(e.to_string()))??;
+                    crate::smtp::test_connection(&config.smtp, &config.auth, &config.email).await
+                })
+                .await
+                .map_err(|_| Error::Network("Connection timed out".into()))??;
+                store.save_account(&config)?;
+                let mut syncers = syncers.lock().unwrap();
+                if let Some(old) = syncers.remove(&config.id.0) {
+                    let _ = old.send(SyncerCommand::Quit);
+                }
+                let tx = start_syncer(config.clone(), store, events.clone());
+                syncers.insert(config.id.0, tx);
+                Ok::<_, Error>(())
+            }
+            .await;
+            if let Err(error) = &result {
+                tracing::warn!("account setup failed: {error}");
+            }
+            let _ = events.send(MailEvent::AccountSetupFinished {
+                attempt,
+                error: result.err().map(|e| e.to_string()),
+            });
+        });
+        *self.account_setup.lock().unwrap() = Some(task);
     }
 
     /// Apply a local-only store mutation to a set of messages and notify the UI.
@@ -114,6 +170,21 @@ impl MailService {
         }
     }
 
+    fn organization_result(&self, result: Result<()>) {
+        let event = match result {
+            Ok(()) => MailEvent::OrganizationChanged,
+            Err(e) => {
+                let message = match e {
+                    Error::Store(message) if message.contains("UNIQUE constraint failed: labels.name") => "A label with this name already exists.".into(),
+                    Error::Store(message) => message,
+                    other => other.to_string(),
+                };
+                MailEvent::OrganizationError { message }
+            },
+        };
+        let _ = self.events_tx.send(event);
+    }
+
     /// Dispatch every pending send whose time has come.
     ///
     /// Called periodically by the app's bridge. A successful send is removed
@@ -155,60 +226,39 @@ impl MailService {
     /// Must be called from within a tokio runtime (send commands spawn tasks).
     pub fn handle_command(&self, cmd: UiCommand) {
         match cmd {
+            UiCommand::SetCategory { message_id, category, sender } => self.organization_result(self.store.set_category(message_id, category, sender)),
+            UiCommand::SaveLabel { id, name, color } => self.organization_result(self.store.save_label(id, &name, &color)),
+            UiCommand::DeleteLabel { id } => self.organization_result(self.store.delete_label(id)),
+            UiCommand::SetMessageLabel { message_id, label_id, assigned } => self.organization_result(self.store.set_message_label(message_id, label_id, assigned)),
+            UiCommand::RequestAvatar(address) => self.avatars.request(address, self.events_tx.clone()),
+            UiCommand::SetOnlineAvatars(enabled) => self.avatars.set_enabled(enabled),
             UiCommand::AddAccount(config) => {
                 self.add_account(config);
             }
-            UiCommand::OAuthLogin {
-                provider,
-                client_id,
-            } => {
-                let store = self.store.clone();
-                let events_tx = self.events_tx.clone();
-                let syncers = self.syncers.clone();
-                tokio::spawn(async move {
-                    let result = async {
-                        let tokens = crate::oauth::start_flow(provider, &client_id).await?;
-                        let email =
-                            crate::oauth::fetch_email(provider, &tokens.access_token).await?;
-                        Ok::<_, Error>((tokens, email))
-                    }
-                    .await;
-                    match result {
-                        Ok((tokens, email)) => {
-                            let config = AccountConfig {
-                                id: AccountId(email.clone()),
-                                email: email.clone(),
-                                imap: default_imap(provider),
-                                smtp: default_smtp(provider),
-                                auth: AuthMethod::OAuth2 {
-                                    provider,
-                                    access_token: tokens.access_token,
-                                    refresh_token: tokens.refresh_token,
-                                    expires_at: tokens.expires_at,
-                                },
-                            };
-                            let tx = start_syncer(
-                                config.clone(),
-                                store.clone(),
-                                events_tx.clone(),
-                            );
-                            syncers
-                                .lock()
-                                .unwrap()
-                                .insert(config.id.0.clone(), tx);
-                            let _ = store.save_account(&config);
-                            let _ = events_tx.send(MailEvent::AccountStatus {
-                                account: config.id,
-                                status: AccountStatus::Syncing,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = events_tx.send(MailEvent::Error {
-                                account: None,
-                                message: format!("Sign-in failed: {e}"),
-                            });
-                        }
-                    }
+            UiCommand::CancelAccountSetup => self.cancel_account_setup(),
+            UiCommand::ConnectAccount { attempt, config } => {
+                self.start_account_setup(attempt, async move { Ok(config) });
+            }
+            UiCommand::OAuthLogin { provider, client_id, client_secret, email, attempt } => {
+                self.start_account_setup(attempt, async move {
+                    let tokens = crate::oauth::start_flow_with_options(
+                        provider, &client_id, client_secret.as_deref(), &email,
+                    ).await?;
+                    // Exchange access tokens cannot call Microsoft Graph /me.
+                    // The supplied mailbox is authenticated by IMAP/SMTP below.
+                    let email = match provider {
+                        OAuthProvider::Google => crate::oauth::fetch_email(provider, &tokens.access_token).await?,
+                        OAuthProvider::Microsoft if email.contains('@') => email,
+                        OAuthProvider::Microsoft => return Err(Error::Config("Enter a valid email address.".into())),
+                    };
+                    Ok(AccountConfig {
+                        id: AccountId(email.clone()), email,
+                        imap: default_imap(provider), smtp: default_smtp(provider),
+                        auth: AuthMethod::OAuth2 {
+                            provider, access_token: tokens.access_token,
+                            refresh_token: tokens.refresh_token, expires_at: tokens.expires_at,
+                        },
+                    })
                 });
             }
             UiCommand::RemoveAccount(id) => {
@@ -222,9 +272,17 @@ impl MailService {
             UiCommand::OpenMessage { message_id, .. } => {
                 match self.store.get_message_full(message_id) {
                     Ok(Some(full)) => {
-                        let _ = self
-                            .events_tx
-                            .send(MailEvent::MessageLoaded { message: full });
+                        // Older caches did not retain CID metadata. Keep the
+                        // offline body visible while refreshing those resources.
+                        let refresh = full.body_html.to_ascii_lowercase().contains("cid:")
+                            && full.attachments.iter().all(|a| a.content_id.is_empty());
+                        let account = full.summary.account_id.clone();
+                        let _ = self.events_tx.send(MailEvent::MessageLoaded { message: full });
+                        if refresh {
+                            if let Some(tx) = self.syncers.lock().unwrap().get(&account) {
+                                let _ = tx.send(SyncerCommand::FetchBody { message_id });
+                            }
+                        }
                     }
                     Ok(_) => {
                         // Body not cached: ask the account's syncer to fetch it.
@@ -436,7 +494,7 @@ async fn smtp_send(store: &Store, request: &SendRequest) -> Result<()> {
 fn default_imap(provider: OAuthProvider) -> ImapConfig {
     match provider {
         OAuthProvider::Google => ImapConfig {
-            host: "imap-mail.google.com".into(),
+            host: "imap.gmail.com".into(),
             port: 993,
             tls: TlsMode::Tls,
         },
@@ -452,7 +510,7 @@ fn default_imap(provider: OAuthProvider) -> ImapConfig {
 fn default_smtp(provider: OAuthProvider) -> SmtpConfig {
     match provider {
         OAuthProvider::Google => SmtpConfig {
-            host: "smtp-mail.google.com".into(),
+            host: "smtp.gmail.com".into(),
             port: 465,
             tls: TlsMode::Tls,
         },
@@ -461,5 +519,99 @@ fn default_smtp(provider: OAuthProvider) -> SmtpConfig {
             port: 587,
             tls: TlsMode::Starttls,
         },
+    }
+}
+
+#[cfg(test)]
+mod account_setup_tests {
+    use super::*;
+    #[tokio::test]
+    async fn failed_account_setup_is_reported_without_saving_credentials() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            write.write_all(b"* OK local IMAP\r\n").await.unwrap();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let tag = line.split_whitespace().next().unwrap();
+            write
+                .write_all(format!("{tag} NO Authentication failed\r\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        let store = Arc::new(Store::open(std::path::Path::new(":memory:")).unwrap());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = MailService::new(store.clone(), tx);
+        service.handle_command(UiCommand::ConnectAccount {
+            attempt: 42,
+            config: AccountConfig {
+                id: AccountId("new@example.test".into()),
+                email: "new@example.test".into(),
+                imap: ImapConfig {
+                    host: "127.0.0.1".into(),
+                    port,
+                    tls: TlsMode::Plaintext,
+                },
+                smtp: SmtpConfig {
+                    host: "127.0.0.1".into(),
+                    port,
+                    tls: TlsMode::Plaintext,
+                },
+                auth: AuthMethod::Password {
+                    username: "local".into(),
+                    password: "rejected".into(),
+                },
+            },
+        });
+        let checking = rx.recv().await.unwrap();
+        assert!(matches!(
+            checking,
+            MailEvent::AccountSetupChecking { attempt: 42 }
+        ));
+        let event = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            event,
+            MailEvent::AccountSetupFinished {
+                attempt: 42,
+                error: Some(_)
+            }
+        ));
+        assert!(store.get_accounts().unwrap().is_empty());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_aborts_setup_and_only_a_new_attempt_reports_a_result() {
+        let store = Arc::new(Store::open(std::path::Path::new(":memory:")).unwrap());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = MailService::new(store.clone(), tx);
+        service.start_account_setup(1, std::future::pending());
+        service.handle_command(UiCommand::CancelAccountSetup);
+        service.start_account_setup(2, async { Err(Error::Auth("declined".into())) });
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            event,
+            MailEvent::AccountSetupFinished {
+                attempt: 2,
+                error: Some(_)
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+        assert!(store.get_accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn gmail_uses_documented_endpoints() {
+        assert_eq!(default_imap(OAuthProvider::Google).host, "imap.gmail.com");
+        assert_eq!(default_smtp(OAuthProvider::Google).host, "smtp.gmail.com");
     }
 }

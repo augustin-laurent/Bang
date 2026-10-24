@@ -4,7 +4,9 @@ import { Theme } from "theme.slint";
 export { Theme } from "theme.slint";
 export { Palette } from "std-widgets.slint";
 import { ActionButton, SearchField } from "controls.slint";
-import { FolderRow, MessageRow, AccountRow, AttachmentRow, DraftRow, TemplateRow, PendingSendRow } from "models.slint";
+import { FolderRow, MessageRow, AccountRow, AttachmentRow, DraftRow, TemplateRow, PendingSendRow, LabelRow, CategoryRow } from "models.slint";
+import { CategoryBar } from "categories.slint";
+import { OrganizationDialog } from "organizationdialog.slint";
 import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
@@ -19,6 +21,26 @@ export component BangApp inherits Window {
     min-width: 720px; min-height: 480px; background: Theme.bg;
     default-font-family: "Noto Sans"; default-font-size: 13px;
     in property <[FolderRow]> folders; in-out property <[MessageRow]> messages;
+    in property <[LabelRow]> labels;
+    in property <[CategoryRow]> categories;
+    in-out property <int> selected-label: -1;
+    in-out property <string> selected-category: "";
+    in property <bool> categories-visible: false;
+    in-out property <bool> online-avatars: true;
+    in property <bool> message-avatar-loaded; in property <image> message-avatar; in property <color> message-avatar-tint;
+    in-out property <bool> organization-open: false;
+    in-out property <bool> managing-labels: false;
+    in-out property <int> organization-message: -1;
+    in-out property <int> organization-category: 0;
+    in property <string> organization-effective;
+    in property <bool> organization-message-override;
+    in property <bool> organization-sender-override;
+    in property <string> organization-error;
+    callback avatar-requested(string); callback avatars-toggled(bool);
+    callback category-selected(string); callback label-selected(int);
+    callback organization-opened(bool); callback organization-close();
+    callback category-saved(int, bool);
+    callback label-assigned(int, bool); callback label-saved(int, string, string); callback label-deleted(int);
     in property <int> account-count: 0;
     in property <int> selected-folder: -1; in property <int> selected-message: -1;
     in property <string> folder-name; in-out property <string> search-text;
@@ -30,6 +52,17 @@ export component BangApp inherits Window {
     in property <string> message-initials;
     in property <[AttachmentRow]> message-attachments;
     in property <bool> message-loading: false;
+    in-out property <string> message-html;
+    in property <bool> native-reader-available: false;
+    in property <bool> reader-failed: false;
+    in-out property <bool> remote-images: false;
+    out property <bool> html-active: root.native-reader-available && !root.reader-failed && !root.message-loading && root.message-html != "";
+    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay;
+    out property <float> reader-x-px: reader.body-x / 1px;
+    out property <float> reader-y-px: reader.body-y / 1px;
+    out property <float> reader-width-px: reader.body-width / 1px;
+    out property <float> reader-height-px: reader.body-height / 1px;
+    callback reader-load-images();
     in property <bool> message-starred: false;
     in-out property <bool> preview-open: false;
     in property <string> preview-title; in property <string> preview-kind;
@@ -40,15 +73,18 @@ export component BangApp inherits Window {
     in-out property <bool> drafts-open: false; in-out property <bool> templates-open: false;
     in-out property <bool> sends-open: false;
     in property <[DraftRow]> drafts; in property <[TemplateRow]> templates; in property <[PendingSendRow]> sends;
-    in-out property <bool> wizard-open: false; in-out property <bool> wizard-manual: false; in property <string> wizard-status;
+    in-out property <bool> wizard-open: false; in-out property <bool> wizard-manual: false; in-out property <string> wizard-status;
+    in-out property <bool> wizard-busy: false;
+    in-out property <int> wizard-attempt: 0;
+    in-out property <string> wizard-provider;
     in-out property <bool> settings-open: false;
     in property <[AccountRow]> settings-accounts; in property <string> settings-theme: "system";
     in property <string> settings-language: "system";
     in-out property <string> email; in-out property <string> imap-host;
     in-out property <string> imap-port: "993"; in-out property <string> smtp-host;
     in-out property <string> smtp-port: "465"; in-out property <string> username;
-    in-out property <string> password; in-out property <bool> starttls: false;
-    callback wizard-oauth-clicked(string); callback wizard-add-generic(); callback wizard-cancel();
+    in-out property <string> password; in-out property <bool> starttls: false; in-out property <bool> smtp-starttls: false;
+    callback wizard-provider-selected(string); callback wizard-oauth-clicked(string); callback wizard-add-generic(); callback wizard-cancel();
     callback folder-selected(int); callback account-toggled(string);
     callback message-selected(int); callback message-action(int, string);
     callback reveal-message(int);
@@ -62,11 +98,13 @@ export component BangApp inherits Window {
     callback template-row-clicked(int); callback template-row-delete(int);
     callback send-row-delete(int);
     callback drafts-dialog-close();
+    callback focus-chrome();
+    focus-chrome => { keyboard.focus(); }
     callback quit();
     callback settings-opened(); callback settings-theme-selected(string);
     callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
 
-    private property <bool> modal-open: root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open;
+    private property <bool> modal-open: root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open || root.organization-open;
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
@@ -84,9 +122,10 @@ export component BangApp inherits Window {
     keyboard := FocusScope {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         key-pressed(e) => {
-            if root.settings-open || root.wizard-open || root.drafts-open || root.templates-open || root.sends-open {
+            if root.modal-open {
                 if e.text == Key.Escape {
-                    if root.wizard-open { root.wizard-cancel(); }
+                    if root.organization-open { root.organization-close(); }
+                    else if root.wizard-open { root.wizard-cancel(); }
                     else if root.settings-open { root.settings-close(); }
                     else { root.drafts-open = false; root.templates-open = false; root.sends-open = false; }
                     return accept;
@@ -114,6 +153,9 @@ export component BangApp inherits Window {
     Sidebar {
         visible: root.show-nav; x: 0px; y: 0px; width: root.nav-width; height: parent.height;
         folders: root.folders; selected-folder: root.selected-folder;
+        labels: root.labels; selected-label: root.selected-label;
+        label-clicked(id) => { root.label-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
+        manage-labels => { root.sidebar-overlay = false; root.organization-opened(true); }
         hide => { root.sidebar-hidden = true; }
         add-account => { root.wizard-open = true; }
         settings => { root.settings-opened(); }
@@ -145,14 +187,19 @@ export component BangApp inherits Window {
             }
         }
         list-search := SearchField { visible: root.narrow; x: 10px; y: 56px; width: parent.width - 20px; height: 30px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
+        CategoryBar { visible: root.categories-visible && !root.search-active;
+            y: root.narrow ? 94px : 53px; height: 54px; width: parent.width;
+            categories: root.categories; selected: root.selected-category;
+            selected-category(key) => { root.category-selected(key); }
+        }
         message-list := MessageList {
-            y: root.narrow ? 94px : 53px; height: parent.height - (root.narrow ? 94px : 53px); width: parent.width;
+            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width;
             messages: root.messages; selected-message: root.selected-message;
             message-clicked(id) => { root.message-selected(id); root.detail-open = true; }
             message-action(id, action) => { root.message-action(id, action); }
         }
         if root.account-count == 0 || root.messages.length == 0: Rectangle {
-            y: root.narrow ? 94px : 53px; height: parent.height - self.y; width: parent.width; background: Theme.bg;
+            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width; background: Theme.bg;
             VerticalLayout { padding: 24px; spacing: 16px; alignment: center;
                 Text { text: root.account-count == 0 ? @tr("Welcome to Bang") : root.search-active ? @tr("No results") : @tr("No messages"); font-size: 16px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
                 Text { text: root.account-count == 0 ? @tr("Add your first email account to get started.") : root.search-active ? @tr("Try another search.") : @tr("New messages will appear here."); font-size: 13px; color: Theme.text-secondary; wrap: word-wrap; horizontal-alignment: center; }
@@ -171,8 +218,9 @@ export component BangApp inherits Window {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
             HorizontalLayout { padding: 10px; spacing: 4px;
                 if root.narrow: ActionButton { compact: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); clicked => { root.detail-open = false; } }
-                Rectangle { width: 258px; height: 32px; background: Theme.bg; border-width: 1px; border-color: Theme.border; border-radius: 12px;
+                Rectangle { width: 294px; height: 32px; background: Theme.bg; border-width: 1px; border-color: Theme.border; border-radius: 12px;
                     HorizontalLayout { spacing: 0px;
+                ActionButton { compact: true; text: @tr("Classify message"); icon: @image-url("icons/tag.svg"); enabled: root.selected-message >= 0; clicked => { root.organization-opened(false); } }
                 ActionButton { compact: true; text: @tr("Reply"); icon: @image-url("icons/back.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "reply"); } }
                 ActionButton { compact: true; text: @tr("Forward"); icon: @image-url("icons/send.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "forward"); } }
                 ActionButton { compact: true; text: @tr("Star"); icon: @image-url("icons/star.svg"); enabled: root.selected-message >= 0; active: root.message-starred; clicked => { root.message-action(root.selected-message, "star"); } }
@@ -183,13 +231,16 @@ export component BangApp inherits Window {
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                search := SearchField { max-width: 264px; min-width: 160px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
+                search := SearchField { max-width: 264px; min-width: 100px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
             }
         }
-        ReadingPane { x: 0px; width: parent.width; y: 53px; height: parent.height - 53px - (root.status-message == "" ? 0px : 36px);
+        reader := ReadingPane { x: 0px; width: parent.width; y: 53px; height: parent.height - 53px - (root.status-message == "" ? 0px : 36px);
             sender: root.message-sender; subject: root.message-subject; date: root.message-date; body: root.message-body;
             sender-address: root.message-sender-address; recipients: root.message-recipients; initials: root.message-initials;
+            avatar: root.message-avatar; avatar-loaded: root.message-avatar-loaded; avatar-tint: root.message-avatar-tint;
             attachments: root.message-attachments;
+            html-active: root.html-active; remote-images: root.remote-images;
+            load-images => { root.reader-load-images(); }
             selected: root.selected-message >= 0; loading: root.message-loading;
             attachment-clicked(i) => { root.attachment-clicked(i); }
         }
@@ -201,6 +252,9 @@ export component BangApp inherits Window {
         background: #00000044;
         TouchArea { clicked => { root.sidebar-overlay = false; } }
         Sidebar { width: 260px; folders: root.folders; selected-folder: root.selected-folder;
+        labels: root.labels; selected-label: root.selected-label;
+        label-clicked(id) => { root.label-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
+        manage-labels => { root.sidebar-overlay = false; root.organization-opened(true); }
             hide => { root.sidebar-overlay = false; }
             add-account => { root.sidebar-overlay = false; root.wizard-open = true; }
             settings => { root.sidebar-overlay = false; root.settings-opened(); }
@@ -208,16 +262,29 @@ export component BangApp inherits Window {
             account-toggled(id) => { root.account-toggled(id); }
         }
     }
-    AccountWizard { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.wizard-open; manual <=> root.wizard-manual; status: root.wizard-status;
+    AccountWizard { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.wizard-open; manual <=> root.wizard-manual; status: root.wizard-status; busy: root.wizard-busy; provider <=> root.wizard-provider;
         email <=> root.email; imap-host <=> root.imap-host; imap-port <=> root.imap-port;
         smtp-host <=> root.smtp-host; smtp-port <=> root.smtp-port; username <=> root.username;
-        password <=> root.password; starttls <=> root.starttls;
+        password <=> root.password; starttls <=> root.starttls; smtp-starttls <=> root.smtp-starttls;
+        provider-selected(p) => { root.wizard-provider-selected(p); }
         oauth-clicked(p) => { root.wizard-oauth-clicked(p); } add-generic => { root.wizard-add-generic(); } cancel => { root.wizard-cancel(); }
     }
     SettingsDialog { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.settings-open; accounts: root.settings-accounts; theme: root.settings-theme; language: root.settings-language;
+        online-avatars: root.online-avatars; avatars-toggled(enabled) => { root.avatars-toggled(enabled); }
         theme-selected(m) => { root.settings-theme-selected(m); } language-selected(m) => { root.settings-language-selected(m); }
         account-remove(id) => { root.settings-account-remove(id); } add-account => { root.settings-open = false; root.wizard-open = true; }
         close => { root.settings-close(); }
+    }
+    OrganizationDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        open: root.organization-open; managing <=> root.managing-labels; labels: root.labels;
+        category-index <=> root.organization-category; effective-category: root.organization-effective;
+        message-override: root.organization-message-override; sender-override: root.organization-sender-override;
+        error: root.organization-error;
+        category-saved(index, sender) => { root.category-saved(index, sender); }
+        label-assigned(id, assigned) => { root.label-assigned(id, assigned); }
+        label-saved(id, name, color) => { root.label-saved(id, name, color); }
+        label-deleted(id) => { root.label-deleted(id); }
+        close => { root.organization-close(); }
     }
     AttachmentPreview { x: 0px; y: 0px; width: parent.width; height: parent.height;
         open: root.preview-open; title: root.preview-title; kind: root.preview-kind;

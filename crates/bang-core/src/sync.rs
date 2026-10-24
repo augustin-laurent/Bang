@@ -134,7 +134,7 @@ fn sync_folders(
         let folder = Folder {
             id: 0,
             account_id: config.id.0.clone(),
-            name: last_component(path),
+            name: crate::mime::decode_folder_name(&last_component(path)),
             path: path.clone(),
             unread: 0,
         };
@@ -231,6 +231,7 @@ fn sync_folder(
             .is_some();
         let mut summary = meta_to_summary(config, folder, &meta);
         let id = store.upsert_message(&summary)?;
+        if let Some(hints) = &meta.classification { store.update_classification(id, hints)?; }
         summary.id = id;
         if existing {
             updated.push(id);
@@ -569,7 +570,7 @@ fn handle_fetch_body(
     events_tx: &UnboundedSender<MailEvent>,
     message_id: i64,
 ) -> Result<()> {
-    let summary = store
+    let mut summary = store
         .get_message(message_id)?
         .ok_or_else(|| Error::Store(format!("message {message_id} not found")))?;
     let folder = store
@@ -579,6 +580,16 @@ fn handle_fetch_body(
     select_cached_folder(conn, store, folder.id, &folder.path)?;
     let raw = conn.fetch_body(summary.uid)?;
     let parsed = crate::mime::parse(&raw)?;
+
+    summary.from = parsed.from.clone();
+    summary.to = parsed.to.clone();
+    summary.cc = parsed.cc.clone();
+    summary.subject = parsed.subject.clone();
+    summary.message_id = parsed.message_id.clone();
+    summary.preview = crate::mime::extract_preview(&parsed.body_text, 200);
+    summary.has_attachments = parsed.attachments.iter().any(|a| a.disposition != "inline");
+    store.upsert_message(&summary)?;
+    store.update_classification(summary.id, &crate::organization::ClassificationSignals::from_headers(&raw))?;
 
     // Persist attachment data on disk; the record's path is set once stored.
     let mut attachments = crate::mime::to_attachment_records(message_id, &parsed.attachments);

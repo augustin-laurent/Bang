@@ -10,12 +10,16 @@ export struct FolderRow {
 }
 export struct MessageRow {
     id: int, sender: string, subject: string, date: string,
+    sender-address: string, initials: string, avatar: image, avatar-tint: color, has-avatar: bool,
     preview: string, unread: bool, starred: bool, has-attachments: bool,
 }
-export struct AccountRow { id: string, email: string, }
+export struct AccountRow { provider: string, id: string, email: string, }
 export struct DraftRow { id: int, title: string, subtitle: string, }
 export struct TemplateRow { id: int, title: string, subtitle: string, }
 export struct PendingSendRow { id: int, title: string, subtitle: string, }
 export struct AttachmentRow {
     filename: string, size: string, path: string, content-type: string,
 }
+
+export struct CategoryRow { key: string, name: string, short-name: string, unread: int, }
+export struct LabelRow { id: int, name: string, tint: color, color-index: int, assigned: bool, }

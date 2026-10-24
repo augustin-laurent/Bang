@@ -11,6 +11,39 @@ use crate::account::{AuthMethod, SmtpConfig, TlsMode};
 use crate::error::{Error, Result};
 use crate::events::OutgoingAttachment;
 
+/// Check TLS and SMTP authentication without sending a message.
+///
+/// # Errors
+/// Returns a configuration, network or authentication error.
+pub async fn test_connection(config: &SmtpConfig, auth: &AuthMethod, email: &str) -> Result<()> {
+    let (username, secret, mechanisms) = match auth {
+        AuthMethod::Password { username, password } => (
+            username.clone(),
+            password.clone(),
+            vec![Mechanism::Plain, Mechanism::Login],
+        ),
+        AuthMethod::OAuth2 { access_token, .. } => (
+            email.to_owned(),
+            access_token.clone(),
+            vec![Mechanism::Xoauth2],
+        ),
+    };
+    let transport: AsyncSmtpTransport<lettre::Tokio1Executor> =
+        AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(&config.host)
+            .port(config.port)
+            .tls(tls_mode(config)?)
+            .timeout(Some(std::time::Duration::from_secs(15)))
+            .credentials(Credentials::new(username, secret))
+            .authentication(mechanisms)
+            .build();
+    if !transport.test_connection().await? {
+        return Err(Error::Network(
+            "SMTP server did not accept the connection".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Send an email over SMTP.
 ///
 /// # Arguments
@@ -384,6 +417,75 @@ mod tests {
             let data = server.await.unwrap();
             assert!(data.contains("multipart/alternative"));
             assert!(data.contains("file.txt"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    #[tokio::test]
+    async fn account_check_authenticates_without_sending_mail() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for reject in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut read = BufReader::new(read);
+                write.write_all(b"220 localhost ESMTP\r\n").await.unwrap();
+                let mut authenticated = false;
+                loop {
+                    let mut line = String::new();
+                    if read.read_line(&mut line).await.unwrap() == 0 {
+                        break;
+                    }
+                    assert!(
+                        !line.starts_with("MAIL")
+                            && !line.starts_with("RCPT")
+                            && !line.starts_with("DATA")
+                    );
+                    let response: &[u8] = if line.starts_with("EHLO") {
+                        b"250-localhost\r\n250 AUTH PLAIN\r\n"
+                    } else if line.starts_with("AUTH") {
+                        if reject {
+                            b"535 credentials rejected\r\n"
+                        } else {
+                            authenticated = true;
+                            b"235 authenticated\r\n"
+                        }
+                    } else if line.starts_with("NOOP") {
+                        assert!(authenticated);
+                        b"250 OK\r\n"
+                    } else {
+                        b"221 Bye\r\n"
+                    };
+                    if write.write_all(response).await.is_err() {
+                        break;
+                    }
+                }
+                authenticated
+            });
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                test_connection(
+                    &SmtpConfig {
+                        host: "127.0.0.1".into(),
+                        port,
+                        tls: TlsMode::Plaintext,
+                    },
+                    &AuthMethod::Password {
+                        username: "local".into(),
+                        password: "test".into(),
+                    },
+                    "local@example.test",
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.is_err(), reject);
+            assert_eq!(server.await.unwrap(), !reject);
         }
     }
 }

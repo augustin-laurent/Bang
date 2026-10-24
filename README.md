@@ -2,7 +2,7 @@
 
 A desktop mail client for Linux, written in Rust, with a Mail macOS 26-inspired interface adapted to Linux.
 
-- **UI**: [Slint](https://slint.dev) (native Slint main window; isolated local WebKit rich composer)
+- **UI**: [Slint](https://slint.dev) (Slint chrome in a GTK3 host, embedded WebKit HTML reader; isolated local rich composer)
 - **Engine**: IMAP (per-account syncer thread, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
 - **Status**: early development — see [PLAN.md](PLAN.md) for the roadmap
 
@@ -10,6 +10,9 @@ A desktop mail client for Linux, written in Rust, with a Mail macOS 26-inspired 
 
 - Three-pane layout (folders, message list, reading pane) with a unified inbox
   across all accounts.
+- Sender photos/logos with colored initials, a local avatar cache and an online-avatar setting.
+- Local inbox categories (Primary, Transactions, Updates, Promotions), message/sender corrections,
+  and custom colored labels shared across accounts on this device.
 - Multiple accounts: OAuth2 (Gmail/Microsoft) or generic IMAP/SMTP.
 - Read/unread, star, and delete, with per-folder unread badges.
 - Rich compose with fonts, size, bold/italic/underline, colors, highlighting,
@@ -53,23 +56,20 @@ cargo build --workspace --release
 ./target/release/app
 ```
 
-The main window uses Slint’s software renderer. The rich composer requires GTK3
-and WebKitGTK 4.1; it loads only bundled local assets. See
+The main window uses Slint’s software renderer inside GTK3, with WebKitGTK 4.1
+for the embedded HTML reader. Remote message images load only after a click;
+embedded CID images are local. The isolated rich composer loads only bundled assets. See
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for distribution packages.
 
-## OAuth client IDs
+## Account sign-in
 
-Gmail and Microsoft sign-in require your own OAuth2 client IDs (create them in
-Google Cloud Console / Azure Portal). Set them in `~/.config/bang/config.toml`:
+Google and Microsoft use browser-based OAuth with desktop client registrations.
+iCloud has prefilled servers; other providers use separate IMAP/SMTP settings.
+New accounts are checked before saving, without sending a message.
 
-```toml
-[oauth.google]
-client_id = "..."
-[oauth.microsoft]
-client_id = "..."
-```
-
-Until then, use the manual IMAP/SMTP account type.
+See [docs/ACCOUNTS.md](docs/ACCOUNTS.md) for Google/Microsoft registration,
+iCloud app passwords, configuration examples and the current OAuth token renewal
+limitation.
 
 ## Layout
 

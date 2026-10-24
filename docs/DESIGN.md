@@ -28,3 +28,13 @@ account and abandoning an unsent message require explicit confirmation.
 
 This version does not add reply/forward/archive commands, cloud draft storage,
 AI, calendar features or a full HTML renderer for received mail.
+
+
+Sender avatars use 32px circles in 90px list rows and 40px circles in the reader.
+Colored initials appear immediately; downloaded photos/logos use the same circular
+shape. Inbox category tabs sit above the message list, with unread counts and
+compact labels in narrow columns. Custom labels appear in the sidebar; the reader's
+Classify action opens category corrections and multiple label assignments. Label
+management supplies a name and one of six accessible colors. These dialogs share
+the existing opaque surfaces, modal input guard, translations and native-reader
+visibility behavior.
