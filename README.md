@@ -44,9 +44,9 @@ text field has focus.
 ## Build
 
 ```sh
-./scripts/dev.sh
+./scripts/dev.sh # rebuild and launch the optimized app
 
-# Release build, after installing the Linux packages in docs/DEVELOPMENT.md:
+# Manual build, after installing the Linux packages in docs/DEVELOPMENT.md:
 npm ci --prefix crates/composer/web
 npm run build --prefix crates/composer/web
 cargo build --workspace --release

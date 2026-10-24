@@ -31,13 +31,15 @@ SQLite is built from source via `rusqlite/bundled`.
 ./scripts/dev.sh
 ```
 
-The script builds the editor before the Rust binaries. The equivalent steps are:
+The script builds the editor and optimized Rust binaries, then launches the same
+release profile. This keeps interactive performance checks on the current build.
+The equivalent steps are:
 
 ```sh
 npm ci --prefix crates/composer/web
 npm run build --prefix crates/composer/web
-cargo build --workspace
-cargo run -p app
+cargo build --workspace --release
+cargo run --release -p app
 ```
 
 Keep `app` and `bang-compose` in the same directory when installing. For release,

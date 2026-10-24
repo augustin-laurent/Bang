@@ -9,5 +9,5 @@ if [[ ! -d crates/composer/web/node_modules ]]; then
     npm ci --prefix crates/composer/web
 fi
 npm run build --prefix crates/composer/web
-cargo build --workspace
-exec cargo run -p app
+cargo build --workspace --release
+exec cargo run --release -p app
