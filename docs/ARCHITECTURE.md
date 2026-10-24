@@ -44,8 +44,10 @@ There are three kinds of threads:
    (2 workers). Runs the `MailService` command loop and the event forwarder.
    Long-running async work (SMTP sends, OAuth logins) is spawned on this
    runtime.
-3. **Syncer threads** (one per account). The IMAP client is synchronous and
-   `IDLE` blocks, so each account's syncer runs on its own OS thread.
+3. **IMAP workers** (two per account). The background syncer owns the IDLE
+   connection. A separate interactive worker opens a second connection on demand
+   and reuses it for body fetches, flags and deletion. User actions do not wait
+   for a quiet mailbox or a full folder synchronization.
 
 The reason for the split: Slint must stay responsive, and IMAP `IDLE` must be
 able to block without stalling anything else.
@@ -123,12 +125,20 @@ Notes:
    for the last 200 cached UIDs. Skip unchanged flag writes and events, record
    the new sync state, and emit
    `MessagesAppended` / `MessagesUpdated`.
-4. `idle_loop` — `SELECT` the INBOX (or first folder), then repeatedly:
-   process pending commands (`SetFlags`, `FetchBody`, `Quit`), then `IDLE`
-   for up to 10 s. On a mailbox change, re-sync that folder; on timeout, loop
-   back to check commands.
+4. `idle_loop` — `SELECT` the INBOX (or first folder), then `IDLE` for up to
+   10 s. On a mailbox change, re-sync that folder; on timeout, check shutdown
+   before renewing IDLE. Interactive commands never enter this queue.
 5. On any error, emit `Reconnecting` and retry with exponential backoff
    (1 s .. 60 s).
+
+`run_commands` handles the per-account interactive queue on a second thread.
+Pending body requests are coalesced to the latest selection, including requests
+received during login. Flag and delete actions retain their order. A body already
+being downloaded finishes and is cached; stale UI results are ignored by the
+selection guard. The command connection is reused and a failed read reconnects
+once; mutations are not replayed automatically. Every command checks UIDVALIDITY
+when selecting a cached folder, before acting on its stored UIDs. Cached opens
+remain local and do not need a second connection.
 
 A fresh folder has sync state `(0, None)`; the syncer treats `last_uid == 0`
 (or a changed UIDVALIDITY) as a full sync of the most recent `SYNC_WINDOW`

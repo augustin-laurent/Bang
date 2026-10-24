@@ -2,8 +2,10 @@
 //!
 //! Each account runs its syncer on a dedicated OS thread, because the IMAP
 //! client is synchronous and IDLE blocks. The thread connects, syncs folders
-//! and messages, then idles for push updates while processing commands.
+//! and messages, then idles for push updates. Interactive commands use a
+//! separate, lazily connected session so opening mail never waits for IDLE.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +46,7 @@ pub enum SyncerCommand {
     Quit,
 }
 
-/// Start a syncer thread for an account.
+/// Start background sync and an interactive command worker for an account.
 ///
 /// # Arguments
 /// * `config` — the account to sync.
@@ -59,10 +61,18 @@ pub fn start_syncer(
     events_tx: UnboundedSender<MailEvent>,
 ) -> std::sync::mpsc::Sender<SyncerCommand> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<SyncerCommand>();
+    let (quit_tx, quit_rx) = std::sync::mpsc::channel::<()>();
+    let sync_config = config.clone();
+    let sync_store = store.clone();
+    let sync_events = events_tx.clone();
     std::thread::Builder::new()
         .name(format!("sync-{}", config.id.0))
-        .spawn(move || run_syncer(config, store, events_tx, cmd_rx))
+        .spawn(move || run_syncer(sync_config, sync_store, sync_events, quit_rx))
         .expect("spawn syncer thread");
+    std::thread::Builder::new()
+        .name(format!("mail-{}", config.id.0))
+        .spawn(move || run_commands(config, store, events_tx, cmd_rx, quit_tx))
+        .expect("spawn interactive mail thread");
     cmd_tx
 }
 
@@ -71,7 +81,7 @@ fn run_syncer(
     config: AccountConfig,
     store: Arc<Store>,
     events_tx: UnboundedSender<MailEvent>,
-    cmd_rx: std::sync::mpsc::Receiver<SyncerCommand>,
+    cmd_rx: std::sync::mpsc::Receiver<()>,
 ) {
     let account_id = config.id.clone();
     let mut backoff = Duration::from_secs(1);
@@ -82,27 +92,21 @@ fn run_syncer(
             return;
         }
 
-        let failed = match connect_and_sync(&config, &store, &events_tx) {
+        match connect_and_sync(&config, &store, &events_tx) {
             Ok(conn) => {
                 backoff = Duration::from_secs(1);
                 emit(&events_tx, &account_id, AccountStatus::Connected);
-                // `false` means the idle loop ended (dropped connection or a
-                // condition like an empty folder list); fall through to the
-                // backoff so we cannot reconnect in a tight loop.
-                !idle_loop(conn, &config, &store, &events_tx, &cmd_rx)
+                if idle_loop(conn, &config, &store, &events_tx, &cmd_rx) {
+                    return;
+                }
             }
-            Err(e) => {
-                tracing::warn!("sync error for {account_id}: {e}");
-                true
-            }
-        };
-        if failed {
-            emit(&events_tx, &account_id, AccountStatus::Reconnecting);
-            if sleep_or_quit(&cmd_rx, backoff) {
-                return;
-            }
-            backoff = (backoff * 2).min(Duration::from_secs(60));
+            Err(e) => tracing::warn!("sync error for {account_id}: {e}"),
         }
+        emit(&events_tx, &account_id, AccountStatus::Reconnecting);
+        if sleep_or_quit(&cmd_rx, backoff) {
+            return;
+        }
+        backoff = (backoff * 2).min(Duration::from_secs(60));
     }
 }
 
@@ -262,7 +266,7 @@ fn idle_loop(
     config: &AccountConfig,
     store: &Store,
     events_tx: &UnboundedSender<MailEvent>,
-    cmd_rx: &std::sync::mpsc::Receiver<SyncerCommand>,
+    cmd_rx: &std::sync::mpsc::Receiver<()>,
 ) -> bool {
     // Select the first folder (usually INBOX) for IDLE.
     let folders = store.get_folders(&config.id.0).unwrap_or_default();
@@ -280,49 +284,16 @@ fn idle_loop(
     }
 
     loop {
-        // Process any pending commands.
-        let mut handled = false;
-        loop {
-            match cmd_rx.try_recv() {
-                Ok(SyncerCommand::Quit) => return true,
-                Ok(SyncerCommand::SetFlags {
-                    message_ids,
-                    flags,
-                    add,
-                }) => {
-                    handled = true;
-                    if let Err(e) =
-                        handle_set_flags(&mut conn, config, store, events_tx, &message_ids, flags, add)
-                    {
-                        tracing::warn!("set_flags failed: {e}");
-                    }
-                }
-                Ok(SyncerCommand::FetchBody { message_id }) => {
-                    handled = true;
-                    if let Err(e) = handle_fetch_body(&mut conn, store, events_tx, message_id) {
-                        tracing::warn!("fetch_body failed: {e}");
-                    }
-                }
-                Ok(SyncerCommand::Delete { message_ids }) => {
-                    handled = true;
-                    if let Err(e) = handle_delete(&mut conn, config, store, events_tx, &message_ids)
-                    {
-                        tracing::warn!("delete failed: {e}");
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        if handled {
-            // Commands may have changed the selected mailbox; restore it.
-            if conn.select(&idle_folder.path).is_err() {
-                return false;
-            }
+        if check_quit(cmd_rx) {
+            return true;
         }
 
-        // Wait for mailbox changes (bounded so we keep checking commands).
+        // Only the watcher waits in IDLE; the interactive worker stays available.
         match conn.idle_wait(Duration::from_secs(10)) {
             Ok(true) => {
+                if check_quit(cmd_rx) {
+                    return true;
+                }
                 // Mailbox changed: re-sync the idle folder.
                 if let Err(e) = sync_folder(&mut conn, config, store, events_tx, &idle_folder) {
                     tracing::warn!("re-sync failed: {e}");
@@ -330,7 +301,7 @@ fn idle_loop(
                 }
             }
             Ok(false) => {
-                // Timeout: loop to check commands.
+                // Timeout: check shutdown before renewing IDLE.
             }
             Err(e) => {
                 tracing::warn!("idle error: {e}");
@@ -340,18 +311,159 @@ fn idle_loop(
     }
 }
 
-/// Drain pending commands, returning `true` if a Quit was received.
-///
-/// Non-Quit commands arriving before a connection exists cannot be executed
-/// and are dropped.
-fn check_quit(cmd_rx: &std::sync::mpsc::Receiver<SyncerCommand>) -> bool {
-    loop {
-        match cmd_rx.try_recv() {
-            Ok(SyncerCommand::Quit) => return true,
-            Ok(_) => {}
-            Err(_) => return false,
+/// Stop when requested or when the interactive worker has exited.
+fn check_quit(cmd_rx: &std::sync::mpsc::Receiver<()>) -> bool {
+    !matches!(cmd_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty))
+}
+
+// Superseded reads have no side effects. Keep mutations in their original order.
+fn queue_command(pending: &mut VecDeque<SyncerCommand>, command: SyncerCommand) -> bool {
+    if matches!(command, SyncerCommand::Quit) {
+        return true;
+    }
+    if matches!(command, SyncerCommand::FetchBody { .. }) {
+        pending.retain(|c| !matches!(c, SyncerCommand::FetchBody { .. }));
+    }
+    pending.push_back(command);
+    false
+}
+
+fn run_commands(
+    config: AccountConfig,
+    store: Arc<Store>,
+    events_tx: UnboundedSender<MailEvent>,
+    cmd_rx: std::sync::mpsc::Receiver<SyncerCommand>,
+    quit_tx: std::sync::mpsc::Sender<()>,
+) {
+    let mut conn = None;
+    let mut pending = VecDeque::new();
+    'commands: loop {
+        if pending.is_empty() {
+            match cmd_rx.recv() {
+                Ok(command) => {
+                    if queue_command(&mut pending, command) {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        loop {
+            match cmd_rx.try_recv() {
+                Ok(command) => {
+                    if queue_command(&mut pending, command) {
+                        break 'commands;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break 'commands,
+            }
+        }
+        if conn.is_none() {
+            match ImapConn::connect(&config.imap, &config.auth, &config.email) {
+                Ok(connected) => {
+                    conn = Some(connected);
+                    // A newer selection may have arrived during login.
+                    continue;
+                }
+                Err(e) => {
+                    pending.pop_front();
+                    let _ = events_tx.send(MailEvent::Error {
+                        account: Some(config.id.clone()),
+                        message: e.to_string(),
+                    });
+                    continue;
+                }
+            }
+        }
+        let command = pending.pop_front().unwrap();
+        let started = std::time::Instant::now();
+        let mut result = execute_command(
+            conn.as_mut().unwrap(),
+            &config,
+            &store,
+            &events_tx,
+            &command,
+        );
+        // A quiet command session may have expired on the server. Reads can
+        // safely reconnect once; mutations are never replayed automatically.
+        if matches!(command, SyncerCommand::FetchBody { .. })
+            && matches!(&result, Err(Error::Imap(_) | Error::Network(_)))
+        {
+            result = match ImapConn::connect(&config.imap, &config.auth, &config.email) {
+                Ok(connected) => {
+                    conn = Some(connected);
+                    execute_command(
+                        conn.as_mut().unwrap(),
+                        &config,
+                        &store,
+                        &events_tx,
+                        &command,
+                    )
+                }
+                Err(e) => Err(e),
+            };
+        }
+        if let SyncerCommand::FetchBody { message_id } = command {
+            tracing::debug!(
+                message_id,
+                elapsed_ms = started.elapsed().as_millis(),
+                "interactive body fetch"
+            );
+        }
+        if let Err(e) = result {
+            conn = None;
+            let _ = events_tx.send(MailEvent::Error {
+                account: Some(config.id.clone()),
+                message: e.to_string(),
+            });
         }
     }
+    let _ = quit_tx.send(());
+}
+
+fn execute_command(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    command: &SyncerCommand,
+) -> Result<()> {
+    match command {
+        SyncerCommand::FetchBody { message_id } => {
+            handle_fetch_body(conn, store, events_tx, *message_id)
+        }
+        SyncerCommand::SetFlags {
+            message_ids,
+            flags,
+            add,
+        } => handle_set_flags(conn, config, store, events_tx, message_ids, *flags, *add),
+        SyncerCommand::Delete { message_ids } => {
+            handle_delete(conn, config, store, events_tx, message_ids)
+        }
+        SyncerCommand::Quit => Ok(()),
+    }
+}
+
+// An interactive connection must not act on UIDs from an obsolete generation.
+fn select_cached_folder(
+    conn: &mut ImapConn,
+    store: &Store,
+    folder_id: i64,
+    path: &str,
+) -> Result<()> {
+    let status = conn.select(path)?;
+    let expected = store
+        .get_folder_sync_state(folder_id)?
+        .and_then(|(_, validity)| validity);
+    if let (Some(expected), Some(actual)) = (expected, status.uid_validity) {
+        if expected != actual {
+            return Err(Error::Store(
+                "mailbox changed; wait for synchronization before retrying".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Apply flag changes to messages and update the store.
@@ -372,7 +484,7 @@ fn handle_set_flags(
         if uids.is_empty() {
             continue;
         }
-        conn.select(&path)?;
+        select_cached_folder(conn, store, *folder_id, path)?;
         let uid_set = uids
             .iter()
             .map(|u| u.to_string())
@@ -429,7 +541,7 @@ fn handle_delete(
         if uids.is_empty() {
             continue;
         }
-        conn.select(&path)?;
+        select_cached_folder(conn, store, *folder_id, path)?;
         let uid_set = uids
             .iter()
             .map(|u| u.to_string())
@@ -464,7 +576,7 @@ fn handle_fetch_body(
         .get_folder_by_id(summary.folder_id)?
         .ok_or_else(|| Error::Store("folder not found".into()))?;
 
-    conn.select(&folder.path)?;
+    select_cached_folder(conn, store, folder.id, &folder.path)?;
     let raw = conn.fetch_body(summary.uid)?;
     let parsed = crate::mime::parse(&raw)?;
 
@@ -533,17 +645,11 @@ fn flags_to_imap(flags: MessageFlags) -> String {
 }
 
 /// Sleep for `dur`, returning `true` if a Quit command arrives.
-fn sleep_or_quit(cmd_rx: &std::sync::mpsc::Receiver<SyncerCommand>, dur: Duration) -> bool {
-    let tick = dur / 10;
-    let mut elapsed = Duration::ZERO;
-    while elapsed < dur {
-        if let Ok(SyncerCommand::Quit) = cmd_rx.try_recv() {
-            return true;
-        }
-        std::thread::sleep(tick.max(Duration::from_millis(50)));
-        elapsed += tick;
-    }
-    false
+fn sleep_or_quit(cmd_rx: &std::sync::mpsc::Receiver<()>, dur: Duration) -> bool {
+    !matches!(
+        cmd_rx.recv_timeout(dur),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    )
 }
 
 /// Emit an account-status event.
@@ -561,4 +667,53 @@ fn last_component(path: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(path)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_reads_are_replaced_without_reordering_mutations() {
+        let mut pending = VecDeque::new();
+        for command in [
+            SyncerCommand::FetchBody { message_id: 1 },
+            SyncerCommand::SetFlags {
+                message_ids: vec![1],
+                flags: MessageFlags::SEEN,
+                add: true,
+            },
+            SyncerCommand::FetchBody { message_id: 2 },
+            SyncerCommand::Delete {
+                message_ids: vec![2],
+            },
+            SyncerCommand::FetchBody { message_id: 3 },
+        ] {
+            assert!(!queue_command(&mut pending, command));
+        }
+        assert!(matches!(
+            pending.pop_front(),
+            Some(SyncerCommand::SetFlags { .. })
+        ));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(SyncerCommand::Delete { .. })
+        ));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(SyncerCommand::FetchBody { message_id: 3 })
+        ));
+        assert!(pending.is_empty());
+        assert!(queue_command(&mut pending, SyncerCommand::Quit));
+    }
+
+    #[test]
+    fn shutdown_interrupts_reconnect_backoff() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(!check_quit(&rx));
+        tx.send(()).unwrap();
+        assert!(sleep_or_quit(&rx, Duration::from_secs(60)));
+        drop(tx);
+        assert!(check_quit(&rx));
+    }
 }

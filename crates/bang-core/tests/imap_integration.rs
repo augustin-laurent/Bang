@@ -44,6 +44,8 @@ struct ServerState {
     folders: Vec<(String, Vec<TestMsg>)>,
     commands: Vec<String>,
     uid_validity: u32,
+    body_delay: Duration,
+    fail_body_once: bool,
 }
 
 /// A minimal single-user IMAP server bound to 127.0.0.1.
@@ -59,7 +61,7 @@ impl MiniImap {
     fn start(folders: Vec<(String, Vec<TestMsg>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test port");
         let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(ServerState { folders, commands: Vec::new(), uid_validity: 1 }));
+        let state = Arc::new(Mutex::new(ServerState { folders, commands: Vec::new(), uid_validity: 1, ..Default::default() }));
         let push_flag = Arc::new(AtomicBool::new(false));
         let thread_state = state.clone();
         let thread_push = push_flag.clone();
@@ -269,7 +271,7 @@ fn idle_loop(
                 // Any other command during IDLE is a protocol error for our
                 // test client; ignore and keep waiting.
             }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {
                 if push_flag.swap(false, Ordering::SeqCst) {
                     let name = selected.clone().unwrap_or_default();
                     let count = state
@@ -316,6 +318,16 @@ fn handle_uid_fetch(
 
     let uids = expand_uid_set(set, &msgs);
     let is_body = query.to_ascii_uppercase().contains("BODY.PEEK[]");
+    if is_body {
+        let delay = {
+            let mut st = state.lock().unwrap();
+            if std::mem::take(&mut st.fail_body_once) {
+                return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "test disconnect"));
+            }
+            st.body_delay
+        };
+        std::thread::sleep(delay);
+    }
 
     for uid in uids {
         let Some((idx, msg)) = msgs.iter().enumerate().find(|(_, m)| m.uid == uid) else {
@@ -412,7 +424,7 @@ fn handle_uid_store(
         for (idx, m) in msgs.iter().enumerate() {
             write_line(
                 writer,
-                &format!("* {} FETCH (FLAGS ({})", idx + 1, imap_flags(m.flags)),
+                &format!("* {} FETCH (FLAGS ({}))", idx + 1, imap_flags(m.flags)),
             );
         }
     }
@@ -542,10 +554,22 @@ fn initial_sync_populates_store() {
                 msg(2, "Second message", MessageFlags::SEEN),
             ],
         ),
-        ("Sent".into(), vec![msg(1, "Sent message", MessageFlags::SEEN)]),
+        (
+            "Sent".into(),
+            vec![msg(1, "Sent message", MessageFlags::SEEN)],
+        ),
     ]);
     let store = Arc::new(Store::open_in_memory().unwrap());
-    let (cmd_tx, mut rx) = start_and_connect(&server, store.clone());
+    let config = test_account(server.addr);
+    store.save_account(&config).unwrap();
+    let (events_tx, mut rx) = unbounded_channel();
+    let cmd_tx = start_syncer(config, store.clone(), events_tx);
+    // Observe the initial event before Connected, rather than discarding it
+    // while waiting for Connected and relying on an accidental reconnect.
+    assert!(wait_for_event(&mut rx, Duration::from_secs(5), |e| {
+        matches!(e, MailEvent::FoldersUpdated { .. })
+    })
+    .is_some());
 
     // Folders landed in the store.
     let folders = store.get_folders("test@bang.test").unwrap();
@@ -560,16 +584,11 @@ fn initial_sync_populates_store() {
     let subjects: Vec<&str> = messages.iter().map(|m| m.subject.as_str()).collect();
     assert!(subjects.contains(&"First message"));
     assert!(subjects.contains(&"Second message"));
-    let second = messages.iter().find(|m| m.subject == "Second message").unwrap();
+    let second = messages
+        .iter()
+        .find(|m| m.subject == "Second message")
+        .unwrap();
     assert!(second.flags.contains(MessageFlags::SEEN));
-
-    // A FoldersUpdated event was emitted.
-    assert!(
-        wait_for_event(&mut rx, Duration::from_secs(5), |e| {
-            matches!(e, MailEvent::FoldersUpdated { .. })
-        })
-        .is_some()
-    );
 
     cmd_tx.send(SyncerCommand::Quit).unwrap();
 }
@@ -810,4 +829,196 @@ fn uidvalidity_change_discards_old_cached_bodies() {
         Some((1, Some(2)))
     );
     tx.send(SyncerCommand::Quit).unwrap();
+}
+
+
+#[test]
+fn opening_a_message_does_not_wait_for_idle_or_server_push() {
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        vec![msg(1, "Old mail", MessageFlags::empty())],
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let id = store.get_messages(folder.id, 10).unwrap()[0].id;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .any(|c| c == "IDLE")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "syncer did not enter IDLE"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let started = std::time::Instant::now();
+    tx.send(SyncerCommand::FetchBody { message_id: id })
+        .unwrap();
+    // No push_flag: a quiet mailbox must not delay an interactive fetch.
+    let loaded = wait_for_event(
+        &mut events,
+        Duration::from_secs(2),
+        |e| matches!(e, MailEvent::MessageLoaded { message } if message.summary.id == id),
+    );
+    tx.send(SyncerCommand::Quit).unwrap();
+    assert!(
+        loaded.is_some(),
+        "body fetch waited behind IDLE for {:?}",
+        started.elapsed()
+    );
+    eprintln!("Interactive body fetch while IDLE: {:?}", started.elapsed());
+}
+
+#[test]
+fn rapid_selections_skip_pending_bodies_and_preserve_flag_actions() {
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        (1..=4)
+            .map(|uid| msg(uid, "Mail", MessageFlags::empty()))
+            .collect(),
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let ids: std::collections::HashMap<_, _> = store
+        .get_messages(folder.id, 10)
+        .unwrap()
+        .iter()
+        .map(|m| (m.uid, m.id))
+        .collect();
+    server.state.lock().unwrap().body_delay = Duration::from_millis(300);
+    tx.send(SyncerCommand::FetchBody {
+        message_id: ids[&1],
+    })
+    .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .any(|c| c == "UID FETCH 1 (UID BODY.PEEK[])")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "first fetch did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    tx.send(SyncerCommand::FetchBody {
+        message_id: ids[&2],
+    })
+    .unwrap();
+    tx.send(SyncerCommand::SetFlags {
+        message_ids: vec![ids[&2]],
+        flags: MessageFlags::SEEN,
+        add: true,
+    })
+    .unwrap();
+    for uid in [3, 4, 3] {
+        tx.send(SyncerCommand::FetchBody {
+            message_id: ids[&uid],
+        })
+        .unwrap();
+    }
+    wait_for_event(
+        &mut events,
+        Duration::from_secs(3),
+        |e| matches!(e, MailEvent::MessageLoaded { message } if message.summary.id == ids[&3]),
+    )
+    .expect("latest selected body");
+    tx.send(SyncerCommand::Quit).unwrap();
+    let commands = server.state.lock().unwrap().commands.clone();
+    let bodies: Vec<_> = commands
+        .iter()
+        .filter(|c| c.contains("BODY.PEEK[]"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        bodies,
+        [
+            "UID FETCH 1 (UID BODY.PEEK[])",
+            "UID FETCH 3 (UID BODY.PEEK[])"
+        ]
+    );
+    assert!(store
+        .get_message(ids[&2])
+        .unwrap()
+        .unwrap()
+        .flags
+        .contains(MessageFlags::SEEN));
+    assert!(store.get_message_full(ids[&2]).unwrap().is_none());
+    assert!(store.get_message_full(ids[&4]).unwrap().is_none());
+    assert_eq!(
+        commands.iter().filter(|c| c.starts_with("LOGIN")).count(),
+        2,
+        "interactive requests must reuse one connection"
+    );
+}
+
+#[test]
+fn interactive_body_fetch_reconnects_once_after_server_disconnect() {
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        vec![msg(1, "Reconnect", MessageFlags::empty())],
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let id = store.get_messages(folder.id, 10).unwrap()[0].id;
+    server.state.lock().unwrap().fail_body_once = true;
+    tx.send(SyncerCommand::FetchBody { message_id: id })
+        .unwrap();
+    wait_for_event(
+        &mut events,
+        Duration::from_secs(3),
+        |e| matches!(e, MailEvent::MessageLoaded { message } if message.summary.id == id),
+    )
+    .expect("fetch did not recover from disconnected session");
+    tx.send(SyncerCommand::Quit).unwrap();
+    let commands = &server.state.lock().unwrap().commands;
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|c| c.contains("BODY.PEEK[]"))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn interactive_fetch_refuses_a_reused_uid_before_background_resync() {
+    let server = MiniImap::start(vec![(
+        "INBOX".into(),
+        vec![msg(1, "Original", MessageFlags::empty())],
+    )]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let id = store.get_messages(folder.id, 10).unwrap()[0].id;
+    server.state.lock().unwrap().uid_validity = 2;
+    tx.send(SyncerCommand::FetchBody { message_id: id })
+        .unwrap();
+    wait_for_event(
+        &mut events,
+        Duration::from_secs(3),
+        |e| matches!(e, MailEvent::Error { message, .. } if message.contains("mailbox changed")),
+    )
+    .expect("obsolete UID was not rejected");
+    tx.send(SyncerCommand::Quit).unwrap();
+    assert!(store.get_message_full(id).unwrap().is_none());
+    assert!(!server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .any(|c| c.contains("BODY.PEEK[]")));
 }
