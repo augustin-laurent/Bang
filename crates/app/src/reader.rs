@@ -6,8 +6,9 @@ use slint::{ComponentHandle, Global};
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 use webkit2gtk::{
     CookieManagerExt, NavigationPolicyDecision, NavigationPolicyDecisionExt, NavigationType,
-    PolicyDecisionExt, PolicyDecisionType, SettingsExt, URIRequestExt, URISchemeRequestExt,
-    URISchemeResponseExt, WebContext, WebContextExt, WebView, WebViewExt,
+    PolicyDecisionExt, PolicyDecisionType, ResponsePolicyDecision, ResponsePolicyDecisionExt,
+    SettingsExt, URIRequestExt, URIResponseExt, URISchemeRequestExt, URISchemeResponseExt,
+    WebContext, WebContextExt, WebView, WebViewExt,
 };
 
 thread_local! { static READER: RefCell<Option<Rc<RefCell<Reader>>>> = const { RefCell::new(None) }; }
@@ -197,6 +198,21 @@ impl Reader {
                 }
                 decision.ignore();
                 return true;
+            }
+            // A response WebKit treats as a file download (Content-Disposition
+            // or the download attribute) must not start a download: the
+            // reader only renders, it never saves files.
+            if kind == PolicyDecisionType::Response {
+                if let Some(response_decision) = decision.downcast_ref::<ResponsePolicyDecision>() {
+                    if response_decision
+                        .response()
+                        .as_ref()
+                        .is_some_and(|r| r.suggested_filename().is_some())
+                    {
+                        decision.ignore();
+                        return true;
+                    }
+                }
             }
             false
         });
