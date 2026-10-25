@@ -568,7 +568,7 @@ fn wire_compose(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Bri
     let store = store.clone();
     ui.on_compose_clicked(move || {
         if let Some(ui) = weak.upgrade() {
-            if let Err(error) = composer::open(&ui, store.clone(), bridge.clone(), None) {
+            if let Err(error) = composer::open(&ui, store.clone(), bridge.clone(), None, None) {
                 ui.set_status_message(format!("{} {error}", tr("Compose unavailable:")).into());
             }
         }
@@ -693,7 +693,8 @@ fn wire_drafts(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: bridge::Brid
     });
 }
 
-/// Open a saved draft in the composer, then remove it from the list.
+/// Open a saved draft in the composer; the composer removes it from the
+/// list once the editor has received its content.
 fn resume_draft(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Bridge, id: i64) {
     let Ok(Some(request)) = store.get_draft(id) else {
         return;
@@ -706,11 +707,9 @@ fn resume_draft(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Br
         in_reply_to: request.in_reply_to.clone(),
         references: request.references.clone(),
     };
-    if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill)) {
+    if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill), Some(id)) {
         ui.set_status_message(format!("{} {e}", tr("Compose unavailable:")).into());
-        return;
     }
-    bridge.send(bang_core::UiCommand::DeleteDraft { id });
 }
 
 /// Open a saved template in the composer (the template stays in the list).
@@ -726,7 +725,7 @@ fn resume_template(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge:
         in_reply_to: None,
         references: None,
     };
-    if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill)) {
+    if let Err(e) = composer::open(ui, store.clone(), bridge.clone(), Some(prefill), None) {
         ui.set_status_message(format!("{} {e}", tr("Compose unavailable:")).into());
     }
 }

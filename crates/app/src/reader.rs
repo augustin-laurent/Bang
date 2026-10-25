@@ -353,7 +353,7 @@ fn open_link(
                 return;
             };
             let prefill = mailto_prefill(&url);
-            if let Err(e) = crate::composer::open(ui, store, bridge, Some(prefill)) {
+            if let Err(e) = crate::composer::open(ui, store, bridge, Some(prefill), None) {
                 ui.set_status_message(e.to_string().into());
             }
         }

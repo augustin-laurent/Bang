@@ -20,6 +20,9 @@ struct Session {
     dirty: bool,
     /// Prefill to deliver once the editor is ready (new session only).
     pending_prefill: Option<Prefill>,
+    /// Saved draft being resumed; deleted from the store once the editor
+    /// has received its content.
+    draft_id: Option<i64>,
     /// Reply threading headers for the current draft (set by a prefill).
     in_reply_to: Option<String>,
     references: Option<String>,
@@ -91,12 +94,15 @@ pub fn send_result(ok: bool, error: Option<String>) {
 }
 /// Open a single writer, or bring the existing writer to the foreground.
 ///
-/// With a `prefill`, the draft fields are replaced (reply / forward).
+/// With a `prefill`, the draft fields are replaced (reply / forward). When
+/// `draft_id` is set, the saved draft is deleted from the store only after
+/// the editor has received the prefill.
 pub fn open(
     ui: &BangApp,
     store: Arc<bang_core::Store>,
     bridge: Bridge,
     prefill: Option<Prefill>,
+    draft_id: Option<i64>,
 ) -> anyhow::Result<()> {
     if let Some(s) = current() {
         match prefill {
@@ -104,6 +110,7 @@ pub fn open(
                 let mut s = s.lock().unwrap();
                 s.in_reply_to = p.in_reply_to.clone();
                 s.references = p.references.clone();
+                s.draft_id = draft_id;
                 write(
                     &mut s,
                     &HostMessage::Prefill {
@@ -115,6 +122,9 @@ pub fn open(
                         references: p.references,
                     },
                 )?;
+                if let Some(id) = s.draft_id.take() {
+                    bridge.send(bang_core::UiCommand::DeleteDraft { id });
+                }
             }
             None => write(&mut s.lock().unwrap(), &HostMessage::Focus)?,
         }
@@ -147,6 +157,7 @@ pub fn open(
         pending: false,
         dirty: false,
         pending_prefill: prefill,
+        draft_id,
         in_reply_to,
         references,
     }));
@@ -177,17 +188,20 @@ pub fn open(
                     let mut s = session.lock().unwrap();
                     let _ = write(&mut s, &init);
                     if let Some(p) = s.pending_prefill.take() {
-                        let _ = write(
-                            &mut s,
-                            &HostMessage::Prefill {
-                                from: p.from,
-                                to: p.to,
-                                subject: p.subject,
-                                body_html: p.body_html,
-                                in_reply_to: p.in_reply_to,
-                                references: p.references,
-                            },
-                        );
+                        let prefill = HostMessage::Prefill {
+                            from: p.from,
+                            to: p.to,
+                            subject: p.subject,
+                            body_html: p.body_html,
+                            in_reply_to: p.in_reply_to,
+                            references: p.references,
+                        };
+                        // Delete the saved draft only once the editor has it.
+                        if write(&mut s, &prefill).is_ok() {
+                            if let Some(id) = s.draft_id.take() {
+                                bridge.send(bang_core::UiCommand::DeleteDraft { id });
+                            }
+                        }
                     }
                 }
                 EditorMessage::CloseCancelled => {
@@ -458,6 +472,7 @@ pub fn reply_or_forward(
             in_reply_to,
             references: None,
         }),
+        None,
     )
 }
 
