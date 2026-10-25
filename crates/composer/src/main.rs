@@ -54,10 +54,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let _ = proxy.send_event(Message::ParentClosed);
     });
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(Message::ParentClosed) => *flow = ControlFlow::Exit,
+            Event::UserEvent(Message::Editor(EditorMessage::Ready)) => {
+                ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                emit(&EditorMessage::Ready);
+            }
             Event::UserEvent(Message::Host(msg)) => {
                 if let HostMessage::Focus = msg {
                     window.set_focus();
@@ -99,7 +104,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                let _ = webview.evaluate_script("window.bangReceive({type:'request_close'})");
+                // Before the editor script is ready there is no draft to
+                // protect, so a close request must not be lost in a failed
+                // script evaluation.
+                if ready.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = webview.evaluate_script("window.bangReceive({type:'request_close'})");
+                } else {
+                    *flow = ControlFlow::Exit;
+                }
             }
             _ => {}
         }
