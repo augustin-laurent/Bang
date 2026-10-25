@@ -36,6 +36,8 @@ let language = "en",
   pending = false,
   dirty = false,
   formatVisible = true;
+// Prefill waiting for the user to discard the current draft.
+let pendingPrefill: Host | null = null;
 const preview = new URLSearchParams(location.search).has("preview");
 const app = document.querySelector<HTMLElement>("#app")!;
 const paths: Record<string, string> = {
@@ -229,6 +231,15 @@ function requestClose() {
   if (dirty) el<HTMLDialogElement>("discard-dialog").showModal();
   else post({ type: "close" });
 }
+function applyPrefill(msg: Host) {
+  if (msg.from && accounts.some((a) => a.id === msg.from))
+    el<HTMLSelectElement>("from").value = msg.from;
+  input("to").value = (msg.to || []).join(", ");
+  input("subject").value = msg.subject || "";
+  editor.commands.setContent(msg.body_html || "", { emitUpdate: false });
+  setDirty();
+  input("to").focus();
+}
 window.bangReceive = (msg: Host) => {
   if (msg.type === "init") {
     accounts = msg.accounts || [];
@@ -252,13 +263,15 @@ window.bangReceive = (msg: Host) => {
     document.documentElement.dataset.theme = msg.dark ? "dark" : "light";
     localize();
   } else if (msg.type === "prefill") {
-    if (msg.from && accounts.some((a) => a.id === msg.from))
-      el<HTMLSelectElement>("from").value = msg.from;
-    input("to").value = (msg.to || []).join(", ");
-    input("subject").value = msg.subject || "";
-    editor.commands.setContent(msg.body_html || "", { emitUpdate: false });
-    setDirty();
-    input("to").focus();
+    // Never replace unsent edits without asking.
+    if (pending) {
+      feedback(t("Keep open until sending completes."));
+      return;
+    }
+    if (dirty) {
+      pendingPrefill = msg;
+      el<HTMLDialogElement>("discard-dialog").showModal();
+    } else applyPrefill(msg);
   } else if (msg.type === "attachments") {
     files = msg.files || [];
     renderFiles();
@@ -367,14 +380,20 @@ el("unlink").onclick = () => {
 };
 el("keep").onclick = () => {
   el<HTMLDialogElement>("discard-dialog").close();
+  pendingPrefill = null;
   post({ type: "close_cancelled" });
 };
-el("discard-dialog").addEventListener("cancel", () =>
-  post({ type: "close_cancelled" }),
-);
+el("discard-dialog").addEventListener("cancel", () => {
+  pendingPrefill = null;
+  post({ type: "close_cancelled" });
+});
 el("discard").onclick = () => {
   dirty = false;
-  post({ type: "close" });
+  if (pendingPrefill) {
+    const prefill = pendingPrefill;
+    pendingPrefill = null;
+    applyPrefill(prefill);
+  } else post({ type: "close" });
 };
 function collectDraft() {
   let to: string[], cc: string[], bcc: string[];
