@@ -83,7 +83,11 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
         let s = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, s)
+        // Write a temp file and rename it into place so a crash mid-write
+        // cannot truncate the existing configuration.
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, s)?;
+        std::fs::rename(&tmp, path)
     }
 }
 
@@ -125,6 +129,8 @@ mod tests {
             assert!(!restored.online_avatars);
             assert_eq!(restored.oauth.google.client_id, "local-test-client");
         }
+        // The atomic save must not leave a temp file behind.
+        assert!(!path.with_extension("toml.tmp").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
