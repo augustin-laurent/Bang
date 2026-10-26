@@ -38,6 +38,8 @@ impl Bridge {
     pub fn start(ui: &BangApp, store: Arc<Store>, state: Arc<UiState>) -> Self {
         let (cmd_tx, mut cmd_rx) = unbounded_channel::<UiCommand>();
         let (events_tx, events_rx) = unbounded_channel::<MailEvent>();
+        // Kept separately so a panic in the command loop can still report.
+        let panic_events = events_tx.clone();
         let service = Arc::new(MailService::new(store.clone(), events_tx));
         let weak = ui.as_weak();
 
@@ -60,7 +62,31 @@ impl Bridge {
                     loop {
                         tokio::select! {
                             cmd = cmd_rx.recv() => match cmd {
-                                Some(cmd) => service.handle_command(cmd),
+                                Some(cmd) => {
+                                    // A panic must not kill the core thread
+                                    // silently: report it and keep serving.
+                                    let result = std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(|| {
+                                            service.handle_command(cmd)
+                                        }),
+                                    );
+                                    if let Err(payload) = result {
+                                        let message = payload
+                                            .downcast_ref::<String>()
+                                            .cloned()
+                                            .or_else(|| {
+                                                payload
+                                                    .downcast_ref::<&str>()
+                                                    .map(|s| s.to_string())
+                                            })
+                                            .unwrap_or_else(|| "mail core panicked".into());
+                                        tracing::error!("mail core panicked: {message}");
+                                        let _ = panic_events.send(MailEvent::Error {
+                                            account: None,
+                                            message,
+                                        });
+                                    }
+                                }
                                 None => break,
                             },
                             _ = follow_up_tick.tick() => {
