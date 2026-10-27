@@ -268,11 +268,14 @@ impl Host {
         });
         let weak = Rc::downgrade(self);
         self.area.connect_button_release_event(move |_, e| {
-            if let Some(h) = weak.upgrade() {
-                h.slint.dispatch_event(WindowEvent::PointerReleased {
-                    position: point(e.position()),
-                    button: button(e.button()),
-                });
+            // GDK sends an extra 2BUTTON_RELEASE after the ordinary release.
+            if e.event_type() == gdk::EventType::ButtonRelease {
+                if let Some(h) = weak.upgrade() {
+                    h.slint.dispatch_event(WindowEvent::PointerReleased {
+                        position: point(e.position()),
+                        button: button(e.button()),
+                    });
+                }
             }
             glib::Propagation::Stop
         });
