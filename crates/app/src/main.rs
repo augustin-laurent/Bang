@@ -385,6 +385,23 @@ fn fts_query(raw: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
+mod fts_tests {
+    use super::*;
+
+    /// FTS5 operator injection must stay impossible: every token is quoted
+    /// and quotes are stripped, so search input can never become operators.
+    #[test]
+    fn fts_query_quotes_every_token_and_strips_quotes() {
+        assert_eq!(fts_query("foo bar"), "\"foo\" \"bar\"");
+        assert_eq!(fts_query("foo\" OR \"bar"), "\"foo\" \"OR\" \"bar\"");
+        assert_eq!(fts_query("x AND y"), "\"x\" \"AND\" \"y\"");
+        assert_eq!(fts_query("a^2"), "\"a^2\"");
+        assert_eq!(fts_query("NOT (a)"), "\"NOT\" \"(a)\"");
+        assert_eq!(fts_query(""), "");
+    }
+}
+
 /// Whether the desktop environment is in dark mode.
 ///
 /// Queries GNOME (`gsettings`) then KDE (`kreadconfig5`) in turn and uses the
