@@ -70,7 +70,13 @@ pub(crate) fn ready(ui: &BangApp, address: &str, path: &str) {
         return;
     };
     IMAGES.with(|images| {
-        images.borrow_mut().insert(address.into(), photo.clone());
+        let mut images = images.borrow_mut();
+        // Bounded by design: one decoded image per unique sender, cleared
+        // rather than grown without limit in long sessions.
+        if images.len() >= 512 {
+            images.clear();
+        }
+        images.insert(address.into(), photo.clone());
     });
     let model = ui.get_messages();
     for i in 0..model.row_count() {
