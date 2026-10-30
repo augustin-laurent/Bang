@@ -17,7 +17,8 @@ struct Session {
     attachments: Vec<(u64, bang_core::OutgoingAttachment)>,
     next_attachment: u64,
     pending: bool,
-    dirty: bool,
+    /// A save (draft, template, schedule) is waiting on the store.
+    awaiting_save: bool,
     /// Prefill to deliver once the editor is ready (new session only).
     pending_prefill: Option<Prefill>,
     /// Saved draft being resumed; deleted from the store once the editor
@@ -80,6 +81,17 @@ pub fn preferences(ui: &BangApp) {
                 dark: Theme::get(ui).get_dark(),
             },
         );
+    }
+}
+/// Report a store failure to the editor when a save is in flight, so the
+/// optimistic "saved" feedback is replaced by the real error.
+pub fn save_failed(message: String) {
+    if let Some(s) = current() {
+        let mut s = s.lock().unwrap();
+        if s.awaiting_save {
+            s.awaiting_save = false;
+            let _ = write(&mut s, &HostMessage::Error { message });
+        }
     }
 }
 /// Deliver SMTP feedback. The draft stays alive until a successful result.
@@ -155,7 +167,7 @@ pub fn open(
         attachments: vec![],
         next_attachment: 1,
         pending: false,
-        dirty: false,
+        awaiting_save: false,
         pending_prefill: prefill,
         draft_id,
         in_reply_to,
@@ -295,7 +307,10 @@ pub fn open(
                 EditorMessage::SaveDraft(content) => {
                     let mut s = session.lock().unwrap();
                     match build_request(&store, &s, &content) {
-                        Some(request) => bridge.send(bang_core::UiCommand::SaveDraft(request)),
+                        Some(request) => {
+                            s.awaiting_save = true;
+                            bridge.send(bang_core::UiCommand::SaveDraft(request));
+                        }
                         None => {
                             let _ = write(
                                 &mut s,
@@ -309,10 +324,13 @@ pub fn open(
                 EditorMessage::SaveTemplate { name, content } => {
                     let mut s = session.lock().unwrap();
                     match build_request(&store, &s, &content) {
-                        Some(request) => bridge.send(bang_core::UiCommand::SaveTemplate {
-                            name,
-                            request,
-                        }),
+                        Some(request) => {
+                            s.awaiting_save = true;
+                            bridge.send(bang_core::UiCommand::SaveTemplate {
+                                name,
+                                request,
+                            });
+                        }
                         None => {
                             let _ = write(
                                 &mut s,
@@ -326,10 +344,13 @@ pub fn open(
                 EditorMessage::Schedule { send_at, content } => {
                     let mut s = session.lock().unwrap();
                     match build_request(&store, &s, &content) {
-                        Some(request) => bridge.send(bang_core::UiCommand::ScheduleSend {
-                            send_at,
-                            request,
-                        }),
+                        Some(request) => {
+                            s.awaiting_save = true;
+                            bridge.send(bang_core::UiCommand::ScheduleSend {
+                                send_at,
+                                request,
+                            });
+                        }
                         None => {
                             let _ = write(
                                 &mut s,

@@ -283,6 +283,7 @@ impl UiState {
                 });
             }
             MailEvent::Error { message, .. } => {
+                crate::composer::save_failed(message.clone());
                 ui.set_message_loading(false);
                 ui.set_status_message(format!("{} {}", tr("Error:"), message).into());
             }
