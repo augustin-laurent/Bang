@@ -480,6 +480,7 @@ async fn smtp_send(store: &Store, request: &SendRequest) -> Result<()> {
         Ok(Some(acc)) => crate::smtp::send(
             &acc.smtp,
             &acc.auth,
+            &acc.email,
             &request.from,
             &request.to,
             &request.cc,

@@ -63,6 +63,7 @@ pub async fn test_connection(config: &SmtpConfig, auth: &AuthMethod, email: &str
 pub async fn send(
     config: &SmtpConfig,
     auth: &AuthMethod,
+    email: &str,
     from: &str,
     to: &[String],
     cc: &[String],
@@ -88,13 +89,11 @@ pub async fn send(
                 .authentication(vec![Mechanism::Plain, Mechanism::Login]);
         }
         AuthMethod::OAuth2 { access_token, .. } => {
-            // XOAUTH2: identity is the account email, secret is the access token.
-            let identity = match from.contains('@') {
-                true => from.to_string(),
-                false => String::new(),
-            };
+            // XOAUTH2: identity is the account email, secret is the access
+            // token. The From address may be a custom alias, so it cannot be
+            // used as the identity.
             builder = builder
-                .credentials(Credentials::new(identity, access_token.clone()))
+                .credentials(Credentials::new(email.to_string(), access_token.clone()))
                 .authentication(vec![Mechanism::Xoauth2]);
         }
     }
@@ -402,6 +401,7 @@ mod tests {
                         username: "local".into(),
                         password: "test".into(),
                     },
+                    "alice@example.com",
                     "alice@example.com",
                     &["bob@example.com".into()],
                     &[],
