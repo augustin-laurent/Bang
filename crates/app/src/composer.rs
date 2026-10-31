@@ -219,7 +219,6 @@ pub fn open(
                 EditorMessage::CloseCancelled => {
                     CLOSE_MAIN.store(false, Ordering::Relaxed);
                 }
-                EditorMessage::Dirty { dirty } => session.lock().unwrap().dirty = dirty,
                 EditorMessage::AttachPaths { paths } => {
                     let mut s = session.lock().unwrap();
                     for path in paths {

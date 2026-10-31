@@ -149,11 +149,6 @@ pub enum EditorMessage {
         /// Draft content.
         content: DraftContent,
     },
-    /// Report the document edit state.
-    Dirty {
-        /// Whether unsent edits exist.
-        dirty: bool,
-    },
     /// Close the composer after confirmation or a successful send.
     Close,
     /// The user kept an unsent draft open.

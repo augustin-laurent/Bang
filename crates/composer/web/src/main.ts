@@ -125,7 +125,6 @@ const editor = new Editor({
 });
 function setDirty() {
   dirty = true;
-  post({ type: "dirty", dirty: true });
 }
 function feedback(message: string) {
   el("feedback").textContent = message;
@@ -280,7 +279,6 @@ window.bangReceive = (msg: Host) => {
     sending(false);
     if (msg.ok) {
       dirty = false;
-      post({ type: "dirty", dirty: false });
       post({ type: "close" });
     } else feedback(`${t("Send failed:")} ${msg.error || ""}`);
   } else if (msg.type === "error") feedback(msg.message || "");
