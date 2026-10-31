@@ -4,7 +4,7 @@
 //! The service is driven from a tokio runtime (see the app's bridge); it is
 //! `Send + Sync` and can be shared across tasks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +26,9 @@ pub struct MailService {
     avatars: Arc<crate::avatars::AvatarCache>,
     events_tx: UnboundedSender<MailEvent>,
     syncers: Arc<Mutex<HashMap<String, std_mpsc::Sender<SyncerCommand>>>>,
+    /// Pending-send ids currently being sent, so a slow SMTP server cannot
+    /// make the periodic dispatch deliver the same email twice.
+    in_flight_sends: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl MailService {
@@ -41,6 +44,7 @@ impl MailService {
             avatars: crate::avatars::AvatarCache::new(),
             events_tx,
             syncers: Arc::new(Mutex::new(HashMap::new())),
+            in_flight_sends: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -189,7 +193,11 @@ impl MailService {
     ///
     /// Called periodically by the app's bridge. A successful send is removed
     /// from the pending list; a failed one is kept and retried on the next
-    /// tick (no event, so a dead network does not spam the UI).
+    /// tick (no event, so a dead network does not spam the UI). A send that
+    /// is already in flight is not dispatched again, so a slow SMTP server
+    /// cannot produce duplicate deliveries. Scheduled sends report through
+    /// `SendsUpdated` only; `SendResult` is reserved for the interactive
+    /// send the composer is waiting on.
     pub fn check_due_sends(&self) {
         let now = chrono::Utc::now().timestamp();
         let due = match self.store.due_sends(now) {
@@ -200,20 +208,21 @@ impl MailService {
             }
         };
         for (id, request) in due {
+            if !self.in_flight_sends.lock().unwrap().insert(id) {
+                continue;
+            }
             let store = self.store.clone();
             let events_tx = self.events_tx.clone();
+            let in_flight = self.in_flight_sends.clone();
             tokio::spawn(async move {
-                match smtp_send(&store, &request).await {
+                let result = smtp_send(&store, &request).await;
+                in_flight.lock().unwrap().remove(&id);
+                match result {
                     Ok(()) => {
                         if let Err(e) = store.remove_send(id) {
                             tracing::warn!("remove_send failed for {}: {e}", id);
                         }
                         let _ = events_tx.send(MailEvent::SendsUpdated);
-                        let _ = events_tx.send(MailEvent::SendResult {
-                            account: request.account,
-                            ok: true,
-                            error: None,
-                        });
                     }
                     Err(e) => tracing::warn!("scheduled send {} failed: {e}", id),
                 }
@@ -613,5 +622,83 @@ mod account_setup_tests {
     fn gmail_uses_documented_endpoints() {
         assert_eq!(default_imap(OAuthProvider::Google).host, "imap.gmail.com");
         assert_eq!(default_smtp(OAuthProvider::Google).host, "smtp.gmail.com");
+    }
+}
+
+#[cfg(test)]
+mod scheduled_send_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A send that is still in flight must not be dispatched again by the
+    /// next tick, or the recipient would get the email twice.
+    #[tokio::test]
+    async fn in_flight_scheduled_send_is_not_dispatched_twice() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let accepted_server = accepted.clone();
+        // Accepts connections and holds them open without a greeting, so the
+        // send stays in flight.
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                accepted_server.fetch_add(1, Ordering::SeqCst);
+                held.push(stream);
+            }
+        });
+        let store = Arc::new(Store::open(std::path::Path::new(":memory:")).unwrap());
+        store
+            .save_account(&AccountConfig {
+                id: AccountId("send@example.test".into()),
+                email: "send@example.test".into(),
+                imap: ImapConfig {
+                    host: "127.0.0.1".into(),
+                    port: 1,
+                    tls: TlsMode::Plaintext,
+                },
+                smtp: SmtpConfig {
+                    host: "127.0.0.1".into(),
+                    port,
+                    tls: TlsMode::Plaintext,
+                },
+                auth: AuthMethod::Password {
+                    username: "local".into(),
+                    password: "pw".into(),
+                },
+            })
+            .unwrap();
+        store
+            .schedule_send(
+                &SendRequest {
+                    account: AccountId("send@example.test".into()),
+                    from: "send@example.test".into(),
+                    to: vec!["rcpt@example.test".into()],
+                    cc: vec![],
+                    bcc: vec![],
+                    subject: "due".into(),
+                    body_text: "body".into(),
+                    body_html: None,
+                    attachments: vec![],
+                    in_reply_to: None,
+                    references: None,
+                },
+                chrono::Utc::now().timestamp() - 1,
+            )
+            .unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = MailService::new(store.clone(), tx);
+        service.check_due_sends();
+        for _ in 0..100 {
+            if accepted.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        service.check_due_sends();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 }

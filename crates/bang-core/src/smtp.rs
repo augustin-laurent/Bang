@@ -76,6 +76,9 @@ pub async fn send(
 ) -> Result<()> {
     let mut builder = AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(&config.host)
         .port(config.port)
+        // A blackholed connection must not hang the send forever; the
+        // failure is retried on the next dispatch tick.
+        .timeout(Some(std::time::Duration::from_secs(30)))
         .tls(tls_mode(config)?);
 
     match auth {
