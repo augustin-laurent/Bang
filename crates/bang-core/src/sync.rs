@@ -140,7 +140,11 @@ fn sync_folders(
         };
         store.upsert_folder(&folder)?;
     }
-    store.delete_folders_not_in(&config.id.0, &paths)?;
+    // An empty LIST is not a real mailbox (INBOX always exists); never wipe
+    // the cached folders on an anomalous response.
+    if !paths.is_empty() {
+        store.delete_folders_not_in(&config.id.0, &paths)?;
+    }
     let folders = store.get_folders(&config.id.0)?;
 
     for folder in &folders {
