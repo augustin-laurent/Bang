@@ -450,6 +450,18 @@ fn execute_command(
     }
 }
 
+/// Whether cached UIDs are obsolete for the server's current UIDVALIDITY
+/// generation. A NULL stored validity means a UIDVALIDITY re-sync is in
+/// flight; a never-synced folder has no cached messages, so it cannot reach
+/// this check.
+fn uids_stale(expected: Option<u32>, actual: Option<u32>) -> bool {
+    match (expected, actual) {
+        (Some(expected), Some(actual)) => expected != actual,
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
 // An interactive connection must not act on UIDs from an obsolete generation.
 fn select_cached_folder(
     conn: &mut ImapConn,
@@ -461,12 +473,10 @@ fn select_cached_folder(
     let expected = store
         .get_folder_sync_state(folder_id)?
         .and_then(|(_, validity)| validity);
-    if let (Some(expected), Some(actual)) = (expected, status.uid_validity) {
-        if expected != actual {
-            return Err(Error::Store(
-                "mailbox changed; wait for synchronization before retrying".into(),
-            ));
-        }
+    if uids_stale(expected, status.uid_validity) {
+        return Err(Error::Store(
+            "mailbox changed; wait for synchronization before retrying".into(),
+        ));
     }
     Ok(())
 }
@@ -687,6 +697,15 @@ fn last_component(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uids_stale_covers_generation_change_and_mid_resync() {
+        assert!(!uids_stale(Some(1), Some(1)));
+        assert!(uids_stale(Some(1), Some(2)));
+        // Mid-resync: the stored validity is NULL until the re-sync commits.
+        assert!(uids_stale(None, Some(2)));
+        assert!(!uids_stale(None, None));
+    }
 
     #[test]
     fn pending_reads_are_replaced_without_reordering_mutations() {
