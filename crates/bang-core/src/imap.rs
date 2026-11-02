@@ -189,18 +189,6 @@ impl<T: Read + Write> ImapSession<T> {
             .collect())
     }
 
-    /// Fetch the first `max_bytes` of the text part (for previews).
-    ///
-    /// # Errors
-    /// Returns `Error::Imap` on failure.
-    pub fn fetch_preview(&mut self, uid: u32, max_bytes: usize) -> Result<Option<String>> {
-        let query = format!("(UID BODY.PEEK[TEXT]<0.{max_bytes}>)");
-        let fetches = self.session.uid_fetch(&uid.to_string(), &query)?;
-        Ok(fetches
-            .iter()
-            .find_map(|f| f.body().map(|b| String::from_utf8_lossy(b).into_owned())))
-    }
-
     /// Fetch the full raw message for a UID.
     ///
     /// # Errors
@@ -257,23 +245,6 @@ impl<T: Read + Write> ImapSession<T> {
         }
     }
 
-    /// Close the selected mailbox (without expunging).
-    ///
-    /// # Errors
-    /// Returns `Error::Imap` on failure.
-    pub fn close(&mut self) -> Result<()> {
-        self.session.close()?;
-        Ok(())
-    }
-
-    /// Log out (implies CLOSE).
-    ///
-    /// # Errors
-    /// Returns `Error::Imap` on failure.
-    pub fn logout(&mut self) -> Result<()> {
-        self.session.logout()?;
-        Ok(())
-    }
 }
 
 /// A connected IMAP session, TLS or plaintext.
@@ -381,28 +352,6 @@ impl ImapConn {
         match self {
             ImapConn::Tls(s) => s.idle_wait(timeout),
             ImapConn::Plain(s) => s.idle_wait(timeout),
-        }
-    }
-
-    /// Close the selected mailbox.
-    ///
-    /// # Errors
-    /// Returns `Error::Imap` on failure.
-    pub fn close(&mut self) -> Result<()> {
-        match self {
-            ImapConn::Tls(s) => s.close(),
-            ImapConn::Plain(s) => s.close(),
-        }
-    }
-
-    /// Log out.
-    ///
-    /// # Errors
-    /// Returns `Error::Imap` on failure.
-    pub fn logout(&mut self) -> Result<()> {
-        match self {
-            ImapConn::Tls(s) => s.logout(),
-            ImapConn::Plain(s) => s.logout(),
         }
     }
 
