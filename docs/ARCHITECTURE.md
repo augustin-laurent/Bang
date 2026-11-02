@@ -374,7 +374,7 @@ category/label filter. The original filter is restored when the query is cleared
 Organization dialogs participate in the same modal guard that hides native WebKit.
 
 `avatars.rs` in the core deduplicates asynchronous lookups, with at most four
-active workers. Gravatar uses the normalized address's SHA256 identifier; the
+active workers. Gravatar uses the normalized address's MD5 identifier; the
 fallback is the sender domain's HTTPS favicon, except for common personal email
 providers. Only DNS-pinned public HTTPS destinations are contacted, including after
 redirects; no mail HTML URL, cookies or account credentials enter these requests.

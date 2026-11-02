@@ -1,7 +1,7 @@
 //! Bounded, asynchronous public avatar lookup with a persistent local cache.
 use crate::{events::MailEvent, organization::sender_key};
 use image::{GenericImageView, ImageFormat, ImageReader};
-use sha2::{Digest, Sha256};
+use md5::{Digest, Md5};
 use std::{
     collections::HashMap,
     io::Cursor,
@@ -78,7 +78,9 @@ impl AvatarCache {
                 this.pending.lock().unwrap().remove(&address);
                 return;
             };
-            let hash = format!("{:x}", Sha256::digest(address.as_bytes()));
+            // Gravatar resolves avatars by the MD5 of the lowercased,
+            // trimmed address; sender_key is exactly that normalization.
+            let hash = format!("{:x}", Md5::digest(address.as_bytes()));
             let path = dir.join(format!("{hash}.png"));
             let stamp = dir.join(format!("{hash}.json"));
             let cached = read_cache(&path, &stamp);
@@ -431,7 +433,7 @@ mod tests {
     async fn cached_lookup_deduplicates_and_survives_worker_restart() {
         let dir = std::env::temp_dir().join(format!("bang-avatar-worker-{}", std::process::id()));
         let address = "alice@example.test";
-        let hash = format!("{:x}", Sha256::digest(address.as_bytes()));
+        let hash = format!("{:x}", Md5::digest(address.as_bytes()));
         let path = dir.join(format!("{hash}.png"));
         let stamp = dir.join(format!("{hash}.json"));
         let mut png = Cursor::new(Vec::new());
