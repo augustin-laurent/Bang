@@ -608,9 +608,9 @@ fn handle_fetch_body(
     // Persist attachment data on disk; the record's path is set once stored.
     let mut attachments = crate::mime::to_attachment_records(message_id, &parsed.attachments);
     for (record, data) in attachments.iter_mut().zip(&parsed.attachments) {
-        if let Ok(path) = store.save_attachment(message_id, &record.filename, &data.data) {
-            record.path = path;
-        }
+        // A failed write must fail the open: the UI then shows the error and
+        // a later open re-fetches, instead of caching a broken attachment.
+        record.path = store.save_attachment(message_id, &record.filename, &data.data)?;
     }
     store.save_message_bodies(
         message_id,
