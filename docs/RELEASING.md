@@ -56,7 +56,8 @@ local compilation.
    draft, but must never overwrite a published release or move a published tag.
 
 The workflow can only create/update a **draft prerelease**. It never publishes
-one automatically. No OAuth credentials or personal account data belong in CI.
+one automatically. Only the publisher Desktop parameter is supplied through GitHub Secrets; personal
+account credentials and tokens never belong in CI.
 
 ## Manual publication gate
 
@@ -78,26 +79,34 @@ See [ACCOUNTS.md](ACCOUNTS.md) for the detailed provider checks.
 Once verified, record the evidence in the release notes and publish the existing
 draft with **Set as a pre-release** enabled. Do not mark it stable or latest.
 
-Google is disabled in unconfigured preview builds: the repository contains no
-publisher desktop parameter. A distributor must supply the complete registration
-at build time and perform the live checks before enabling and publishing it.
+## Google configuration for release builds
 
-## Complete Google configuration before publication
+Create the repository Actions secret **`BANG_GOOGLE_DESKTOP_PARAMETER`** in
+Settings → Secrets and variables → Actions. Use the parameter for Bang's bundled
+Google **Desktop app** registration. Never use an account access/refresh token or
+a confidential Web application credential here. The public Google client ID is
+already bundled in `providers.rs`.
 
-The automated draft artifacts intentionally have Google disabled. They cannot
-pass the live Google gate as built. Before publication, the publisher must build
-replacement packages from the same release commit on each target distribution,
-providing `BANG_GOOGLE_CLIENT_ID` and `BANG_GOOGLE_DESKTOP_PARAMETER` in the build
-environment. Do not commit those values or put them in public workflow logs.
+**Draft prerelease** requires this secret and passes it explicitly to the reusable
+packaging workflow. Docker and the login shell forward it to Cargo through the
+environment, with no value in command-line arguments or committed files. The
+frontend dependency installation and packaging commands do not receive it.
+The built executable's diagnostic must report a bundled Google registration.
 
-Build the editor, then run `cargo build --workspace --release --locked` with that
-environment and `bash scripts/package.sh deb`, `rpm`, or `arch` on its native
-distribution. Repeat installed-package smoke tests, then perform the live Google
-checks on the configured packages. Replace all three binary assets in the
-**draft only**, regenerate `SHA256SUMS` against the replacement binaries and the
-unchanged source archive/PKGBUILD, and replace the draft checksum asset. Record
-the validation results in its release notes before publishing. If the source
-commit changes, rerun push CI and draft preparation for the new SHA first.
+PR and push CI do not receive the secret and continue to test unconfigured builds.
+Source archives and the Arch source recipe contain no parameter. Builds from
+source need the publisher parameter in their Cargo environment to enable Google.
+
+GitHub Secrets protects storage and masks logs, but the parameter is embedded in
+distributed executables and can be recovered from them. Google Desktop OAuth
+clients cannot keep this parameter confidential. It identifies the application;
+users still grant access individually through browser consent and PKCE.
+
+After configuring the secret, run **Draft prerelease** for the current successful
+main SHA. It rebuilds and replaces the existing **draft** binaries and SHA256SUMS;
+there is no manual package replacement step. Complete the live Google checks on
+these exact packages before publishing. Injection does not prove production
+consent, login, refresh or delivery works.
 
 Release immutability is enabled in repository settings: published assets and tags
 cannot be replaced. Keep it enabled. Draft automation also refuses existing tags

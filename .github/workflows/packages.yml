@@ -6,6 +6,10 @@ on:
         description: Exact commit to build (defaults to the caller commit)
         required: false
         type: string
+    secrets:
+      BANG_GOOGLE_DESKTOP_PARAMETER:
+        description: Google Desktop OAuth parameter, passed only by the release workflow
+        required: false
 permissions:
   contents: read
 jobs:
@@ -32,9 +36,11 @@ jobs:
         env:
           PACKAGE_FORMAT: ${{ matrix.format }}
           PACKAGE_IMAGE: ${{ matrix.image }}
+          BANG_GOOGLE_DESKTOP_PARAMETER: ${{ secrets.BANG_GOOGLE_DESKTOP_PARAMETER }}
         run: |
           docker run --rm --init \
             -e BANG_PACKAGE_CONTAINER=1 -e CARGO_INCREMENTAL=0 \
+            -e BANG_GOOGLE_DESKTOP_PARAMETER \
             -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
             "$PACKAGE_IMAGE" bash scripts/package-container.sh "$PACKAGE_FORMAT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
