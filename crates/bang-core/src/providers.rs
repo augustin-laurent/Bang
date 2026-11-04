@@ -5,6 +5,9 @@ use crate::{ImapConfig, OAuthProvider, OAuthRegistration, SmtpConfig, TlsMode};
 pub const GOOGLE_CLIENT_ID: &str =
     "724511987587-e9iftfae1c70qmvjhgl8dkn95ui0rg1n.apps.googleusercontent.com";
 
+/// Public Microsoft registration for the native desktop client.
+pub const MICROSOFT_CLIENT_ID: &str = "17d82cc7-8458-43c3-a8c9-19f737d366fe";
+
 /// Publisher-provided native registration, optionally set by the release builder.
 pub fn registration(provider: OAuthProvider) -> Option<OAuthRegistration> {
     let (id, desktop_parameter) = match provider {
@@ -15,7 +18,10 @@ pub fn registration(provider: OAuthProvider) -> Option<OAuthRegistration> {
             parameter?;
             (id, parameter)
         }
-        OAuthProvider::Microsoft => (option_env!("BANG_MICROSOFT_CLIENT_ID").unwrap_or(""), None),
+        OAuthProvider::Microsoft => (
+            option_env!("BANG_MICROSOFT_CLIENT_ID").unwrap_or(MICROSOFT_CLIENT_ID),
+            None,
+        ),
     };
     (!id.trim().is_empty()).then(|| OAuthRegistration {
         client_id: id.trim().into(),
@@ -82,6 +88,18 @@ pub fn icloud_endpoints() -> (ImapConfig, SmtpConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn microsoft_registration_uses_a_public_client_without_a_secret() {
+        let registration = registration(OAuthProvider::Microsoft)
+            .expect("Microsoft desktop registration must be bundled");
+        assert_eq!(
+            registration.client_id,
+            option_env!("BANG_MICROSOFT_CLIENT_ID").unwrap_or(MICROSOFT_CLIENT_ID)
+        );
+        assert!(registration.desktop_parameter.is_none());
+        assert_eq!(MICROSOFT_CLIENT_ID, "17d82cc7-8458-43c3-a8c9-19f737d366fe");
+    }
+
     #[test]
     fn clean_install_has_google_and_encrypted_presets() {
         let google = registration(OAuthProvider::Google);

@@ -46,10 +46,10 @@ Secret Service keyring is needed for persistent credentials. Node.js and Rust ar
 only required when building from source. The release also includes a source
 archive and checksum-pinned Arch `PKGBUILD`; no AUR package is published.
 
-Google's publisher parameter is not stored in the repository, and Microsoft
-registration is deferred. Google is enabled in release builds through the publisher’s GitHub Actions secret;
-unconfigured source/CI builds and Microsoft keep their sign-in buttons disabled.
-Gmail still requires live consent checks; generic
+Google's publisher parameter is not stored in the repository. Google is enabled
+in release builds through the publisher’s GitHub Actions secret; unconfigured
+source/CI builds keep its sign-in button disabled. Microsoft uses a bundled public
+Desktop client registration. Both providers still require live consent checks; generic
 IMAP/SMTP and iCloud app-password setup are also supported. See
 [account setup](docs/ACCOUNTS.md) and [release preparation](docs/RELEASING.md).
 
@@ -116,9 +116,10 @@ embedded CID images are local. The isolated rich composer loads only bundled ass
 ## Account sign-in
 
 Google uses browser-based OAuth when a distributor supplies the complete Desktop
-registration at build time; end users never create an OAuth app or edit configuration. Microsoft’s public-client flow
-is implemented but its registration is deferred, so its provider button is disabled
-unless a distributor supplies a public registration.
+registration at build time; end users never create an OAuth app or edit configuration.
+Microsoft uses a bundled public Desktop registration and browser-based OAuth with
+PKCE, without a client secret. Enter the mailbox address before continuing in the
+browser. Live Microsoft account and tenant-policy compatibility remain unverified.
 
 iCloud uses a guided app-password form. Other accounts discover the domain’s
 published IMAP/SMTP settings before offering manual configuration. Both mail
