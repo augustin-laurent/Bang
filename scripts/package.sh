@@ -64,6 +64,7 @@ Rust and Slint mail client with IMAP, SMTP and an isolated rich composer.
 mkdir -p %{buildroot}
 tar -xzf %{SOURCE0} -C %{buildroot}
 %files
+%defattr(-,root,root,-)
 /usr/bin/bang
 /usr/lib/bang
 /usr/share/applications/bang.desktop
@@ -72,7 +73,7 @@ tar -xzf %{SOURCE0} -C %{buildroot}
 %doc /usr/share/doc/bang
 SPEC
     # Do not rewrite/strip the supplied binaries or require separate debug sources.
-    rpmbuild -bb --define "_topdir $work/rpmbuild" --define '__os_install_post %{nil}' "$work/rpmbuild/SPECS/bang.spec"
+    rpmbuild -bb --define "_topdir $work/rpmbuild" --define '__os_install_post %{nil}' --define 'debug_package %{nil}' "$work/rpmbuild/SPECS/bang.spec"
     cp "$work"/rpmbuild/RPMS/x86_64/*.rpm "$out/"
     ;;
   arch)

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Check staging and version rejection without root or distribution tools."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import sys
+import time
+sys.dont_write_bytecode = True
 
 repo = Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
@@ -51,3 +55,27 @@ with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
     assert rejected.returncode != 0, 'Mismatched editor version was accepted'
 subprocess.run(['bash', '-n', str(repo / 'packaging/arch/PKGBUILD')], check=True)
 print('Packaging staging, executable modes, dependencies and version rejection passed')
+
+# A native host may leave a WebKit child behind after the parent exits.
+spec = importlib.util.spec_from_file_location('bang_smoke', repo / 'scripts/smoke-installed.py')
+smoke = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(smoke)
+child_program = "import time; time.sleep(60)"
+parent_program = (
+    "import signal, subprocess, sys, time; "
+    "child = subprocess.Popen([sys.executable, '-c', " + repr(child_program) + "]); "
+    "signal.signal(signal.SIGTERM, lambda *_: (child.wait(timeout=3), sys.exit(0))); "
+    "print(child.pid, flush=True); time.sleep(60)"
+)
+process = subprocess.Popen([sys.executable, '-c', parent_program],
+                           stdout=subprocess.PIPE, text=True, start_new_session=True)
+child_pid = int(process.stdout.readline())
+smoke.stop(process)
+assert process.poll() is not None
+try:
+    os.kill(child_pid, 0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError('Native child process survived cleanup')
+print('Native smoke parent and child process-group cleanup passed')

@@ -4,18 +4,36 @@ import json
 import os
 from pathlib import Path
 import selectors
+import signal
 import subprocess
 import tempfile
 import time
 
 
 def stop(process):
-    process.terminate()
+    # WebKit creates child processes; stop the complete isolated session before
+    # removing XDG directories, otherwise its shader cache races with rmtree.
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=5)
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        assert time.monotonic() < deadline, 'Graphical process group did not exit'
+        time.sleep(0.05)
 
 
 def main():
@@ -35,7 +53,7 @@ def main():
             env[variable] = str(Path(directory) / folder)
         env['GDK_BACKEND'] = 'x11'
         with tempfile.TemporaryFile(mode='w+') as errors:
-            app = subprocess.Popen(['bang', '--preview'], env=env, stderr=errors)
+            app = subprocess.Popen(['bang', '--preview'], env=env, stderr=errors, start_new_session=True)
             try:
                 time.sleep(5)
                 errors.seek(0)
@@ -44,7 +62,7 @@ def main():
                 stop(app)
             composer = subprocess.Popen(['/usr/lib/bang/bang-compose'], env=env,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=errors, text=True)
+                                        stderr=errors, text=True, start_new_session=True)
             try:
                 # A Ready message proves the installed, bundled web editor loaded.
                 with selectors.DefaultSelector() as selector:
