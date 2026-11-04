@@ -99,3 +99,34 @@ with tempfile.TemporaryDirectory(prefix='bang-tag-test-') as directory:
                                 env=env, capture_output=True)
         assert (result.returncode == 0) == success, result.stderr.decode()
 print('Release tag: absent, lightweight, annotated, mismatch and network failure passed')
+
+# Exercise the build helper with fake tools: Cargo alone receives the parameter.
+with tempfile.TemporaryDirectory(prefix='bang-build-secret-test-') as directory:
+    root = Path(directory)
+    (root / 'scripts').mkdir()
+    shutil.copy(repo / 'scripts/build-package.sh', root / 'scripts')
+    (root / 'scripts/package.sh').write_text(
+        '#!/bin/sh\n[ -z "${BANG_GOOGLE_DESKTOP_PARAMETER+x}" ] || exit 9\n'
+        '[ "$1" = deb ] || exit 10\necho package-complete\n')
+    commands = root / 'commands'
+    commands.mkdir()
+    (commands / 'npm').write_text(
+        '#!/bin/sh\n[ -z "${BANG_GOOGLE_DESKTOP_PARAMETER+x}" ] || exit 11\n')
+    (commands / 'cargo').write_text(
+        '#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\n'
+        'assert os.environ.get("BANG_GOOGLE_DESKTOP_PARAMETER") == os.environ["BANG_TEST_EXPECTED_PARAMETER"]\n'
+        'output = Path("target/release/app")\noutput.parent.mkdir(parents=True, exist_ok=True)\n'
+        'output.write_text("#!/bin/sh\\necho \'Google Desktop registration bundled: test-public-client-id\'\\n")\n'
+        'output.chmod(0o755)\n')
+    for command in commands.iterdir():
+        command.chmod(0o755)
+    for parameter in ['', 'bang-test-desktop-parameter']:
+        env = dict(os.environ, PATH=f'{commands}:{os.environ["PATH"]}',
+                   BANG_GOOGLE_DESKTOP_PARAMETER=parameter,
+                   BANG_TEST_EXPECTED_PARAMETER=parameter)
+        result = subprocess.run(['bash', str(root / 'scripts/build-package.sh'), 'deb'],
+                                env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert 'package-complete' in result.stdout
+        assert 'bang-test-desktop-parameter' not in result.stdout + result.stderr
+print('Publisher parameter: present/absent, Cargo-only scope and no output disclosure passed')
