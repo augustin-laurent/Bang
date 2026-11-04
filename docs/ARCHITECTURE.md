@@ -76,7 +76,7 @@ open for the process lifetime.
 
 | Variant | Purpose |
 |---|---|
-| `AddAccount(config)` | Save account, start its syncer |
+| `AddAccount(config)` | Trusted session-only account; start its syncer. Use `ConnectAccount` for persistent, validated setup |
 | `OAuthLogin { provider, client_id }` | Run OAuth2, then add the account |
 | `RemoveAccount(id)` | Stop syncer, delete account |
 | `SelectFolder { .. }` | (No-op: the UI reads the store directly) |
@@ -173,12 +173,27 @@ plaintext). XOAUTH2 is supported via an `Authenticator`.
 
 ## OAuth2
 
-`oauth.rs` implements the authorization-code + PKCE flow for Google and
-Microsoft. It opens the system browser, runs a `tiny_http` server on
-localhost to catch the redirect, exchanges the code for tokens, and returns
-them. The app stores the resulting tokens in the account's `AuthMethod::OAuth2`
-and uses them as XOAUTH2 credentials for IMAP/SMTP. Client IDs come from
-`~/.config/bang/config.toml`.
+`oauth.rs` implements system-browser authorization-code + S256 PKCE with a
+short-lived loopback listener. Foreign callbacks cannot terminate an active
+sign-in. `providers.rs` owns known endpoints and bundled public registrations;
+local config is an optional complete development override.
+
+`credentials.rs` owns Linux Secret Service persistence, in-memory sessions and
+serialized refresh per account. `StoredAccount` / `StoredAuth` are secret-free
+SQLite/UI metadata; runtime `AccountConfig` / `AuthMethod` carry resolved secrets
+only inside the core. Legacy password rows migrate only after a keyring commit;
+legacy OAuth grants without a known issuing registration require reconnect.
+
+IMAP workers request current credentials over a channel to the core runtime;
+SMTP asks the same credential manager. Refresh starts within 60 seconds of expiry,
+keeps omitted refresh tokens, persists rotation before distribution, and stops
+retrying revoked grants. Removal invalidates requests, cancels sends/stops workers,
+deletes keyring items, then removes local metadata/cache. It is local disconnection,
+not provider-wide revocation or forensic erasure.
+
+`discovery.rs` reads only a domain’s two HTTPS autoconfig endpoints, with bounded
+responses, deadlines and no credentials, redirects or external XML entities.
+Discovered destinations are displayed for review before mail authentication.
 
 ## SMTP
 
@@ -270,10 +285,11 @@ client_id = "..."
 client_id = "..."
 ```
 
-The `theme` key is written by the settings dialog. A missing file or missing
-keys simply yields defaults (theme `system`, empty client IDs), in which case
-the OAuth buttons report an error and the generic IMAP/SMTP path remains
-available.
+The settings dialog writes preferences. Missing OAuth overrides resolve to bundled
+public registrations without serializing them into the per-user config. Google’s
+Desktop client is bundled. Microsoft is currently disabled without a distributor
+registration. Neither this file nor new SQLite account records store mailbox tokens
+or passwords; those belong to Secret Service or the process-only session.
 
 When `theme` is `system`, the app detects the desktop's dark mode at startup
 by querying `gsettings` then `kreadconfig5` in turn and using the first that

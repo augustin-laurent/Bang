@@ -7,24 +7,37 @@ pub(crate) fn select_provider(ui: &BangApp, provider: &str) {
     ui.set_password("".into());
     ui.set_wizard_provider(provider.into());
     ui.set_wizard_manual(matches!(provider, "manual" | "icloud"));
+    ui.set_wizard_advanced(false);
+    ui.set_wizard_settings_ready(provider == "icloud");
+    ui.set_wizard_storage_error(false);
+    ui.set_wizard_reconnect_id("".into());
     ui.set_username("".into());
+    ui.set_smtp_username("".into());
     ui.set_starttls(false);
     ui.set_smtp_starttls(provider == "icloud");
+    let (imap, smtp) = bang_core::providers::icloud_endpoints();
     ui.set_imap_port("993".into());
-    ui.set_smtp_port(if provider == "icloud" { "587" } else { "465" }.into());
+    ui.set_smtp_port(
+        if provider == "icloud" {
+            smtp.port.to_string()
+        } else {
+            "465".into()
+        }
+        .into(),
+    );
     ui.set_imap_host(
         if provider == "icloud" {
-            "imap.mail.me.com"
+            imap.host
         } else {
-            ""
+            String::new()
         }
         .into(),
     );
     ui.set_smtp_host(
         if provider == "icloud" {
-            "smtp.mail.me.com"
+            smtp.host
         } else {
-            ""
+            String::new()
         }
         .into(),
     );
@@ -40,6 +53,40 @@ fn valid_email(email: &str) -> bool {
         && !domain.starts_with('.')
         && !domain.ends_with('.')
         && !email.chars().any(char::is_whitespace)
+}
+
+/// Open the existing account's sign-in flow without deleting its cache.
+pub(crate) fn reconnect(ui: &BangApp, record: &bang_core::StoredAccount) {
+    let provider = match &record.auth {
+        bang_core::StoredAuth::OAuth2 {
+            provider: bang_core::OAuthProvider::Google,
+            ..
+        } => "google",
+        bang_core::StoredAuth::OAuth2 { .. } => "microsoft",
+        _ if record.imap.host == "imap.mail.me.com" => "icloud",
+        _ => "manual",
+    };
+    select_provider(ui, provider);
+    ui.set_email(record.email.clone().into());
+    ui.set_wizard_reconnect_id(record.id.0.clone().into());
+    ui.set_imap_host(record.imap.host.clone().into());
+    ui.set_imap_port(record.imap.port.to_string().into());
+    ui.set_smtp_host(record.smtp.host.clone().into());
+    ui.set_smtp_port(record.smtp.port.to_string().into());
+    ui.set_starttls(record.imap.tls == bang_core::TlsMode::Starttls);
+    ui.set_smtp_starttls(record.smtp.tls == bang_core::TlsMode::Starttls);
+    if let bang_core::StoredAuth::Password {
+        username,
+        smtp_username,
+        ..
+    } = &record.auth
+    {
+        ui.set_username(username.clone().into());
+        ui.set_smtp_username(smtp_username.clone().into());
+        ui.set_wizard_settings_ready(true);
+    }
+    ui.set_settings_open(false);
+    ui.set_wizard_open(true);
 }
 
 fn manual_config(ui: &BangApp) -> Result<bang_core::AccountConfig, &'static str> {
@@ -66,7 +113,11 @@ fn manual_config(ui: &BangApp) -> Result<bang_core::AccountConfig, &'static str>
         }
     };
     Ok(bang_core::AccountConfig {
-        id: bang_core::AccountId(email.clone()),
+        id: bang_core::AccountId(if ui.get_wizard_reconnect_id().is_empty() {
+            email.clone()
+        } else {
+            ui.get_wizard_reconnect_id().into()
+        }),
         email: email.clone(),
         imap: bang_core::ImapConfig {
             host: ui.get_imap_host().trim().into(),
@@ -79,6 +130,11 @@ fn manual_config(ui: &BangApp) -> Result<bang_core::AccountConfig, &'static str>
             tls: tls(ui.get_smtp_starttls()),
         },
         auth: bang_core::AuthMethod::Password {
+            smtp_username: if ui.get_smtp_username().trim().is_empty() {
+                email.clone()
+            } else {
+                ui.get_smtp_username().trim().into()
+            },
             username: if ui.get_username().trim().is_empty() {
                 email
             } else {
@@ -98,6 +154,35 @@ fn begin(ui: &BangApp, status: &str) -> i32 {
 }
 
 pub(crate) fn wire(ui: &BangApp, bridge: Bridge) {
+    ui.set_google_available(
+        Config::load()
+            .oauth
+            .registration(bang_core::OAuthProvider::Google)
+            .is_some(),
+    );
+    ui.set_microsoft_available(
+        Config::load()
+            .oauth
+            .registration(bang_core::OAuthProvider::Microsoft)
+            .is_some(),
+    );
+    ui.on_wizard_email_edited({
+        let weak = ui.as_weak();
+        move |_| {
+            if let Some(ui) = weak.upgrade() {
+                if ui.get_wizard_provider() == "manual" && !ui.get_wizard_busy() {
+                    ui.set_wizard_settings_ready(false);
+                    ui.set_wizard_advanced(false);
+                    ui.set_password("".into());
+                    ui.set_username("".into());
+                    ui.set_smtp_username("".into());
+                    ui.set_imap_host("".into());
+                    ui.set_smtp_host("".into());
+                    ui.set_wizard_status("".into());
+                }
+            }
+        }
+    });
     let weak = ui.as_weak();
     ui.on_wizard_provider_selected(move |provider| {
         if let Some(ui) = weak.upgrade() {
@@ -107,27 +192,83 @@ pub(crate) fn wire(ui: &BangApp, bridge: Bridge) {
         }
     });
     ui.on_wizard_oauth_clicked({
-        let weak = ui.as_weak(); let bridge = bridge.clone();
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
         move |provider: slint::SharedString| {
-            let Some(ui) = weak.upgrade() else { return; };
-            if ui.get_wizard_busy() { return; }
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            if ui.get_wizard_busy() {
+                return;
+            }
             let cfg = Config::load();
-            let (provider, settings, missing) = match provider.as_str() {
-                "google" => (bang_core::OAuthProvider::Google, cfg.oauth.google, "Google sign-in is not configured. Follow docs/ACCOUNTS.md to add your desktop OAuth client."),
-                "microsoft" => (bang_core::OAuthProvider::Microsoft, cfg.oauth.microsoft, "Microsoft sign-in is not configured. Follow docs/ACCOUNTS.md to add your desktop OAuth client."),
+            let provider = match provider.as_str() {
+                "google" => bang_core::OAuthProvider::Google,
+                "microsoft" => bang_core::OAuthProvider::Microsoft,
                 _ => return,
             };
+            let Some(registration) = cfg.oauth.registration(provider) else {
+                ui.set_wizard_status(tr("This provider is unavailable in this build.").into());
+                return;
+            };
             let email = ui.get_email().trim().to_owned();
-            if (provider == bang_core::OAuthProvider::Microsoft || !email.is_empty()) && !valid_email(&email) {
-                ui.set_wizard_status(tr("Enter a valid email address.").into()); return;
+            if (provider == bang_core::OAuthProvider::Microsoft || !email.is_empty())
+                && !valid_email(&email)
+            {
+                ui.set_wizard_status(tr("Enter a valid email address.").into());
+                return;
             }
-            if settings.client_id.trim().is_empty() { ui.set_wizard_status(tr(missing).into()); return; }
             let attempt = begin(&ui, "Waiting for browser sign-in…");
             bridge.send(bang_core::UiCommand::OAuthLogin {
-                provider, client_id: settings.client_id.trim().into(),
-                client_secret: (!settings.client_secret.is_empty()).then_some(settings.client_secret), email, attempt,
+                replace: (!ui.get_wizard_reconnect_id().is_empty())
+                    .then(|| bang_core::AccountId(ui.get_wizard_reconnect_id().into())),
+                provider,
+                client_id: registration.client_id,
+                client_secret: registration.desktop_parameter,
+                email,
+                attempt,
             });
         }
+    });
+    ui.on_wizard_discover({
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            if ui.get_wizard_busy() {
+                return;
+            }
+            let email = ui.get_email().trim().to_owned();
+            if !valid_email(&email) {
+                ui.set_wizard_status(tr("Enter a valid email address.").into());
+                return;
+            }
+            let attempt = begin(&ui, "Finding mail settings…");
+            bridge.send(bang_core::UiCommand::DiscoverSettings { email, attempt });
+        }
+    });
+    ui.on_wizard_storage_choice({
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
+        move |session_only| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            if ui.get_wizard_busy() {
+                return;
+            }
+            ui.set_wizard_busy(true);
+            ui.set_wizard_status(tr("Saving account…").into());
+            bridge.send(bang_core::UiCommand::RetryAccountStorage {
+                attempt: ui.get_wizard_attempt(),
+                session_only,
+            });
+        }
+    });
+    ui.on_wizard_app_password(|| {
+        let _ = webbrowser::open("https://support.apple.com/102654");
     });
     ui.on_wizard_add_generic({
         let weak = ui.as_weak();
@@ -159,6 +300,11 @@ pub(crate) fn wire(ui: &BangApp, bridge: Bridge) {
             ui.set_wizard_provider("".into());
             ui.set_wizard_status("".into());
             ui.set_password("".into());
+            ui.set_wizard_storage_error(false);
+            ui.set_wizard_reconnect_id("".into());
+            if ui.get_welcome_open() {
+                ui.invoke_welcome_focus();
+            }
         }
     });
 }

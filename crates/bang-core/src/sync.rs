@@ -60,20 +60,70 @@ pub fn start_syncer(
     store: Arc<Store>,
     events_tx: UnboundedSender<MailEvent>,
 ) -> std::sync::mpsc::Sender<SyncerCommand> {
+    start_with_source(config, store, events_tx, None)
+}
+
+/// Start workers whose connection credentials come from the shared manager.
+pub(crate) fn start_managed_syncer(
+    config: AccountConfig,
+    store: Arc<Store>,
+    events_tx: UnboundedSender<MailEvent>,
+    credentials: crate::credentials::CredentialHandle,
+) -> std::sync::mpsc::Sender<SyncerCommand> {
+    start_with_source(config, store, events_tx, Some(credentials))
+}
+
+fn start_with_source(
+    config: AccountConfig,
+    store: Arc<Store>,
+    events_tx: UnboundedSender<MailEvent>,
+    credentials: Option<crate::credentials::CredentialHandle>,
+) -> std::sync::mpsc::Sender<SyncerCommand> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<SyncerCommand>();
     let (quit_tx, quit_rx) = std::sync::mpsc::channel::<()>();
+    let sync_credentials = credentials.clone();
     let sync_config = config.clone();
     let sync_store = store.clone();
     let sync_events = events_tx.clone();
     std::thread::Builder::new()
         .name(format!("sync-{}", config.id.0))
-        .spawn(move || run_syncer(sync_config, sync_store, sync_events, quit_rx))
+        .spawn(move || {
+            run_syncer(
+                sync_config,
+                sync_store,
+                sync_events,
+                quit_rx,
+                sync_credentials,
+            )
+        })
         .expect("spawn syncer thread");
     std::thread::Builder::new()
         .name(format!("mail-{}", config.id.0))
-        .spawn(move || run_commands(config, store, events_tx, cmd_rx, quit_tx))
+        .spawn(move || run_commands(config, store, events_tx, cmd_rx, quit_tx, credentials))
         .expect("spawn interactive mail thread");
     cmd_tx
+}
+
+fn connect_current(
+    config: &AccountConfig,
+    credentials: Option<&crate::credentials::CredentialHandle>,
+) -> Result<ImapConn> {
+    let current = if let Some(source) = credentials {
+        source.current(&config.id.0)?
+    } else {
+        config.clone()
+    };
+    let result = ImapConn::connect(&current.imap, &current.auth, &current.email);
+    if matches!(
+        &result,
+        Err(Error::Imap(imap::Error::No(_) | imap::Error::Bad(_)))
+    ) {
+        if let Some(source) = credentials {
+            source.reject(&config.id.0)?;
+            return Err(Error::ReconnectRequired);
+        }
+    }
+    result
 }
 
 /// The syncer main loop: connect, sync, idle, reconnect on failure.
@@ -82,6 +132,7 @@ fn run_syncer(
     store: Arc<Store>,
     events_tx: UnboundedSender<MailEvent>,
     cmd_rx: std::sync::mpsc::Receiver<()>,
+    credentials: Option<crate::credentials::CredentialHandle>,
 ) {
     let account_id = config.id.clone();
     let mut backoff = Duration::from_secs(1);
@@ -92,7 +143,7 @@ fn run_syncer(
             return;
         }
 
-        match connect_and_sync(&config, &store, &events_tx) {
+        match connect_and_sync(&config, &store, &events_tx, credentials.as_ref()) {
             Ok(conn) => {
                 backoff = Duration::from_secs(1);
                 emit(&events_tx, &account_id, AccountStatus::Connected);
@@ -100,6 +151,17 @@ fn run_syncer(
                     return;
                 }
             }
+            Err(Error::ReconnectRequired) => {
+                emit(&events_tx, &account_id, AccountStatus::ReconnectRequired);
+                let _ = cmd_rx.recv();
+                return;
+            }
+            Err(Error::SecureStorage) => {
+                emit(&events_tx, &account_id, AccountStatus::StorageLocked);
+                let _ = cmd_rx.recv();
+                return;
+            }
+            Err(Error::Cancelled) => return,
             Err(e) => tracing::warn!("sync error for {account_id}: {e}"),
         }
         emit(&events_tx, &account_id, AccountStatus::Reconnecting);
@@ -115,9 +177,10 @@ fn connect_and_sync(
     config: &AccountConfig,
     store: &Store,
     events_tx: &UnboundedSender<MailEvent>,
+    credentials: Option<&crate::credentials::CredentialHandle>,
 ) -> Result<ImapConn> {
     emit(events_tx, &config.id, AccountStatus::Syncing);
-    let mut conn = ImapConn::connect(&config.imap, &config.auth, &config.email)?;
+    let mut conn = connect_current(config, credentials)?;
     sync_folders(&mut conn, config, store, events_tx)?;
     Ok(conn)
 }
@@ -173,9 +236,7 @@ fn sync_folder(
     if let Some(unseen) = status.unseen {
         store.set_folder_unread(folder.id, unseen)?;
     }
-    let (last_uid, last_validity) = store
-        .get_folder_sync_state(folder.id)?
-        .unwrap_or((0, None));
+    let (last_uid, last_validity) = store.get_folder_sync_state(folder.id)?.unwrap_or((0, None));
 
     let full = match (last_validity, status.uid_validity) {
         (Some(a), Some(b)) => a != b,
@@ -235,7 +296,9 @@ fn sync_folder(
             .is_some();
         let mut summary = meta_to_summary(config, folder, &meta);
         let id = store.upsert_message(&summary)?;
-        if let Some(hints) = &meta.classification { store.update_classification(id, hints)?; }
+        if let Some(hints) = &meta.classification {
+            store.update_classification(id, hints)?;
+        }
         summary.id = id;
         if existing {
             updated.push(id);
@@ -339,6 +402,7 @@ fn run_commands(
     events_tx: UnboundedSender<MailEvent>,
     cmd_rx: std::sync::mpsc::Receiver<SyncerCommand>,
     quit_tx: std::sync::mpsc::Sender<()>,
+    credentials: Option<crate::credentials::CredentialHandle>,
 ) {
     let mut conn = None;
     let mut pending = VecDeque::new();
@@ -365,13 +429,21 @@ fn run_commands(
             }
         }
         if conn.is_none() {
-            match ImapConn::connect(&config.imap, &config.auth, &config.email) {
+            match connect_current(&config, credentials.as_ref()) {
                 Ok(connected) => {
                     conn = Some(connected);
                     // A newer selection may have arrived during login.
                     continue;
                 }
                 Err(e) => {
+                    let status = match &e {
+                        Error::ReconnectRequired => Some(AccountStatus::ReconnectRequired),
+                        Error::SecureStorage => Some(AccountStatus::StorageLocked),
+                        _ => None,
+                    };
+                    if let Some(status) = status {
+                        emit(&events_tx, &config.id, status);
+                    }
                     pending.pop_front();
                     let _ = events_tx.send(MailEvent::Error {
                         account: Some(config.id.clone()),
@@ -395,7 +467,7 @@ fn run_commands(
         if matches!(command, SyncerCommand::FetchBody { .. })
             && matches!(&result, Err(Error::Imap(_) | Error::Network(_)))
         {
-            result = match ImapConn::connect(&config.imap, &config.auth, &config.email) {
+            result = match connect_current(&config, credentials.as_ref()) {
                 Ok(connected) => {
                     conn = Some(connected);
                     execute_command(
@@ -603,7 +675,10 @@ fn handle_fetch_body(
     summary.preview = crate::mime::extract_preview(&parsed.body_text, 200);
     summary.has_attachments = parsed.attachments.iter().any(|a| a.disposition != "inline");
     store.upsert_message(&summary)?;
-    store.update_classification(summary.id, &crate::organization::ClassificationSignals::from_headers(&raw))?;
+    store.update_classification(
+        summary.id,
+        &crate::organization::ClassificationSignals::from_headers(&raw),
+    )?;
 
     // Persist attachment data on disk; the record's path is set once stored.
     let mut attachments = crate::mime::to_attachment_records(message_id, &parsed.attachments);
@@ -678,7 +753,11 @@ fn sleep_or_quit(cmd_rx: &std::sync::mpsc::Receiver<()>, dur: Duration) -> bool 
 }
 
 /// Emit an account-status event.
-fn emit(events_tx: &UnboundedSender<MailEvent>, account_id: &crate::account::AccountId, status: AccountStatus) {
+fn emit(
+    events_tx: &UnboundedSender<MailEvent>,
+    account_id: &crate::account::AccountId,
+    status: AccountStatus,
+) {
     let _ = events_tx.send(MailEvent::AccountStatus {
         account: account_id.clone(),
         status,

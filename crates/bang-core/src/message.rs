@@ -169,6 +169,10 @@ pub struct PendingSend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AccountStatus {
+    /// Authorization is missing or revoked; wait for explicit user sign-in.
+    ReconnectRequired,
+    /// The keyring needs unlocking before credentials can be used.
+    StorageLocked,
     /// Not connected yet.
     Disconnected,
     /// Syncing folders and messages.
@@ -182,6 +186,8 @@ pub enum AccountStatus {
 impl std::fmt::Display for AccountStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
+            Self::ReconnectRequired => "reconnect required",
+            Self::StorageLocked => "secure storage unavailable",
             Self::Disconnected => "disconnected",
             Self::Syncing => "syncing…",
             Self::Connected => "connected",

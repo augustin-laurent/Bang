@@ -187,18 +187,18 @@ pub fn parse(raw: &[u8]) -> Result<ParsedMessage> {
 ///
 /// Collapses whitespace and truncates to roughly `max_chars` characters.
 pub fn extract_preview(body_text: &str, max_chars: usize) -> String {
-    let collapsed: String = body_text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed: String = body_text.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed.chars().take(max_chars).collect()
 }
+
+const MAX_RENDER_DEPTH: usize = 64;
 
 /// Render a common HTML subset as structured plain text.
 ///
 /// Maps paragraphs, headings, lists, blockquotes, links, tables, and line
 /// breaks to a text layout. `script`/`style`/`noscript` content is dropped.
-/// Unknown elements render their content inline.
+/// Unknown elements render their content inline. Subtrees beyond 64 levels
+/// are replaced with an ellipsis, bounding stack use for untrusted input.
 pub fn render_html_subset(html: &str) -> String {
     let doc = Document::fragment(html);
     // Drop non-content elements before rendering.
@@ -227,7 +227,7 @@ pub fn render_html_subset(html: &str) -> String {
         {
             continue;
         }
-        render_node(&child, &mut out, 0);
+        render_node(&child, &mut out, 0, 0);
     }
 
     // Collapse runs of blank lines and trim the ends.
@@ -248,8 +248,28 @@ pub fn render_html_subset(html: &str) -> String {
     result.trim().to_string()
 }
 
+fn bounded_text(node: &NodeRef, depth: usize) -> String {
+    if depth >= MAX_RENDER_DEPTH {
+        return "…".into();
+    }
+    if let Some(text) = node.query_or(None, |n| match &n.data {
+        NodeData::Text { contents } => Some(contents.to_string()),
+        _ => None,
+    }) {
+        return text;
+    }
+    node.children()
+        .into_iter()
+        .map(|child| bounded_text(&child, depth + 1))
+        .collect()
+}
+
 /// Recursively render a node and its children.
-fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize) {
+fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usize) {
+    if depth >= MAX_RENDER_DEPTH {
+        out.push('…');
+        return;
+    }
     // Text node.
     if let Some(text) = node.query_or(None, |n| match &n.data {
         NodeData::Text { contents } => Some(contents.to_string()),
@@ -271,11 +291,11 @@ fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize) {
         "br" => out.push('\n'),
         "hr" => out.push_str("\n\n"),
         "p" | "div" | "section" | "article" | "header" | "footer" | "main" | "figure" => {
-            render_children(node, out, quote_depth);
+            render_children(node, out, quote_depth, depth);
             out.push_str("\n\n");
         }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-            let text = node.text().to_string();
+            let text = bounded_text(node, depth);
             if !text.trim().is_empty() {
                 out.push_str(&text);
                 out.push_str("\n\n");
@@ -283,13 +303,13 @@ fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize) {
         }
         "blockquote" => {
             out.push('\n');
-            render_children(node, out, quote_depth + 1);
+            render_children(node, out, quote_depth + 1, depth);
             out.push('\n');
         }
-        "ul" => render_list(node, out, quote_depth, false),
-        "ol" => render_list(node, out, quote_depth, true),
+        "ul" => render_list(node, out, quote_depth, depth, false),
+        "ol" => render_list(node, out, quote_depth, depth, true),
         "a" => {
-            let text = node.text().to_string();
+            let text = bounded_text(node, depth);
             let href = node.attr("href").map(|h| h.to_string());
             match href {
                 Some(h) if !h.is_empty() && !h.starts_with('#') && h != text => {
@@ -307,30 +327,30 @@ fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize) {
             }
         }
         "table" => {
-            render_children(node, out, quote_depth);
+            render_children(node, out, quote_depth, depth);
             out.push_str("\n\n");
         }
         "tr" => {
             out.push('\n');
-            render_children(node, out, quote_depth);
+            render_children(node, out, quote_depth, depth);
         }
         "td" | "th" => {
-            render_children(node, out, quote_depth);
+            render_children(node, out, quote_depth, depth);
             out.push_str("  ");
         }
-        _ => render_children(node, out, quote_depth),
+        _ => render_children(node, out, quote_depth, depth),
     }
 }
 
 /// Render the children of a node.
-fn render_children(node: &NodeRef, out: &mut String, quote_depth: usize) {
+fn render_children(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usize) {
     for child in node.children() {
-        render_node(&child, out, quote_depth);
+        render_node(&child, out, quote_depth, depth + 1);
     }
 }
 
 /// Render a `ul`/`ol` list with bullet or numbered markers.
-fn render_list(node: &NodeRef, out: &mut String, quote_depth: usize, ordered: bool) {
+fn render_list(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usize, ordered: bool) {
     let mut n = 0;
     for child in node.children() {
         if child
@@ -345,7 +365,7 @@ fn render_list(node: &NodeRef, out: &mut String, quote_depth: usize, ordered: bo
             } else {
                 out.push_str("- ");
             }
-            render_children(&child, out, quote_depth);
+            render_children(&child, out, quote_depth, depth + 1);
             out.push('\n');
         }
     }
@@ -369,10 +389,7 @@ fn convert_address(m: mail_parser::Mailbox<'_>) -> EmailAddress {
 ///
 /// # Arguments
 /// * `message_id` — the local store id of the owning message.
-pub fn to_attachment_records(
-    message_id: i64,
-    attachments: &[AttachmentData],
-) -> Vec<Attachment> {
+pub fn to_attachment_records(message_id: i64, attachments: &[AttachmentData]) -> Vec<Attachment> {
     attachments
         .iter()
         .map(|a| Attachment {
@@ -391,6 +408,20 @@ pub fn to_attachment_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_and_link_text_obey_render_depth_limit() {
+        for tag in ["h1", "a"] {
+            let html = format!(
+                "<{tag}>{}hidden{} visible</{tag}>",
+                "<span>".repeat(100),
+                "</span>".repeat(100)
+            );
+            let rendered = render_html_subset(&html);
+            assert!(!rendered.contains("hidden"));
+            assert!(rendered.contains('…') && rendered.contains("visible"));
+        }
+    }
 
     #[test]
     fn decode_encoded_headers_and_folder_names() {
@@ -595,6 +626,45 @@ mod tests {
         assert!(text.contains("a  b"));
         assert!(text.contains("c  d"));
         assert!(text.contains("Title"));
+    }
+
+    #[test]
+    fn deeply_nested_html_is_bounded_and_preserves_following_content() {
+        // Exercise the native stack budget, not only the amount of output:
+        // empty spans synthesize an empty text alternative in mail-parser.
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                for (open, close) in [
+                    ("<span>", "</span>"),
+                    ("<blockquote>", "</blockquote>"),
+                    ("<ul><li>", "</li></ul>"),
+                ] {
+                    let html = format!(
+                        "{}{}<p>Still readable</p>",
+                        open.repeat(10_000),
+                        close.repeat(10_000)
+                    );
+                    let raw = format!("Content-Type: text/html; charset=utf-8\r\n\r\n{html}");
+                    let message = parse(raw.as_bytes()).unwrap();
+                    let text = render_html_subset(&message.body_html);
+                    assert!(text.contains('…'));
+                    assert!(text.ends_with("Still readable"));
+                    assert!(text.len() < 20_000);
+                }
+                let raw = format!(
+                    "Content-Type: text/html\r\n\r\n{}{}",
+                    "<span>".repeat(10_000),
+                    "</span>".repeat(10_000)
+                );
+                let message = parse(raw.as_bytes()).unwrap();
+                assert!(message.body_text.is_empty());
+                assert_eq!(render_html_subset(&message.body_html), "…");
+                assert_eq!(render_html_subset("<p>Normal été</p>"), "Normal été");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

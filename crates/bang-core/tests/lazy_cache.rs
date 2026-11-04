@@ -10,7 +10,7 @@ use bang_core::store::Store;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn cached_summary() -> (Arc<Store>, i64, i64) {
-    let store = Arc::new(Store::open_in_memory().unwrap());
+    let store = Arc::new(Store::open(std::path::Path::new(":memory:")).unwrap());
     store
         .save_account(&AccountConfig {
             id: AccountId("alice".into()),
@@ -26,6 +26,7 @@ fn cached_summary() -> (Arc<Store>, i64, i64) {
                 tls: TlsMode::Plaintext,
             },
             auth: AuthMethod::Password {
+                smtp_username: String::new(),
                 username: "alice".into(),
                 password: "test".into(),
             },

@@ -11,6 +11,10 @@ export component ActionButton inherits Rectangle {
     in property <bool> active: false;
     in property <bool> compact: false;
     callback clicked;
+    out property <bool> button-hovered: touch.has-hover;
+    out property <bool> button-pressed: touch.pressed;
+    callback focus-button();
+    focus-button => { focus.focus(); }
     min-width: compact ? 32px : 96px;
     max-width: compact ? 36px : 300px;
     horizontal-stretch: compact ? 0 : 1;
@@ -53,6 +57,7 @@ export component ActionButton inherits Rectangle {
 
 // Explicit theme colours keep form text and focus rings readable on both themes.
 export component Field inherits VerticalLayout {
+    callback edited(string);
     in property <string> label;
     in property <string> placeholder;
     in property <bool> secret: false;
@@ -73,6 +78,7 @@ export component Field inherits VerticalLayout {
             text: root.placeholder; color: Theme.text-secondary; font-size: 13px; vertical-alignment: center; overflow: elide;
         }
         input := TextInput {
+            edited => { root.edited(self.text); }
             x: 12px; width: parent.width - (root.secret ? 52px : 24px); height: parent.height;
             text <=> root.text; color: Theme.text; font-size: 13px; single-line: true;
             read-only: !root.enabled; input-type: root.secret && !root.revealed ? InputType.password : InputType.text;

@@ -3,17 +3,18 @@ import { Theme } from "theme.slint";
 import { ActionButton, CheckControl } from "controls.slint";
 import { AccountRow } from "models.slint";
 // Each miniature has its own palette; the selected label always uses the live theme.
-component ThemeOption inherits Rectangle {
+export component ThemeOption inherits Rectangle {
     in property <string> name; in property <string> mode; in property <bool> selected;
     callback chosen();
-    height: 104px; border-radius: 8px;
+    in property <bool> compact: false;
+    height: compact ? 88px : 104px; border-radius: 8px;
     border-width: root.selected || focus.has-focus ? 2px : 1px;
     border-color: root.selected || focus.has-focus ? Theme.accent : Theme.control-border;
     background: touch.has-hover ? Theme.hover : Theme.bg;
     accessible-role: button; accessible-label: root.name;
     accessible-action-default => { root.chosen(); }
     forward-focus: focus;
-    Rectangle { x: 10px; y: 10px; width: parent.width - 20px; height: 52px;
+    Rectangle { x: 10px; y: 10px; width: parent.width - 20px; height: parent.height - 52px;
         clip: true; border-radius: 4px; background: root.mode == "dark" ? #242426 : #eceef1;
         Rectangle { x: 0px; width: parent.width * 0.27; height: parent.height; background: root.mode == "dark" ? #353538 : #d9dde3; }
         Rectangle { x: parent.width * 0.3; y: 6px; width: parent.width * 0.28; height: 40px; background: root.mode == "dark" ? #1c1c1e : #ffffff;
@@ -25,7 +26,7 @@ component ThemeOption inherits Rectangle {
             Rectangle { x: 6px; y: 16px; width: parent.width - 12px; height: 3px; background: root.mode == "light" ? #d9dde3 : #66666b; }
         }
     }
-    Text { y: 70px; height: 26px; text: root.name; color: Theme.text; font-size: 13px; font-weight: root.selected ? 600 : 400; horizontal-alignment: center; vertical-alignment: center; }
+    Text { y: parent.height - 34px; height: 26px; text: root.name; color: Theme.text; font-size: 13px; font-weight: root.selected ? 600 : 400; horizontal-alignment: center; vertical-alignment: center; }
     focus := FocusScope { key-pressed(e) => { if e.text == " " || e.text == "\n" { root.chosen(); return accept; } return reject; } }
     touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.chosen(); } }
 }
@@ -37,6 +38,8 @@ export component SettingsDialog inherits Rectangle {
     private property <string> remove-id; private property <string> remove-email;
     callback theme-selected(string); callback language-selected(string);
     callback account-remove(string); callback add-account; callback close;
+    callback account-reconnect(string);
+    callback account-unlock(string);
     changed open => { if !self.open { self.remove-id = ""; } }
     visible: open; background: #00000044; TouchArea { }
     Rectangle {
@@ -65,7 +68,9 @@ export component SettingsDialog inherits Rectangle {
                     for acc in root.accounts: HorizontalLayout { height: 48px; spacing: 12px;
                         Rectangle { width: 24px; Image { y: (parent.height - self.height) / 2; width: 24px; height: 24px; source: acc.provider == "google" ? @image-url("icons/google.svg") : acc.provider == "microsoft" ? @image-url("icons/microsoft.svg") : @image-url("icons/mail.svg"); colorize: acc.provider == "" ? Theme.text-secondary : transparent; } }
                         Text { text: acc.email; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
-                        ActionButton { modal: true; text: @tr("Remove"); icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
+                        if acc.reconnect: ActionButton { modal: true; text: @tr("Reconnect"); clicked => { root.account-reconnect(acc.id); } }
+                        if acc.storage-locked: ActionButton { modal: true; text: @tr("Unlock"); clicked => { root.account-unlock(acc.id); } }
+                        ActionButton { modal: true; text: @tr("Remove"); enabled: !acc.removing; icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
                     }
                     ActionButton { modal: true; text: @tr("Add account"); framed: true; icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
                 }

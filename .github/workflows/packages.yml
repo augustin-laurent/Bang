@@ -1,0 +1,44 @@
+name: Packages
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to build (defaults to the caller commit)
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    name: Package (${{ matrix.format }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: deb
+            image: ubuntu:24.04
+          - format: rpm
+            image: fedora:44
+          - format: arch
+            image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Build, install, upgrade, smoke test and uninstall
+        env:
+          PACKAGE_FORMAT: ${{ matrix.format }}
+          PACKAGE_IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm --init \
+            -e BANG_PACKAGE_CONTAINER=1 -e CARGO_INCREMENTAL=0 \
+            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
+            "$PACKAGE_IMAGE" bash scripts/package-container.sh "$PACKAGE_FORMAT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bang-${{ matrix.format }}
+          path: dist/*
+          if-no-files-found: error

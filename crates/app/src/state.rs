@@ -12,9 +12,7 @@ use bang_core::events::MailEvent;
 use bang_core::message::{EmailAddress, MessageSummary};
 use bang_core::store::{Store, UNIFIED_INBOX_ID};
 
-use crate::{
-    AttachmentRow, BangApp, DraftRow, FolderRow, MessageRow, PendingSendRow, TemplateRow,
-};
+use crate::{AttachmentRow, BangApp, DraftRow, FolderRow, MessageRow, PendingSendRow, TemplateRow};
 
 /// Selection state shared between the UI callbacks and the event forwarder.
 pub struct UiState {
@@ -28,6 +26,12 @@ pub struct UiState {
     pub collapsed_accounts: Mutex<HashSet<String>>,
     /// Last connection status per account (empty = connected/idle).
     pub account_status: Mutex<HashMap<String, String>>,
+    /// Accounts waiting for explicit authorization or secure-storage recovery.
+    pub auth_attention: Mutex<HashSet<String>>,
+    /// Accounts whose existing credentials can be retried by unlocking the keyring.
+    pub storage_locked: Mutex<HashSet<String>>,
+    /// Accounts whose removal is pending in the core.
+    pub removing_accounts: Mutex<HashSet<String>>,
 }
 
 impl UiState {
@@ -39,6 +43,9 @@ impl UiState {
             search_active: AtomicBool::new(false),
             collapsed_accounts: Mutex::new(HashSet::new()),
             account_status: Mutex::new(HashMap::new()),
+            auth_attention: Mutex::new(HashSet::new()),
+            storage_locked: Mutex::new(HashSet::new()),
+            removing_accounts: Mutex::new(HashSet::new()),
         }
     }
 
@@ -89,7 +96,11 @@ impl UiState {
                 account_id: account.id.0.clone().into(),
                 is_header: true,
                 collapsed: hidden,
-                status: status.get(&account.id.0).cloned().unwrap_or_default().into(),
+                status: status
+                    .get(&account.id.0)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into(),
                 ..Default::default()
             });
             if !hidden {
@@ -118,54 +129,173 @@ impl UiState {
     /// Must be called on the Slint event loop thread.
     pub fn apply(&self, ui: &BangApp, store: &Store, event: MailEvent) {
         match event {
+            MailEvent::AccountSetupProgress { attempt, stage } => {
+                if attempt != ui.get_wizard_attempt()
+                    || !ui.get_wizard_open()
+                    || !ui.get_wizard_busy()
+                {
+                    return;
+                }
+                use bang_core::events::SetupStage;
+                let text = match stage {
+                    SetupStage::OpeningBrowser => "Opening browser…",
+                    SetupStage::WaitingForAuthorization => "Waiting for browser sign-in…",
+                    SetupStage::CheckingAccount => "Checking account…",
+                    SetupStage::FindingSettings => "Finding mail settings…",
+                    SetupStage::SavingCredentials => "Saving account…",
+                };
+                ui.set_wizard_status(tr(text).into());
+            }
+            MailEvent::AccountSettingsDiscovered { attempt, result } => {
+                if attempt != ui.get_wizard_attempt()
+                    || !ui.get_wizard_open()
+                    || !ui.get_wizard_busy()
+                {
+                    return;
+                }
+                ui.set_wizard_busy(false);
+                ui.set_wizard_settings_ready(true);
+                match result {
+                    bang_core::discovery::DiscoveryResult::Found(s) => {
+                        ui.set_imap_host(s.imap.host.into());
+                        ui.set_imap_port(s.imap.port.to_string().into());
+                        ui.set_smtp_host(s.smtp.host.into());
+                        ui.set_smtp_port(s.smtp.port.to_string().into());
+                        ui.set_starttls(s.imap.tls == bang_core::TlsMode::Starttls);
+                        ui.set_smtp_starttls(s.smtp.tls == bang_core::TlsMode::Starttls);
+                        ui.set_username(s.username.into());
+                        ui.set_smtp_username(s.smtp_username.into());
+                        ui.set_wizard_advanced(false);
+                        ui.set_wizard_status("".into());
+                    }
+                    bang_core::discovery::DiscoveryResult::NotFound => {
+                        ui.set_wizard_advanced(true);
+                        ui.set_wizard_status(tr("Settings were not found. Enter your mail provider’s server settings.").into());
+                    }
+                    bang_core::discovery::DiscoveryResult::Unsupported => {
+                        ui.set_wizard_advanced(true);
+                        ui.set_wizard_status(tr("This provider requires a different sign-in method. Choose Google or Microsoft, or enter supported mail settings.").into());
+                    }
+                }
+            }
+            MailEvent::AccountRemoved { account, error } => {
+                self.removing_accounts.lock().unwrap().remove(&account.0);
+                if error.is_some() {
+                    ui.set_status_message(tr("Account removal could not finish. Unlock secure storage and try again.").into());
+                } else {
+                    self.auth_attention.lock().unwrap().remove(&account.0);
+                    self.account_status.lock().unwrap().remove(&account.0);
+                    self.selected_folder
+                        .store(UNIFIED_INBOX_ID, Ordering::SeqCst);
+                    ui.set_selected_folder(UNIFIED_INBOX_ID as i32);
+                    ui.set_status_message(tr("Account removed from this device").into());
+                }
+                self.refresh_folders(ui, store);
+                self.reload_messages(ui, store);
+                ui.set_settings_accounts(slint::ModelRc::new(VecModel::from(crate::account_rows(
+                    store, self,
+                ))));
+            }
+
             MailEvent::AccountSetupChecking { attempt } => {
-                if attempt == ui.get_wizard_attempt() && ui.get_wizard_open() && ui.get_wizard_busy() {
+                if attempt == ui.get_wizard_attempt()
+                    && ui.get_wizard_open()
+                    && ui.get_wizard_busy()
+                {
                     ui.set_wizard_status(tr("Checking incoming and outgoing servers…").into());
                 }
-            },
+            }
             MailEvent::AccountSetupFinished { attempt, error } => {
-                if attempt != ui.get_wizard_attempt() || !ui.get_wizard_open() { return; }
+                if attempt != ui.get_wizard_attempt() || !ui.get_wizard_open() {
+                    return;
+                }
                 ui.set_wizard_busy(false);
                 if let Some(error) = error {
-                    tracing::warn!("account setup: {error}");
-                    let message = if error.contains("declined") {
-                        "Sign-in was declined. You can try again."
-                    } else if error.contains("timed out") {
-                        "Connection timed out. Check your network and try again."
-                    } else if ui.get_wizard_manual() {
-                        "Connection failed. Check the servers, encryption and app password."
-                    } else { "Sign-in failed. Check your provider configuration and try again." };
+                    use bang_core::events::SetupFailure;
+                    let message = match error {
+                        SetupFailure::Declined => "Sign-in was declined. You can try again.",
+                        SetupFailure::Timeout => "Connection timed out. Check your network and try again.",
+                        SetupFailure::SecureStorage => "Unlock your system keyring, or continue for this session.",
+                        SetupFailure::Authentication if ui.get_wizard_manual() => "Connection failed. Check the servers, encryption and app password.",
+                        SetupFailure::Authentication => "Access was not granted. Check the selected account or ask your organization to allow mail access.",
+                        SetupFailure::Network => "Connection failed. Check your network and try again.",
+                        SetupFailure::Configuration => "This provider is unavailable in this build.",
+                    };
+                    ui.set_wizard_storage_error(error == SetupFailure::SecureStorage);
+                    if error == SetupFailure::SecureStorage {
+                        ui.set_password("".into());
+                    }
                     ui.set_wizard_status(tr(message).into());
                 } else {
                     ui.set_wizard_open(false);
+                    ui.set_wizard_storage_error(false);
+                    ui.set_wizard_reconnect_id("".into());
                     ui.set_wizard_manual(false);
                     ui.set_wizard_provider("".into());
                     ui.set_wizard_status("".into());
                     ui.set_password("".into());
                     ui.set_status_message(tr("Account connected").into());
                     self.refresh_folders(ui, store);
+                    if ui.get_welcome_open() {
+                        self.selected_folder
+                            .store(UNIFIED_INBOX_ID, Ordering::SeqCst);
+                        ui.set_selected_folder(UNIFIED_INBOX_ID as i32);
+                        ui.set_folder_name(tr("All Inboxes").into());
+                        self.reload_messages(ui, store);
+                        ui.invoke_welcome_finish();
+                    }
                 }
-            },
+            }
             MailEvent::AvatarReady { address, path } => crate::avatars::ready(ui, &address, &path),
-            MailEvent::OrganizationError { message } => {ui.set_organization_error(tr(&message).into());},
+            MailEvent::OrganizationError { message } => {
+                ui.set_organization_error(tr(&message).into());
+            }
             MailEvent::OrganizationChanged => {
                 ui.set_organization_error("".into());
-                crate::organization::refresh(ui, store, self.selected_folder.load(Ordering::SeqCst));
-                if !self.search_active.load(Ordering::SeqCst) {self.reload_messages(ui, store);}
-            },
+                crate::organization::refresh(
+                    ui,
+                    store,
+                    self.selected_folder.load(Ordering::SeqCst),
+                );
+                if !self.search_active.load(Ordering::SeqCst) {
+                    self.reload_messages(ui, store);
+                }
+            }
             MailEvent::AccountStatus { account, status } => {
+                if status == bang_core::AccountStatus::StorageLocked {
+                    self.storage_locked
+                        .lock()
+                        .unwrap()
+                        .insert(account.0.clone());
+                } else {
+                    self.storage_locked.lock().unwrap().remove(&account.0);
+                }
                 // Only non-idle states are shown; connected is the default.
+                if matches!(
+                    status,
+                    bang_core::AccountStatus::ReconnectRequired
+                        | bang_core::AccountStatus::StorageLocked
+                ) {
+                    self.auth_attention
+                        .lock()
+                        .unwrap()
+                        .insert(account.0.clone());
+                } else if matches!(status, bang_core::AccountStatus::Connected) {
+                    self.auth_attention.lock().unwrap().remove(&account.0);
+                }
                 let label = match status {
+                    bang_core::AccountStatus::ReconnectRequired => tr("Reconnect required"),
+                    bang_core::AccountStatus::StorageLocked => tr("Unlock secure storage"),
                     bang_core::AccountStatus::Disconnected => tr("Disconnected"),
                     bang_core::AccountStatus::Connected => String::new(),
                     bang_core::AccountStatus::Syncing => tr("Syncing…"),
                     bang_core::AccountStatus::Reconnecting => tr("Reconnecting…"),
                 };
-                self.account_status
-                    .lock()
-                    .unwrap()
-                    .insert(account.0, label);
+                self.account_status.lock().unwrap().insert(account.0, label);
                 self.refresh_folders(ui, store);
+                ui.set_settings_accounts(slint::ModelRc::new(VecModel::from(crate::account_rows(
+                    store, self,
+                ))));
             }
             MailEvent::FoldersUpdated { .. } => {
                 self.refresh_folders(ui, store);
@@ -188,7 +318,10 @@ impl UiState {
                 if self.search_active.load(Ordering::SeqCst) {
                     return;
                 }
-                if selected == UNIFIED_INBOX_ID || selected == folder_id || ui.get_selected_label() >= 0 {
+                if selected == UNIFIED_INBOX_ID
+                    || selected == folder_id
+                    || ui.get_selected_label() >= 0
+                {
                     // Reconcile the bounded, date-sorted cache view. Repeated
                     // append events must not duplicate rows or grow it forever.
                     self.reload_messages(ui, store);
@@ -225,9 +358,16 @@ impl UiState {
                 ui.set_message_sender(display_name(&message.summary.from).into());
                 ui.set_message_subject(message.summary.subject.clone().into());
                 ui.set_message_date(format_date(message.summary.date).into());
-                crate::organization::refresh(ui, store, self.selected_folder.load(Ordering::SeqCst));
+                crate::organization::refresh(
+                    ui,
+                    store,
+                    self.selected_folder.load(Ordering::SeqCst),
+                );
                 let model = ui.get_messages();
-                if let Some(index) = model.iter().position(|r| i64::from(r.id) == message.summary.id) {
+                if let Some(index) = model
+                    .iter()
+                    .position(|r| i64::from(r.id) == message.summary.id)
+                {
                     let mut row = to_row(&message.summary);
                     crate::avatars::decorate(ui, &mut row);
                     if model.row_data(index).as_ref() != Some(&row) {
@@ -244,7 +384,11 @@ impl UiState {
                 let atts: Vec<AttachmentRow> = message
                     .attachments
                     .iter()
-                    .filter(|a| a.disposition != "inline" || !a.content_type.starts_with("image/") || a.content_id.is_empty())
+                    .filter(|a| {
+                        a.disposition != "inline"
+                            || !a.content_type.starts_with("image/")
+                            || a.content_id.is_empty()
+                    })
                     .map(|a| AttachmentRow {
                         filename: a.filename.clone().into(),
                         size: format_size(a.size).into(),
@@ -253,7 +397,9 @@ impl UiState {
                     })
                     .collect();
                 ui.set_message_attachments(slint::ModelRc::new(VecModel::from(atts)));
-                if !self.search_active.load(Ordering::SeqCst) {self.reload_messages(ui, store);}
+                if !self.search_active.load(Ordering::SeqCst) {
+                    self.reload_messages(ui, store);
+                }
             }
             MailEvent::FollowUpDue { subject, .. } => {
                 notify(&tr("Follow-up due"), &subject);
@@ -293,7 +439,12 @@ impl UiState {
 
 /// Refresh message rows without replacing the model or unchanged delegates.
 pub(crate) fn set_message_rows(ui: &BangApp, mut rows: Vec<MessageRow>) {
-    for row in &mut rows {crate::avatars::decorate(ui, row); if ui.get_online_avatars() {ui.invoke_avatar_requested(row.sender_address.clone());}}
+    for row in &mut rows {
+        crate::avatars::decorate(ui, row);
+        if ui.get_online_avatars() {
+            ui.invoke_avatar_requested(row.sender_address.clone());
+        }
+    }
     let old = ui.get_messages();
     let model = reconcile_rows(&old, rows, |r| r.id);
     if model != old {
@@ -303,7 +454,11 @@ pub(crate) fn set_message_rows(ui: &BangApp, mut rows: Vec<MessageRow>) {
 
 // Keep surviving rows in place for flag updates, arrivals and deletions.
 // A different ordering (e.g. a new search ranking) needs one model reset.
-pub(crate) fn reconcile_rows<T, K>(current: &ModelRc<T>, rows: Vec<T>, key: impl Fn(&T) -> K) -> ModelRc<T>
+pub(crate) fn reconcile_rows<T, K>(
+    current: &ModelRc<T>,
+    rows: Vec<T>,
+    key: impl Fn(&T) -> K,
+) -> ModelRc<T>
 where
     T: Clone + PartialEq + 'static,
     K: Clone + Eq + std::hash::Hash,
@@ -434,11 +589,21 @@ pub fn set_message_header(ui: &BangApp, summary: &MessageSummary) {
             .join(", ")
             .into(),
     );
-    ui.set_message_initials(crate::avatars::initials(&summary.from.name, &summary.from.address).into());
+    ui.set_message_initials(
+        crate::avatars::initials(&summary.from.name, &summary.from.address).into(),
+    );
     ui.set_message_avatar_tint(crate::avatars::tint(&summary.from.address));
-    ui.set_message_avatar_loaded(ui.get_online_avatars() && crate::avatars::image(&summary.from.address).size().width > 0);
-    ui.set_message_avatar(if ui.get_online_avatars() {crate::avatars::image(&summary.from.address)} else {Default::default()});
-    if ui.get_online_avatars() {ui.invoke_avatar_requested(summary.from.address.clone().into());}
+    ui.set_message_avatar_loaded(
+        ui.get_online_avatars() && crate::avatars::image(&summary.from.address).size().width > 0,
+    );
+    ui.set_message_avatar(if ui.get_online_avatars() {
+        crate::avatars::image(&summary.from.address)
+    } else {
+        Default::default()
+    });
+    if ui.get_online_avatars() {
+        ui.invoke_avatar_requested(summary.from.address.clone().into());
+    }
     ui.set_message_subject(summary.subject.clone().into());
     ui.set_message_date(format_date(summary.date).into());
     ui.set_message_starred(summary.flags.is_flagged());

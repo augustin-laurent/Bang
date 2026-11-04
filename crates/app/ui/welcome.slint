@@ -1,0 +1,175 @@
+import { Theme } from "theme.slint";
+import { ActionButton } from "controls.slint";
+import { ThemeOption } from "settingsdialog.slint";
+
+component WelcomeButton inherits ActionButton {
+    in property <bool> motion: true;
+    modal: true;
+    min-height: 40px; max-height: 40px; preferred-height: 40px;
+    background: self.primary ? Theme.selection.darker(self.button-pressed ? 0.18 : self.button-hovered ? 0.08 : 0) : self.button-pressed || self.button-hovered || self.active ? Theme.hover : Theme.sidebar-bg;
+    animate background { duration: root.motion ? 140ms : 0ms; }
+}
+
+component IllustrationText inherits Text { accessible-role: none; }
+
+// The same letter becomes the reading pane; the two inbox columns emerge beside it.
+component MailIllustration inherits Rectangle {
+    in property <bool> motion: true;
+    in property <bool> playing: false;
+    private property <float> progress: playing && motion ? 0 : 1;
+    private property <float> unfold: clamp((progress - 0.1) / 0.4, 0, 1);
+    private property <float> morph: clamp((progress - 0.5) / 0.5, 0, 1);
+    init => { if root.playing && root.motion { root.progress = 1; } }
+    changed motion => { if !self.motion { self.progress = 1; } }
+    animate progress { duration: root.motion ? 1100ms : 0ms; easing: ease-in-out; }
+    accessible-role: none;
+    Rectangle {
+        x: parent.width * 0.18; y: parent.height * 0.34;
+        width: parent.width * 0.64; height: parent.height * 0.56;
+        background: Theme.accent; border-radius: 12px;
+        opacity: 1 - root.morph;
+    }
+    Path {
+        x: parent.width * 0.18; y: parent.height * 0.06;
+        width: parent.width * 0.64; height: parent.height * 0.56;
+        viewbox-width: 200; viewbox-height: 200;
+        fill: Theme.accent; opacity: 1 - root.morph;
+        MoveTo { x: 0; y: 100; }
+        LineTo { x: 100; y: 200 * (1 - root.unfold); }
+        LineTo { x: 200; y: 100; }
+        Close { }
+    }
+    sheet := Rectangle {
+        x: parent.width * (0.25 - root.morph * 0.23);
+        y: parent.height * (0.40 - root.unfold * 0.25 + root.morph * 0.02);
+        width: parent.width * (0.50 + root.morph * 0.46);
+        height: parent.height * (0.42 + root.unfold * 0.13 + root.morph * 0.20);
+        background: Theme.bg; border-radius: 10px; clip: true;
+        border-width: 1px; border-color: Theme.border;
+        Rectangle { x: 0px; y: 0px; width: parent.width; height: 27px; background: Theme.toolbar-bg;
+            IllustrationText { x: 12px; text: "Bang"; color: Theme.text; font-size: 11px; font-weight: 700; vertical-alignment: center; height: parent.height; }
+            Image { x: parent.width - 27px; y: 7px; width: 14px; height: 14px; source: @image-url("icons/compose.svg"); colorize: Theme.accent; }
+        }
+        Rectangle {
+            x: 0px; y: 27px; height: parent.height - self.y; width: parent.width * 0.25 * root.morph;
+            background: Theme.sidebar-bg; opacity: root.morph; clip: true;
+            VerticalLayout { padding: root.height > 150px ? 10px : 6px; spacing: 10px; alignment: start;
+                IllustrationText { text: @tr("Inbox"); color: Theme.accent; font-size: 11px; font-weight: 700; }
+                if root.height > 150px: IllustrationText { text: @tr("Drafts"); color: Theme.text-secondary; font-size: 11px; }
+                if root.height > 150px: IllustrationText { text: @tr("Sent"); color: Theme.text-secondary; font-size: 11px; }
+            }
+        }
+        Rectangle {
+            x: parent.width * 0.25 * root.morph; y: 27px;
+            width: parent.width * 0.31 * root.morph; height: parent.height - self.y;
+            background: Theme.toolbar-bg; opacity: root.morph; clip: true;
+            VerticalLayout { padding: root.height > 150px ? 10px : 8px; spacing: root.height > 150px ? 6px : 4px; alignment: start;
+                IllustrationText { text: "Bang"; font-size: 11px; color: Theme.text; font-weight: 700; }
+                IllustrationText { text: @tr("Welcome!"); font-size: 11px; color: Theme.text; }
+                if root.height > 150px: IllustrationText { text: @tr("Make yourself at home."); font-size: 11px; color: Theme.text-secondary; wrap: word-wrap; }
+            }
+        }
+        Rectangle {
+            x: parent.width * 0.56 * root.morph; y: 27px;
+            width: parent.width - self.x; height: parent.height - self.y; clip: true;
+            VerticalLayout { padding: 12px; spacing: 10px; alignment: start;
+                Image { source: @image-url("icons/mail.svg"); width: 26px; height: 26px; colorize: Theme.accent; }
+                if root.height > 150px: IllustrationText { text: @tr("Hello, you."); font-size: 15px; color: Theme.text; font-weight: 700; }
+                if root.height > 150px: IllustrationText { text: @tr("A little more space for what matters."); font-size: 11px; color: Theme.text-secondary; wrap: word-wrap; }
+            }
+        }
+    }
+    Path {
+        x: parent.width * 0.18; y: parent.height * 0.41;
+        width: parent.width * 0.64; height: parent.height * 0.49;
+        viewbox-width: 200; viewbox-height: 100;
+        commands: "M 0 0 L 100 64 L 200 0 L 200 100 L 0 100 Z";
+        fill: Theme.accent; opacity: 1 - root.morph;
+    }
+}
+
+export component WelcomeScreen inherits Rectangle {
+    in property <int> focus-request;
+    changed focus-request => { root.focus-primary(); }
+    in property <bool> active: false;
+    changed active => { if self.active { root.focus-primary(); } else { step-timer.running = false; } }
+    in property <bool> motion: true;
+    in property <bool> interactive: true;
+    in-out property <int> step: 0;
+    in property <string> theme;
+    in property <string> language;
+    in property <string> error;
+    in property <bool> connected: false;
+    callback theme-selected(string);
+    callback language-selected(string);
+    callback add-account();
+    callback finish();
+    callback focus-primary();
+    callback back();
+    back => { if root.step > 0 { root.step -= 1; } }
+    private property <bool> wide: root.width >= 1000px && root.height >= 620px;
+    private property <float> entrance: 1;
+    changed step => { step-timer.running = self.motion; self.entrance = self.motion ? 0 : 1; root.focus-primary(); }
+    changed interactive => { if self.interactive { root.focus-primary(); } }
+    changed motion => { if !self.motion { self.entrance = 1; step-timer.running = false; } }
+    animate entrance { duration: root.motion && !step-timer.running ? 240ms : 0ms; easing: ease-out; }
+    step-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
+    init => { if root.active { root.focus-primary(); } }
+    background: Theme.bg;
+    // Catch all pointer input before it can reach the inbox underneath.
+    TouchArea { }
+    Text { x: 40px; y: 24px; text: "Bang"; font-size: 20px; font-weight: 700; color: Theme.text; }
+    Text { x: parent.width - self.width - 40px; y: 30px; text: root.step == 0 ? @tr("Welcome") : root.step == 1 ? @tr("Preferences") : @tr("Connect account"); font-size: 12px; color: Theme.text-secondary; }
+    body := Rectangle {
+        width: min(1000px, parent.width - 80px);
+        height: root.wide ? 400px : min(440px, parent.height - 112px);
+        x: (parent.width - self.width) / 2;
+        y: root.wide ? (parent.height - self.height) / 2 : 80px + (parent.height - 112px - self.height) / 2;
+        if root.active && (root.wide || root.step != 1): MailIllustration {
+            width: root.wide ? parent.width * 0.44 : 280px;
+            height: root.wide ? 300px : 106px;
+            x: root.wide ? 0px : (parent.width - self.width) / 2;
+            y: root.wide ? (parent.height - self.height) / 2 : 0px;
+            motion: root.motion; playing: root.step == 0;
+        }
+        copy := Rectangle {
+            width: root.wide ? parent.width * 0.46 : min(560px, parent.width);
+            height: parent.height - self.y;
+            x: (root.wide ? parent.width - self.width : (parent.width - self.width) / 2) + 12px * (1 - root.entrance);
+            y: root.wide || root.step == 1 ? 0px : 126px;
+            opacity: 0.4 + 0.6 * root.entrance;
+            VerticalLayout { spacing: 12px; alignment: root.step == 1 ? stretch : center;
+                VerticalLayout { spacing: 12px; alignment: start;
+                    Text { text: root.step == 0 ? @tr("Welcome to Bang") : root.step == 1 ? @tr("Make it yours") : root.connected ? @tr("You’re all set") : @tr("Bring your inbox along"); font-size: root.wide ? 32px : 28px; font-weight: 700; color: Theme.text; wrap: word-wrap; }
+                    if root.step != 1 || root.wide: Text { text: root.step == 0 ? @tr("Your mail, with room to breathe. Let’s make Bang feel like home.") : root.step == 1 ? @tr("Choose your look and language. You can change these anytime in Settings.") : root.connected ? @tr("Your account is connected. Your inbox is ready when you are.") : @tr("Connect your email account to read, write and keep everything together."); font-size: 15px; color: Theme.text-secondary; wrap: word-wrap; }
+                    if root.step == 1: VerticalLayout { spacing: 8px;
+                        Text { text: @tr("Appearance"); font-size: 13px; color: Theme.text; }
+                        HorizontalLayout { spacing: 10px;
+                            ThemeOption { compact: !root.wide; name: @tr("System"); mode: "system"; selected: root.theme == "system"; chosen => { if root.interactive { root.theme-selected("system"); } } }
+                            ThemeOption { compact: !root.wide; name: @tr("Light"); mode: "light"; selected: root.theme == "light"; chosen => { if root.interactive { root.theme-selected("light"); } } }
+                            ThemeOption { compact: !root.wide; name: @tr("Dark"); mode: "dark"; selected: root.theme == "dark"; chosen => { if root.interactive { root.theme-selected("dark"); } } }
+                        }
+                        Text { text: @tr("Language"); font-size: 13px; color: Theme.text; }
+                        HorizontalLayout { spacing: 8px;
+                            ActionButton { modal: true; enabled: root.interactive; text: @tr("System"); framed: true; active: root.language == "system"; clicked => { root.language-selected("system"); } }
+                            ActionButton { modal: true; enabled: root.interactive; text: "English"; framed: true; active: root.language == "en"; clicked => { root.language-selected("en"); } }
+                            ActionButton { modal: true; enabled: root.interactive; text: "Français"; framed: true; active: root.language == "fr"; clicked => { root.language-selected("fr"); } }
+                        }
+                    }
+                }
+                Rectangle { min-height: root.step == 1 ? 0px : 16px; max-height: root.step == 1 ? 1000px : 16px; vertical-stretch: root.step == 1 ? 1 : 0; }
+                if root.error != "": Text { text: root.error; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
+                HorizontalLayout { spacing: 10px; height: 40px;
+                    if root.step > 0 && !root.connected: WelcomeButton { text: @tr("Back"); enabled: root.interactive; motion: root.motion; clicked => { root.back(); } }
+                    primary := WelcomeButton {
+                        text: root.step == 0 ? @tr("Get started") : root.step == 1 ? @tr("Continue") : root.connected ? @tr("Open inbox") : @tr("Add account");
+                        primary: true; enabled: root.interactive; motion: root.motion;
+                        clicked => { if root.step < 2 { root.step += 1; } else if root.connected { root.finish(); } else { root.add-account(); } }
+                    }
+                }
+                if root.step == 2 && !root.connected: ActionButton { modal: true; enabled: root.interactive; text: @tr("Set up later"); clicked => { root.finish(); } }
+            }
+        }
+    }
+    focus-primary => { if root.interactive { primary.focus-button(); } }
+}
