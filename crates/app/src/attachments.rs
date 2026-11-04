@@ -1,7 +1,9 @@
 //! Attachment preview and save.
 
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -116,32 +118,140 @@ fn confirm_replace(path: &str) -> bool {
     confirmed
 }
 
-/// Create atomically, or ask before truncating an already-open regular file.
+/// Stage and sync all bytes before publishing a new file or replacing an approved inode.
 fn write_export(path: &Path, data: &[u8], replace: impl FnOnce() -> bool) -> io::Result<bool> {
+    write_export_with(path, replace, |file| file.write_all(data))
+}
+
+fn write_export_with(
+    path: &Path,
+    replace: impl FnOnce() -> bool,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<bool> {
+    use std::ffi::CString;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "invalid export destination");
+    let filename = path.file_name().ok_or_else(invalid)?;
+    let target_name = CString::new(filename.as_bytes()).map_err(|_| invalid())?;
+    let directory = std::fs::File::open(
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new(".")),
+    )?;
+    // Anchor every lookup to the same open directory even if a parent path moves.
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let target = anchor.join(filename);
     let mut options = std::fs::OpenOptions::new();
     options
         .write(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    let (mut file, existing) = match options.clone().create_new(true).open(path) {
-        Ok(file) => (file, false),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (options.open(path)?, true),
-        Err(e) => return Err(e),
+    // Retain the approved descriptor so its inode cannot be recycled while
+    // confirmation and staging are in progress.
+    let existing_file = match options.open(&target) {
+        Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
     };
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "destination is not a regular file",
-        ));
-    }
-    if existing {
+    let existing = existing_file
+        .as_ref()
+        .map(|file| file.metadata())
+        .transpose()?;
+    if let Some(metadata) = &existing {
+        if !metadata.is_file() {
+            return Err(invalid());
+        }
         if !replace() {
             return Ok(false);
         }
-        // Keep the same descriptor across confirmation: a swapped path cannot
-        // redirect the approved overwrite to a different inode.
-        file.set_len(0)?;
     }
-    file.write_all(data)?;
+    let (stage_name, mut stage) = loop {
+        let name = format!(
+            ".bang-export-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        match options
+            .clone()
+            .create_new(true)
+            .mode(0o600)
+            .open(anchor.join(&name))
+        {
+            Ok(file) => break (name, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    struct Staged {
+        path: PathBuf,
+        cleanup: bool,
+    }
+    impl Drop for Staged {
+        fn drop(&mut self) {
+            if self.cleanup {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
+    let mut staged = Staged {
+        path: anchor.join(&stage_name),
+        cleanup: true,
+    };
+    write(&mut stage)?;
+    if let Some(metadata) = &existing {
+        stage.set_permissions(metadata.permissions())?;
+    }
+    stage.sync_all()?;
+    let created = stage.metadata()?;
+    let same =
+        |a: &std::fs::Metadata, b: &std::fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+    let stage_name_c = CString::new(stage_name.as_bytes()).map_err(|_| invalid())?;
+    let exchange = |flags| {
+        // Both names are NUL-terminated basenames relative to a live directory fd.
+        let result = unsafe {
+            libc::renameat2(
+                directory.as_raw_fd(),
+                stage_name_c.as_ptr(),
+                directory.as_raw_fd(),
+                target_name.as_ptr(),
+                flags,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    };
+    if let Some(approved) = existing {
+        if !std::fs::symlink_metadata(&target).is_ok_and(|m| same(&m, &approved)) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "destination changed during confirmation",
+            ));
+        }
+        exchange(libc::RENAME_EXCHANGE)?;
+        // The staging name now holds the previous destination. Never remove it
+        // unless its identity matches the file the user actually approved.
+        staged.cleanup = false;
+        if !std::fs::symlink_metadata(&staged.path).is_ok_and(|m| same(&m, &approved)) {
+            if std::fs::symlink_metadata(&target).is_ok_and(|m| same(&m, &created)) {
+                exchange(libc::RENAME_EXCHANGE)?;
+                staged.cleanup =
+                    std::fs::symlink_metadata(&staged.path).is_ok_and(|m| same(&m, &created));
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("destination changed; any recovery copy is named {stage_name}"),
+            ));
+        }
+        directory.sync_all()?;
+        staged.cleanup = true;
+    } else {
+        // A concurrent creator must never be overwritten without confirmation.
+        exchange(libc::RENAME_NOREPLACE)?;
+        directory.sync_all()?;
+    }
     Ok(true)
 }
 
@@ -222,12 +332,30 @@ mod tests {
             std::fs::write(&path, b"replacement").unwrap();
             true
         })
-        .unwrap());
+        .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
-        assert_eq!(
-            std::fs::read(root.join("approved-file")).unwrap(),
-            b"approved"
-        );
+        assert_eq!(std::fs::read(root.join("approved-file")).unwrap(), b"new");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_staged_export_preserves_original_and_removes_partial_file() {
+        let root = std::env::temp_dir().join(format!("bang-export-failure-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("file");
+        std::fs::write(&path, b"original").unwrap();
+        let error = write_export_with(
+            &path,
+            || true,
+            |file| {
+                file.write_all(b"partial")?;
+                Err(io::Error::from_raw_os_error(libc::ENOSPC))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOSPC));
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 

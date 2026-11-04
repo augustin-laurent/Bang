@@ -81,3 +81,25 @@ draft with **Set as a pre-release** enabled. Do not mark it stable or latest.
 Google is disabled in unconfigured preview builds: the repository contains no
 publisher desktop parameter. A distributor must supply the complete registration
 at build time and perform the live checks before enabling and publishing it.
+
+## Complete Google configuration before publication
+
+The automated draft artifacts intentionally have Google disabled. They cannot
+pass the live Google gate as built. Before publication, the publisher must build
+replacement packages from the same release commit on each target distribution,
+providing `BANG_GOOGLE_CLIENT_ID` and `BANG_GOOGLE_DESKTOP_PARAMETER` in the build
+environment. Do not commit those values or put them in public workflow logs.
+
+Build the editor, then run `cargo build --workspace --release --locked` with that
+environment and `bash scripts/package.sh deb`, `rpm`, or `arch` on its native
+distribution. Repeat installed-package smoke tests, then perform the live Google
+checks on the configured packages. Replace all three binary assets in the
+**draft only**, regenerate `SHA256SUMS` against the replacement binaries and the
+unchanged source archive/PKGBUILD, and replace the draft checksum asset. Record
+the validation results in its release notes before publishing. If the source
+commit changes, rerun push CI and draft preparation for the new SHA first.
+
+Release immutability is enabled in repository settings: published assets and tags
+cannot be replaced. Keep it enabled. Draft automation also refuses existing tags
+that resolve to another commit, including annotated tags. Lookup errors fail the
+workflow rather than being treated as a missing tag.

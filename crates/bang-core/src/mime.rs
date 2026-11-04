@@ -248,6 +248,22 @@ pub fn render_html_subset(html: &str) -> String {
     result.trim().to_string()
 }
 
+fn bounded_text(node: &NodeRef, depth: usize) -> String {
+    if depth >= MAX_RENDER_DEPTH {
+        return "…".into();
+    }
+    if let Some(text) = node.query_or(None, |n| match &n.data {
+        NodeData::Text { contents } => Some(contents.to_string()),
+        _ => None,
+    }) {
+        return text;
+    }
+    node.children()
+        .into_iter()
+        .map(|child| bounded_text(&child, depth + 1))
+        .collect()
+}
+
 /// Recursively render a node and its children.
 fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usize) {
     if depth >= MAX_RENDER_DEPTH {
@@ -279,7 +295,7 @@ fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usiz
             out.push_str("\n\n");
         }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-            let text = node.text().to_string();
+            let text = bounded_text(node, depth);
             if !text.trim().is_empty() {
                 out.push_str(&text);
                 out.push_str("\n\n");
@@ -293,7 +309,7 @@ fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usiz
         "ul" => render_list(node, out, quote_depth, depth, false),
         "ol" => render_list(node, out, quote_depth, depth, true),
         "a" => {
-            let text = node.text().to_string();
+            let text = bounded_text(node, depth);
             let href = node.attr("href").map(|h| h.to_string());
             match href {
                 Some(h) if !h.is_empty() && !h.starts_with('#') && h != text => {
@@ -392,6 +408,20 @@ pub fn to_attachment_records(message_id: i64, attachments: &[AttachmentData]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_and_link_text_obey_render_depth_limit() {
+        for tag in ["h1", "a"] {
+            let html = format!(
+                "<{tag}>{}hidden{} visible</{tag}>",
+                "<span>".repeat(100),
+                "</span>".repeat(100)
+            );
+            let rendered = render_html_subset(&html);
+            assert!(!rendered.contains("hidden"));
+            assert!(rendered.contains('…') && rendered.contains("visible"));
+        }
+    }
 
     #[test]
     fn decode_encoded_headers_and_folder_names() {

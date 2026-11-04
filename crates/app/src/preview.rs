@@ -142,6 +142,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     ui.set_message_body("Bonjour Augustin,\n\nVoici un récapitulatif des dernières pistes que nous avons évoquées, avec quelques ajustements sur les proportions finales. L’ensemble reste volontairement sobre pour conserver une navigation lisible et agréable au quotidien.\n\nN’hésite pas à me dire ce que tu en penses et si tu vois d’autres points à affiner avant la prochaine itération.\n\nÀ bientôt,\nCamille".into());
     ui.set_settings_accounts(slint::ModelRc::new(VecModel::from(vec![
         AccountRow {
+            removing: false,
             reconnect: false,
             storage_locked: false,
             provider: "".into(),
@@ -149,6 +150,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             email: "augustin@example.fr".into(),
         },
         AccountRow {
+            removing: false,
             reconnect: false,
             storage_locked: false,
             provider: "".into(),

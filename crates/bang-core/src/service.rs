@@ -115,6 +115,7 @@ pub struct MailService {
     /// make the periodic dispatch deliver the same email twice.
     in_flight_sends: Arc<Mutex<HashSet<i64>>>,
     send_tasks: Mutex<HashMap<String, Vec<tokio::task::AbortHandle>>>,
+    removing_accounts: Arc<Mutex<HashSet<String>>>,
 }
 
 impl MailService {
@@ -139,6 +140,7 @@ impl MailService {
             syncers: Arc::new(Mutex::new(HashMap::new())),
             in_flight_sends: Arc::new(Mutex::new(HashSet::new())),
             send_tasks: Mutex::new(HashMap::new()),
+            removing_accounts: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -155,8 +157,17 @@ impl MailService {
         let events = self.events_tx.clone();
         let syncers = self.syncers.clone();
         tokio::spawn(async move {
-            if let Ok(record) = credentials.install(config, None, true).await {
-                start_account_workers(record, &credentials, &store, &events, &syncers);
+            let id = config.id.clone();
+            match credentials.install(config, None, true).await {
+                Ok(record) => {
+                    start_account_workers(record, &credentials, &store, &events, &syncers)
+                }
+                Err(_) => {
+                    let _ = events.send(MailEvent::Error {
+                        account: Some(id),
+                        message: "Could not add account for this session.".into(),
+                    });
+                }
             }
         });
     }
@@ -400,7 +411,25 @@ impl MailService {
                 });
             }
             UiCommand::RestoreAccounts => {
-                for record in self.store.get_accounts().unwrap_or_default() {
+                let records = match self.store.account_records() {
+                    Ok((records, malformed)) => {
+                        if malformed > 0 {
+                            let _ = self.events_tx.send(MailEvent::Error {
+                                account: None,
+                                message: "Some cached account settings could not be read.".into(),
+                            });
+                        }
+                        records
+                    }
+                    Err(_) => {
+                        let _ = self.events_tx.send(MailEvent::Error {
+                            account: None,
+                            message: "Cached accounts could not be restored.".into(),
+                        });
+                        return;
+                    }
+                };
+                for record in records {
                     let credentials = self.credentials.clone();
                     let store = self.store.clone();
                     let events = self.events_tx.clone();
@@ -585,6 +614,9 @@ impl MailService {
                 );
             }
             UiCommand::RemoveAccount(id) => {
+                if !self.removing_accounts.lock().unwrap().insert(id.0.clone()) {
+                    return;
+                }
                 self.cancel_account_setup();
                 self.credentials.invalidate(&id.0);
                 if let Some(tasks) = self.send_tasks.lock().unwrap().remove(&id.0) {
@@ -597,12 +629,14 @@ impl MailService {
                 }
                 let credentials = self.credentials.clone();
                 let events = self.events_tx.clone();
+                let removing = self.removing_accounts.clone();
                 tokio::spawn(async move {
                     let error = credentials
                         .remove(&id.0)
                         .await
                         .err()
                         .map(|e| SetupFailure::from_error(&e));
+                    removing.lock().unwrap().remove(&id.0);
                     let _ = events.send(MailEvent::AccountRemoved { account: id, error });
                 });
             }
@@ -808,7 +842,25 @@ impl MailService {
                 {
                     task.abort();
                 }
-                for record in self.store.get_accounts().unwrap_or_default() {
+                let records = match self.store.account_records() {
+                    Ok((records, malformed)) => {
+                        if malformed > 0 {
+                            let _ = self.events_tx.send(MailEvent::Error {
+                                account: None,
+                                message: "Some cached account settings could not be read.".into(),
+                            });
+                        }
+                        records
+                    }
+                    Err(_) => {
+                        let _ = self.events_tx.send(MailEvent::Error {
+                            account: None,
+                            message: "Cached accounts could not be restored.".into(),
+                        });
+                        return;
+                    }
+                };
+                for record in records {
                     self.credentials.invalidate(&record.id.0);
                 }
                 for tx in self.syncers.lock().unwrap().drain().map(|(_, tx)| tx) {
@@ -874,6 +926,27 @@ fn default_smtp(provider: OAuthProvider) -> SmtpConfig {
 #[cfg(test)]
 mod account_setup_tests {
     use super::*;
+    #[tokio::test]
+    async fn overlapping_removals_emit_one_completion_and_allow_retry() {
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let service = MailService::new(store, tx);
+        let command = UiCommand::RemoveAccount(crate::AccountId("missing-test-account".into()));
+        service.handle_command(command.clone());
+        service.handle_command(command.clone());
+        assert!(matches!(
+            events.recv().await,
+            Some(MailEvent::AccountRemoved { .. })
+        ));
+        assert!(events.try_recv().is_err());
+        assert!(service.removing_accounts.lock().unwrap().is_empty());
+        service.handle_command(command);
+        assert!(matches!(
+            events.recv().await,
+            Some(MailEvent::AccountRemoved { .. })
+        ));
+    }
+
     #[tokio::test]
     async fn failed_account_setup_is_reported_without_saving_credentials() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

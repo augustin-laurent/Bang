@@ -484,6 +484,7 @@ fn account_rows(store: &bang_core::Store, state: &state::UiState) -> Vec<Account
         .unwrap_or_default()
         .into_iter()
         .map(|a| AccountRow {
+            removing: state.removing_accounts.lock().unwrap().contains(&a.id.0),
             reconnect: state.auth_attention.lock().unwrap().contains(&a.id.0),
             storage_locked: state.storage_locked.lock().unwrap().contains(&a.id.0),
             provider: match a.auth {
@@ -605,10 +606,23 @@ fn wire_settings(
     ui.on_settings_account_remove({
         let bridge = bridge.clone();
         let weak = ui.as_weak();
+        let state = state.clone();
+        let store = store.clone();
         move |id: slint::SharedString| {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
+            if !state
+                .removing_accounts
+                .lock()
+                .unwrap()
+                .insert(id.to_string())
+            {
+                return;
+            }
+            ui.set_settings_accounts(slint::ModelRc::new(slint::VecModel::from(account_rows(
+                &store, &state,
+            ))));
             ui.set_status_message(i18n::tr("Removing account…").into());
             bridge.send(bang_core::UiCommand::RemoveAccount(bang_core::AccountId(
                 id.into(),

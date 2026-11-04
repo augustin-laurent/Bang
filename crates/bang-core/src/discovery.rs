@@ -159,8 +159,12 @@ fn parse(bytes: &[u8], email: &str) -> Result<DiscoveryResult> {
                 }
                 stack.push(tag);
             }
-            Event::Text(e) => {
-                let text = e.decode().map_err(|_| invalid())?.into_owned();
+            event @ (Event::Text(_) | Event::CData(_)) => {
+                let text = match event {
+                    Event::Text(e) => e.decode().map_err(|_| invalid())?.into_owned(),
+                    Event::CData(e) => e.decode().map_err(|_| invalid())?.trim().to_owned(),
+                    _ => unreachable!(),
+                };
                 if text.len() > 2048 {
                     return Err(invalid());
                 }
@@ -279,6 +283,32 @@ mod tests {
             r#"<clientConfig version="1.1"><emailProvider><displayName>Example</displayName><incomingServer type="imap"><hostname>imap.example.test</hostname><port>993</port><socketType>{socket}</socketType><authentication>{auth}</authentication><username>%EMAILLOCALPART%</username></incomingServer><outgoingServer type="smtp"><hostname>smtp.example.test</hostname><port>587</port><socketType>STARTTLS</socketType><authentication>{auth}</authentication><username>%EMAILADDRESS%</username></outgoingServer></emailProvider></clientConfig>"#
         )
     }
+    #[test]
+    fn cdata_server_fields_are_supported() {
+        let document = xml("password-cleartext", "SSL")
+            .replace(
+                "<hostname>imap.example.test</hostname>",
+                "<hostname><![CDATA[ imap.example.test ]]></hostname>",
+            )
+            .replace("<port>993</port>", "<port><![CDATA[ 993 ]]></port>")
+            .replace(
+                "<socketType>SSL</socketType>",
+                "<socketType><![CDATA[ SSL ]]></socketType>",
+            )
+            .replace(
+                "<authentication>password-cleartext</authentication>",
+                "<authentication><![CDATA[ password-cleartext ]]></authentication>",
+            );
+        let DiscoveryResult::Found(settings) =
+            parse(document.as_bytes(), "alice@example.test").unwrap()
+        else {
+            panic!("CDATA fields were not parsed");
+        };
+        assert_eq!(settings.imap.host, "imap.example.test");
+        assert_eq!(settings.imap.port, 993);
+        assert_eq!(settings.imap.tls, TlsMode::Tls);
+    }
+
     #[test]
     fn discovers_independent_usernames_without_credentials() {
         let DiscoveryResult::Found(s) = parse(

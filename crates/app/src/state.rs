@@ -30,6 +30,8 @@ pub struct UiState {
     pub auth_attention: Mutex<HashSet<String>>,
     /// Accounts whose existing credentials can be retried by unlocking the keyring.
     pub storage_locked: Mutex<HashSet<String>>,
+    /// Accounts whose removal is pending in the core.
+    pub removing_accounts: Mutex<HashSet<String>>,
 }
 
 impl UiState {
@@ -43,6 +45,7 @@ impl UiState {
             account_status: Mutex::new(HashMap::new()),
             auth_attention: Mutex::new(HashSet::new()),
             storage_locked: Mutex::new(HashSet::new()),
+            removing_accounts: Mutex::new(HashSet::new()),
         }
     }
 
@@ -176,6 +179,7 @@ impl UiState {
                 }
             }
             MailEvent::AccountRemoved { account, error } => {
+                self.removing_accounts.lock().unwrap().remove(&account.0);
                 if error.is_some() {
                     ui.set_status_message(tr("Account removal could not finish. Unlock secure storage and try again.").into());
                 } else {
@@ -183,6 +187,7 @@ impl UiState {
                     self.account_status.lock().unwrap().remove(&account.0);
                     self.selected_folder
                         .store(UNIFIED_INBOX_ID, Ordering::SeqCst);
+                    ui.set_selected_folder(UNIFIED_INBOX_ID as i32);
                     ui.set_status_message(tr("Account removed from this device").into());
                 }
                 self.refresh_folders(ui, store);

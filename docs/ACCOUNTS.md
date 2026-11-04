@@ -7,6 +7,7 @@ Aucun identifiant développeur ni fichier de configuration n’est nécessaire.
 
 - **Google** : continuer dans le navigateur système, choisir le compte et
   autoriser Bang. L’adresse est récupérée auprès de Google.
+  Dans une préversion sans configuration complète, ce bouton est désactivé.
 - **Microsoft** : la connexion est préparée dans le moteur mais reste désactivée
   dans cette version, en attendant l’enregistrement public de l’éditeur.
 - **iCloud** : saisir son adresse et un **mot de passe d’application**. Le bouton

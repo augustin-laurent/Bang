@@ -70,7 +70,7 @@ export component SettingsDialog inherits Rectangle {
                         Text { text: acc.email; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
                         if acc.reconnect: ActionButton { modal: true; text: @tr("Reconnect"); clicked => { root.account-reconnect(acc.id); } }
                         if acc.storage-locked: ActionButton { modal: true; text: @tr("Unlock"); clicked => { root.account-unlock(acc.id); } }
-                        ActionButton { modal: true; text: @tr("Remove"); icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
+                        ActionButton { modal: true; text: @tr("Remove"); enabled: !acc.removing; icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
                     }
                     ActionButton { modal: true; text: @tr("Add account"); framed: true; icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
                 }

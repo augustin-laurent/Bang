@@ -348,11 +348,15 @@ impl Store {
         Ok(())
     }
 
-    /// List all accounts.
+    /// List readable accounts, skipping malformed metadata rows.
     ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
     pub fn get_accounts(&self) -> Result<Vec<StoredAccount>> {
+        self.account_records().map(|(records, _)| records)
+    }
+
+    pub(crate) fn account_records(&self) -> Result<(Vec<StoredAccount>, usize)> {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare("SELECT config FROM accounts ORDER BY created_at")
@@ -361,13 +365,25 @@ impl Store {
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
+        let mut malformed = 0;
         for row in rows {
-            let json = row.map_err(|e| Error::Store(e.to_string()))?;
-            let config: StoredAccount =
-                serde_json::from_str(&json).map_err(|e| Error::Store(e.to_string()))?;
-            out.push(config);
+            let json = match row {
+                Ok(json) => json,
+                Err(
+                    rusqlite::Error::InvalidColumnType(..)
+                    | rusqlite::Error::FromSqlConversionFailure(..),
+                ) => {
+                    malformed += 1;
+                    continue;
+                }
+                Err(error) => return Err(Error::Store(error.to_string())),
+            };
+            match serde_json::from_str::<StoredAccount>(&json) {
+                Ok(record) => out.push(record),
+                Err(_) => malformed += 1,
+            }
         }
-        Ok(out)
+        Ok((out, malformed))
     }
 
     /// Get a single account by id.
@@ -1588,6 +1604,35 @@ mod tests {
             preview: String::new(),
             has_attachments: false,
         }
+    }
+
+    #[test]
+    fn malformed_account_does_not_hide_valid_accounts() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("broken")).unwrap();
+        store.save_account(&test_account("valid")).unwrap();
+        store.save_account(&test_account("invalid-type")).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE accounts SET config = x'00' WHERE id = 'invalid-type'",
+                [],
+            )
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE accounts SET config = '{broken' WHERE id = 'broken'",
+                [],
+            )
+            .unwrap();
+        let (records, malformed) = store.account_records().unwrap();
+        assert_eq!(malformed, 2);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id.0, "valid");
+        assert_eq!(store.get_accounts().unwrap().len(), 1);
     }
 
     #[test]

@@ -1436,3 +1436,27 @@ fn welcome_motion_settles_and_desktop_reduced_motion_stops_it() {
     );
     ui.hide().unwrap();
 }
+
+#[test]
+fn account_removal_updates_sidebar_selection_and_clears_pending_state() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    let store = bang_core::Store::open_in_memory().unwrap();
+    let state = crate::state::UiState::new();
+    state
+        .removing_accounts
+        .lock()
+        .unwrap()
+        .insert("removed".into());
+    ui.set_selected_folder(99);
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountRemoved {
+            account: bang_core::AccountId("removed".into()),
+            error: None,
+        },
+    );
+    assert_eq!(ui.get_selected_folder(), bang_core::UNIFIED_INBOX_ID as i32);
+    assert!(state.removing_accounts.lock().unwrap().is_empty());
+}

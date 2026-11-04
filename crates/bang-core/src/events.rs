@@ -25,7 +25,8 @@ pub enum UiCommand {
         /// Explicitly avoid persistent secret storage.
         session_only: bool,
     },
-    /// Add an account and start syncing it.
+    /// Add a trusted account for this session only and start syncing it.
+    /// Use `ConnectAccount` for validated, persistent setup with explicit storage recovery.
     AddAccount(AccountConfig),
     /// Validate a new account before saving it; correlated with the open wizard.
     ConnectAccount {

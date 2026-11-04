@@ -79,3 +79,23 @@ except ProcessLookupError:
 else:
     raise AssertionError('Native child process survived cleanup')
 print('Native smoke parent and child process-group cleanup passed')
+
+with tempfile.TemporaryDirectory(prefix='bang-tag-test-') as directory:
+    commands = Path(directory)
+    git = commands / 'git'
+    git.write_text('#!/bin/sh\nprintf "%s\\n" "$BANG_TEST_REFS"\nexit "$BANG_TEST_STATUS"\n')
+    git.chmod(0o755)
+    expected = 'a' * 40
+    for status, refs, success in [
+        (2, '', True),
+        (0, expected + ' refs/tags/v0.1.0', True),
+        (0, 'b' * 40 + ' refs/tags/v0.1.0\n' + expected + ' refs/tags/v0.1.0^{}', True),
+        (0, 'b' * 40 + ' refs/tags/v0.1.0', False),
+        (128, '', False),
+    ]:
+        env = dict(os.environ, PATH=f'{commands}:{os.environ["PATH"]}',
+                   BANG_TEST_REFS=refs, BANG_TEST_STATUS=str(status))
+        result = subprocess.run(['bash', str(repo / 'scripts/check-release-tag.sh'), expected, 'v0.1.0'],
+                                env=env, capture_output=True)
+        assert (result.returncode == 0) == success, result.stderr.decode()
+print('Release tag: absent, lightweight, annotated, mismatch and network failure passed')

@@ -76,7 +76,7 @@ open for the process lifetime.
 
 | Variant | Purpose |
 |---|---|
-| `AddAccount(config)` | Save account, start its syncer |
+| `AddAccount(config)` | Trusted session-only account; start its syncer. Use `ConnectAccount` for persistent, validated setup |
 | `OAuthLogin { provider, client_id }` | Run OAuth2, then add the account |
 | `RemoveAccount(id)` | Stop syncer, delete account |
 | `SelectFolder { .. }` | (No-op: the UI reads the store directly) |
