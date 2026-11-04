@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/augustin-laurent/Bang/discussions
+    about: Ask for help or discuss an idea before proposing a change.
+  - name: Report a vulnerability privately
+    url: https://github.com/augustin-laurent/Bang/security/advisories/new
+    about: Do not disclose vulnerabilities or credentials in a public issue.

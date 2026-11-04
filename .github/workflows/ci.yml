@@ -1,0 +1,72 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev libxdo-dev pkg-config gnome-keyring dbus-x11 xvfb
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: crates/composer/web/package-lock.json
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - run: cargo fmt --all -- --check
+      - run: npm ci --prefix crates/composer/web
+      - run: npm test --prefix crates/composer/web
+      - run: npm run build --prefix crates/composer/web
+      - run: cargo check --workspace --locked
+      - run: cargo test --workspace --locked --features app/preview-renderer,bang-core/integration -j2
+      - run: bash scripts/test-keyring.sh
+      - name: Deterministic screenshots
+        run: |
+          mkdir -p /tmp/bang-screenshots
+          for theme in light dark; do
+            BANG_SNAPSHOT="/tmp/bang-screenshots/inbox-$theme.png" BANG_WIDTH=1440 BANG_HEIGHT=900 BANG_LANGUAGE=en BANG_THEME="$theme" \
+              cargo run -p app --locked --features preview-renderer -- --preview
+          done
+      - name: Packaging self-checks
+        run: |
+          bash -n scripts/package.sh scripts/package-container.sh scripts/test-keyring.sh
+          python3 scripts/test-packaging.py
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: screenshots
+          path: /tmp/bang-screenshots/*.png
+          if-no-files-found: error
+  packages:
+    uses: ./.github/workflows/packages.yml
+  required:
+    name: Required checks
+    if: always()
+    needs: [tests, packages]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every test and package job
+        env:
+          TEST_RESULT: ${{ needs.tests.result }}
+          PACKAGE_RESULT: ${{ needs.packages.result }}
+        run: test "$TEST_RESULT" = success && test "$PACKAGE_RESULT" = success

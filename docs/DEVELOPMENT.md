@@ -49,6 +49,16 @@ compiled JS, CSS and fonts are embedded in `bang-compose`.
 First run creates `~/.local/share/bang/bang.db`. Preferences are saved in
 `~/.config/bang/config.toml`; the directory is created automatically.
 
+New mail-store directories use owner-only permissions. Bang restricts the database
+and SQLite sidecars to `0600` before opening them, including existing stores, and
+protects its attachment directory. An existing store's parent directory must be
+owned by the current user and must not be writable by other users; its permissions
+are otherwise preserved. Database and sidecar symlinks are rejected. Attachment
+exports propose a safe filename and ask before replacing an existing file.
+The Store API retains SQLite memory, temporary and file-URI modes; file URIs
+accept `mode` and `cache` options, rejecting other options explicitly so an
+alternate filesystem backend cannot bypass permission enforcement.
+
 ```toml
 theme = "system"    # system, light, dark
 language = "system" # system, fr, en
@@ -92,7 +102,11 @@ BANG_SNAPSHOT=/tmp/bang-inbox.png BANG_WIDTH=1440 BANG_HEIGHT=900 \
 ```
 
 `BANG_SURFACE=settings`, `wizard` or `wizard-manual` opens a dialog. The preview renderer uses
-Slint's real software rasterizer without a window manager. Omitting
+Slint's real software rasterizer without a window manager. Welcome fixtures use
+`BANG_SURFACE=welcome`, `welcome-preferences`, `welcome-connect`, `welcome-error`
+or `welcome-connected`. Set `BANG_REDUCED_MOTION=1` for the settled illustration,
+or `BANG_SNAPSHOT_DELAY_MS=450` for an intermediate animation frame. These fixtures
+never read or write real preferences or credentials. Omitting
 `BANG_SNAPSHOT` opens an interactive native fixture.
 
 For browser testing of the composer:
@@ -224,9 +238,16 @@ source.
 ## Account sign-in
 
 See [ACCOUNTS.md](ACCOUNTS.md) for desktop OAuth registration, loopback redirects,
-provider-specific settings and token-renewal work still required. Configuration
+provider-specific settings, secure storage and automatic token renewal. Configuration
 is reloaded for each sign-in attempt. New accounts are validated asynchronously
 against IMAP and SMTP before they are persisted; no test message is sent.
+
+Run `bash scripts/test-keyring.sh` for a real Secret Service roundtrip using an
+isolated D-Bus session and temporary keyring (requires `gnome-keyring-daemon`).
+Run `cargo run -p app -- --check-oauth-release` to inspect bundled publisher
+registrations without opening GTK or touching account data. Microsoft is currently
+deferred; its disabled button is expected. A live Google consent/refresh check is
+still required before public release.
 
 ## Debugging
 
@@ -236,3 +257,14 @@ against IMAP and SMTP before they are persisted; no test message is sent.
   with any SQLite tool.
 - To exercise the IMAP path without a real server, run the integration tests:
   `cargo test -p bang-core --features integration`.
+
+## Repository checks and packaging
+
+The `CI` workflow runs formatting, the editor build/tests, workspace checks,
+Rust/UI/IMAP tests, an isolated Secret Service roundtrip, screenshot generation,
+and Linux package installation checks. Its `Required checks` job is the stable
+branch-protection check. Builds use committed lockfiles.
+
+Use only `feature/`, `fix/`, `chore/`, `maintenance/`, `integration/`, or `docs/`
+branch prefixes and Conventional Commit messages. See
+[CONTRIBUTING.md](../CONTRIBUTING.md) and [RELEASING.md](RELEASING.md).

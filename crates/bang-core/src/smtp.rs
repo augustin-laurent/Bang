@@ -11,14 +11,27 @@ use crate::account::{AuthMethod, SmtpConfig, TlsMode};
 use crate::error::{Error, Result};
 use crate::events::OutgoingAttachment;
 
+/// Authentication/policy replies, distinct from recipient or message rejection.
+pub(crate) fn authentication_rejected(error: &lettre::transport::smtp::Error) -> bool {
+    matches!(error.status().map(u16::from), Some(530 | 534 | 535 | 538))
+}
+
 /// Check TLS and SMTP authentication without sending a message.
 ///
 /// # Errors
 /// Returns a configuration, network or authentication error.
 pub async fn test_connection(config: &SmtpConfig, auth: &AuthMethod, email: &str) -> Result<()> {
     let (username, secret, mechanisms) = match auth {
-        AuthMethod::Password { username, password } => (
-            username.clone(),
+        AuthMethod::Password {
+            username,
+            smtp_username,
+            password,
+        } => (
+            if smtp_username.is_empty() {
+                username.clone()
+            } else {
+                smtp_username.clone()
+            },
             password.clone(),
             vec![Mechanism::Plain, Mechanism::Login],
         ),
@@ -83,9 +96,20 @@ pub async fn send(
         .tls(tls_mode(config)?);
 
     match auth {
-        AuthMethod::Password { username, password } => {
+        AuthMethod::Password {
+            username,
+            smtp_username,
+            password,
+        } => {
             builder = builder
-                .credentials(Credentials::new(username.clone(), password.clone()))
+                .credentials(Credentials::new(
+                    if smtp_username.is_empty() {
+                        username.clone()
+                    } else {
+                        smtp_username.clone()
+                    },
+                    password.clone(),
+                ))
                 .authentication(vec![Mechanism::Plain, Mechanism::Login]);
         }
         AuthMethod::OAuth2 { access_token, .. } => {
@@ -398,6 +422,7 @@ mod tests {
                         tls: TlsMode::Plaintext,
                     },
                     &AuthMethod::Password {
+                        smtp_username: String::new(),
                         username: "local".into(),
                         password: "test".into(),
                     },
@@ -417,6 +442,12 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(result.is_err(), reject);
+            if let Err(Error::Smtp(error)) = &result {
+                assert!(
+                    !authentication_rejected(error),
+                    "message rejection must not disconnect the account"
+                );
+            }
             let data = server.await.unwrap();
             assert!(data.contains("multipart/alternative"));
             assert!(data.contains("file.txt"));
@@ -479,6 +510,7 @@ mod connection_tests {
                         tls: TlsMode::Plaintext,
                     },
                     &AuthMethod::Password {
+                        smtp_username: String::new(),
                         username: "local".into(),
                         password: "test".into(),
                     },
@@ -488,6 +520,9 @@ mod connection_tests {
             .await
             .unwrap();
             assert_eq!(result.is_err(), reject);
+            if let Err(Error::Smtp(error)) = &result {
+                assert!(authentication_rejected(error));
+            }
             assert_eq!(server.await.unwrap(), !reject);
         }
     }

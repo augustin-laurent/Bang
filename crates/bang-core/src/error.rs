@@ -5,6 +5,21 @@ use thiserror::Error;
 /// Errors from the mail core.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Access was revoked or no credentials exist for this session.
+    #[error("Reconnect this account to continue.")]
+    ReconnectRequired,
+    /// The desktop keyring is locked, missing or unavailable.
+    #[error("Secure storage is unavailable. Unlock your keyring or continue for this session.")]
+    SecureStorage,
+    /// A superseded operation must not publish credentials or account state.
+    #[error("Account operation cancelled.")]
+    Cancelled,
+    /// User declined authorization.
+    #[error("Sign-in was declined. You can try again.")]
+    Declined,
+    /// Bounded setup or authorization operation expired.
+    #[error("Connection timed out. Check your network and try again.")]
+    Timeout,
     /// IMAP protocol or connection error.
     #[error("IMAP error: {0}")]
     Imap(#[from] imap::Error),

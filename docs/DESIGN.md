@@ -38,3 +38,16 @@ Classify action opens category corrections and multiple label assignments. Label
 management supplies a name and one of six accessible colors. These dialogs share
 the existing opaque surfaces, modal input guard, translations and native-reader
 visibility behavior.
+
+First-launch setup uses three screens: Welcome, Preferences, and Connect account.
+A native vector envelope unfolds into a miniature inbox once over 1.1 seconds;
+step changes use a 240ms fade and short translation. GTK's animation preference
+is followed live, and reduced motion shows the finished illustration. The welcome
+screen owns focus, blocks inbox interaction, and hides the native mail reader.
+
+Only a missing configuration with no accounts starts setup automatically. The
+optional `welcome_completed` preference is false while setup is pending and true
+after connection or Set up later; legacy configurations and existing accounts
+bypass it. Interrupted setup restarts at Welcome with saved preferences retained.
+A failed completion save keeps the final screen open with a retry action and
+preserves any connected account.

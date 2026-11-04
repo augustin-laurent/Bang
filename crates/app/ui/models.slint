@@ -13,7 +13,7 @@ export struct MessageRow {
     sender-address: string, initials: string, avatar: image, avatar-tint: color, has-avatar: bool,
     preview: string, unread: bool, starred: bool, has-attachments: bool,
 }
-export struct AccountRow { provider: string, id: string, email: string, }
+export struct AccountRow { provider: string, id: string, email: string, reconnect: bool, storage-locked: bool, removing: bool, }
 export struct DraftRow { id: int, title: string, subtitle: string, }
 export struct TemplateRow { id: int, title: string, subtitle: string, }
 export struct PendingSendRow { id: int, title: string, subtitle: string, }

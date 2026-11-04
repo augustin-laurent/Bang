@@ -2,7 +2,7 @@
 use crate::{BangApp, FolderRow, MessageRow};
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, LogicalSize, Model, VecModel};
+use slint::{ComponentHandle, Global, LogicalSize, Model, VecModel};
 #[test]
 fn native_navigation_resize_and_grouping() {
     i_slint_backend_testing::init_no_event_loop();
@@ -96,6 +96,7 @@ fn native_navigation_resize_and_grouping() {
                     tls: bang_core::TlsMode::Tls,
                 },
                 auth: bang_core::AuthMethod::Password {
+                    smtp_username: String::new(),
                     username: id.into(),
                     password: "test".into(),
                 },
@@ -431,6 +432,7 @@ fn sync_events_keep_a_sorted_bounded_model_and_clear_removed_selection() {
                 tls: TlsMode::Plaintext,
             },
             auth: AuthMethod::Password {
+                smtp_username: String::new(),
                 username: "test".into(),
                 password: "test".into(),
             },
@@ -628,9 +630,13 @@ fn categories_labels_dialog_and_late_avatars() {
         .unwrap();
     crate::avatars::ready(&ui, "alice@example.test", path.to_str().unwrap());
     assert!(ui.get_messages().row_data(0).unwrap().has_avatar);
-    let mut unchanged=ui.get_messages().row_data(1).unwrap();
-    crate::avatars::decorate(&ui,&mut unchanged);
-    assert_eq!(unchanged,unchanged.clone(),"empty avatar rows must compare equal to prevent needless model updates");
+    let mut unchanged = ui.get_messages().row_data(1).unwrap();
+    crate::avatars::decorate(&ui, &mut unchanged);
+    assert_eq!(
+        unchanged,
+        unchanged.clone(),
+        "empty avatar rows must compare equal to prevent needless model updates"
+    );
     assert!(!ui.get_messages().row_data(1).unwrap().has_avatar);
     assert!(
         !ui.get_message_avatar_loaded(),
@@ -667,6 +673,7 @@ fn organization_views_suspend_filters_for_search_and_clear_removed_selection() {
             tls: TlsMode::Tls,
         },
         auth: AuthMethod::Password {
+            smtp_username: String::new(),
             username: "local".into(),
             password: "test".into(),
         },
@@ -748,7 +755,6 @@ fn organization_views_suspend_filters_for_search_and_clear_removed_selection() {
     assert_eq!(ui.get_messages().row_data(0).unwrap().id, ids[0] as i32);
 }
 
-
 #[test]
 fn sender_photos_fit_the_avatar_at_any_source_resolution() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -822,7 +828,6 @@ fn sender_photos_fit_the_avatar_at_any_source_resolution() {
     ui.hide().unwrap();
 }
 
-
 #[test]
 fn account_wizard_provider_presets_theme_and_correlated_results() {
     use slint::Global;
@@ -844,6 +849,18 @@ fn account_wizard_provider_presets_theme_and_correlated_results() {
     ui.window().set_size(LogicalSize::new(1440., 900.));
     ui.set_wizard_open(true);
     ui.show().unwrap();
+    ui.set_google_available(false);
+    ui.window().take_snapshot().unwrap();
+    ElementHandle::find_by_accessible_label(&ui, "Google")
+        .next()
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert_eq!(
+        ui.get_wizard_provider(),
+        "",
+        "Unconfigured Google must remain unavailable"
+    );
+    ui.set_google_available(true);
     for dark in [true, false, true, false] {
         crate::Theme::get(&ui).set_dark(dark);
         ui.window().take_snapshot().unwrap();
@@ -942,7 +959,7 @@ fn account_wizard_provider_presets_theme_and_correlated_results() {
         &store,
         bang_core::MailEvent::AccountSetupFinished {
             attempt: 7,
-            error: Some("rejected".into()),
+            error: Some(bang_core::events::SetupFailure::Authentication),
         },
     );
     assert!(!ui.get_wizard_busy());
@@ -964,4 +981,482 @@ fn account_wizard_provider_presets_theme_and_correlated_results() {
     assert!(!ui.get_wizard_open());
     assert_eq!(ui.get_password(), "");
     assert_eq!(ui.get_wizard_provider(), "");
+}
+
+#[test]
+fn account_discovery_storage_recovery_and_reconnect_preserve_metadata() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let state = crate::state::UiState::new();
+    ui.window().set_size(LogicalSize::new(720., 480.));
+    ui.set_wizard_open(true);
+    ui.show().unwrap();
+    crate::accounts::select_provider(&ui, "manual");
+    assert!(!ui.get_wizard_settings_ready());
+    assert!(
+        ElementHandle::find_by_accessible_label(&ui, "Find settings")
+            .next()
+            .is_some()
+    );
+    ui.set_email("alice@example.test".into());
+    ui.set_wizard_attempt(3);
+    ui.set_wizard_busy(true);
+    let settings = bang_core::discovery::DiscoveredSettings {
+        name: "Example".into(),
+        imap: bang_core::ImapConfig {
+            host: "imap.example.test".into(),
+            port: 993,
+            tls: bang_core::TlsMode::Tls,
+        },
+        smtp: bang_core::SmtpConfig {
+            host: "smtp.example.test".into(),
+            port: 587,
+            tls: bang_core::TlsMode::Starttls,
+        },
+        username: "incoming-alice".into(),
+        smtp_username: "outgoing-alice".into(),
+    };
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSettingsDiscovered {
+            attempt: 2,
+            result: bang_core::discovery::DiscoveryResult::Found(settings.clone()),
+        },
+    );
+    assert!(!ui.get_wizard_settings_ready());
+    assert!(ui.get_wizard_busy());
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSettingsDiscovered {
+            attempt: 3,
+            result: bang_core::discovery::DiscoveryResult::Found(settings.clone()),
+        },
+    );
+    assert!(ui.get_wizard_settings_ready());
+    assert!(!ui.get_wizard_advanced());
+    assert!(!ui.get_wizard_busy());
+    assert_eq!(ui.get_username(), "incoming-alice");
+    assert_eq!(ui.get_smtp_username(), "outgoing-alice");
+    ui.window().take_snapshot().unwrap();
+    ui.set_wizard_busy(true);
+    ui.set_password("not-for-ui-after-validation".into());
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 3,
+            error: Some(bang_core::events::SetupFailure::SecureStorage),
+        },
+    );
+    assert!(ui.get_wizard_storage_error());
+    assert_eq!(ui.get_password(), "");
+    for label in ["Try secure storage again", "Continue for this session"] {
+        assert!(ElementHandle::find_by_accessible_label(&ui, label)
+            .next()
+            .is_some());
+    }
+    ui.window().take_snapshot().unwrap();
+    let config = bang_core::AccountConfig {
+        id: bang_core::AccountId("stable-id".into()),
+        email: "alice@example.test".into(),
+        imap: settings.imap,
+        smtp: settings.smtp,
+        auth: bang_core::AuthMethod::Password {
+            username: settings.username,
+            smtp_username: settings.smtp_username,
+            password: "private".into(),
+        },
+    };
+    store.save_account(&config).unwrap();
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountStatus {
+            account: config.id.clone(),
+            status: bang_core::AccountStatus::ReconnectRequired,
+        },
+    );
+    assert!(ui.get_settings_accounts().row_data(0).unwrap().reconnect);
+    crate::accounts::reconnect(&ui, &store.get_account("stable-id").unwrap().unwrap());
+    assert_eq!(ui.get_wizard_reconnect_id(), "stable-id");
+    assert_eq!(ui.get_email(), "alice@example.test");
+    assert_eq!(ui.get_username(), "incoming-alice");
+    assert_eq!(ui.get_smtp_username(), "outgoing-alice");
+    assert_eq!(ui.get_password(), "");
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountStatus {
+            account: config.id,
+            status: bang_core::AccountStatus::Connected,
+        },
+    );
+    assert!(!ui.get_settings_accounts().row_data(0).unwrap().reconnect);
+    ui.hide().unwrap();
+}
+
+#[test]
+fn welcome_navigation_preferences_and_account_handoff() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "bang-welcome-ui-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("config.toml");
+    crate::welcome::wire(&ui, path.clone(), false);
+    crate::i18n::select("en");
+    ui.window().set_size(LogicalSize::new(720., 480.));
+    ui.show().unwrap();
+    let settle = || {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1500));
+        ui.window().take_snapshot().unwrap();
+    };
+    let click = |label: &str| {
+        ui.window().take_snapshot().unwrap();
+        let element = ElementHandle::find_by_accessible_label(&ui, label)
+            .next()
+            .unwrap_or_else(|| panic!("missing {label}"));
+        let position = element.absolute_position();
+        assert!(position.x >= 0. && position.y >= 0.);
+        assert!(
+            position.x + element.size().width <= 720. && position.y + element.size().height <= 480.,
+            "{label} clipped"
+        );
+        element.mock_single_click(PointerEventButton::Left);
+    };
+    settle();
+    let composed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = composed.clone();
+    ui.on_compose_clicked(move || flag.set(true));
+    let quit = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = quit.clone();
+    ui.on_quit(move || flag.set(true));
+    let shortcut = |key: &str| {
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+    };
+    shortcut("n");
+    shortcut("f");
+    assert!(!composed.get(), "welcome must block inbox shortcuts");
+    shortcut("q");
+    assert!(quit.get(), "Ctrl+Q must remain available during setup");
+    assert!(ui.get_welcome_open());
+    assert!(crate::Theme::get(&ui).get_blocked());
+    assert_eq!(
+        crate::config::Config::load_from(&path).welcome_completed,
+        Some(false)
+    );
+    assert!(!ui.get_reader_shown());
+    assert!(ElementHandle::find_by_accessible_label(&ui, "New message")
+        .next()
+        .is_none());
+    click("Get started");
+    settle();
+    assert_eq!(ui.get_welcome_step(), 1);
+    // Exercise the same callbacks that the welcome screen sends to Settings.
+    let weak = ui.as_weak();
+    let preference_path = path.clone();
+    ui.on_settings_theme_selected(move |theme| {
+        let ui = weak.upgrade().unwrap();
+        let mut config = crate::config::Config::load_from(&preference_path);
+        config.theme = theme.to_string();
+        config.save_to(&preference_path).unwrap();
+        crate::apply_theme(&ui, &theme);
+        ui.set_settings_theme(theme);
+    });
+    let weak = ui.as_weak();
+    let preference_path = path.clone();
+    ui.on_settings_language_selected(move |language| {
+        let ui = weak.upgrade().unwrap();
+        let mut config = crate::config::Config::load_from(&preference_path);
+        config.language = language.to_string();
+        config.save_to(&preference_path).unwrap();
+        crate::i18n::select(&language);
+        ui.set_settings_language(language);
+    });
+    click("Dark");
+    settle();
+    assert!(crate::Theme::get(&ui).get_dark());
+    click("Français");
+    settle();
+    assert_eq!(ui.get_settings_language(), "fr");
+    let config = crate::config::Config::load_from(&path);
+    assert_eq!(config.theme, "dark");
+    assert_eq!(config.welcome_completed, Some(false));
+    assert!(
+        crate::welcome::eligible(&config, true, false),
+        "preference saves must not complete setup"
+    );
+    click("Continuer");
+    settle();
+    assert_eq!(ui.get_welcome_step(), 2);
+    click("Ajouter un compte");
+    settle();
+    assert!(ui.get_wizard_open());
+    assert!(ui.get_welcome_open());
+    // Return from the real account UI with Escape, without writing credentials.
+    let weak = ui.as_weak();
+    ui.on_wizard_cancel(move || {
+        let ui = weak.upgrade().unwrap();
+        ui.set_wizard_open(false);
+        ui.invoke_welcome_focus();
+    });
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Escape.into(),
+    });
+    settle();
+    assert!(!ui.get_wizard_open());
+    assert_eq!(ui.get_welcome_step(), 2);
+    click("Retour");
+    settle();
+    assert_eq!(ui.get_welcome_step(), 1);
+    // Primary focus follows the step, so Enter advances without a pointer.
+    ui.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: "\n".into() });
+    ui.window()
+        .dispatch_event(WindowEvent::KeyReleased { text: "\n".into() });
+    settle();
+    assert_eq!(ui.get_welcome_step(), 2);
+    click("Configurer plus tard");
+    settle();
+    assert!(!ui.get_welcome_open());
+    assert!(!crate::Theme::get(&ui).get_blocked());
+    let config = crate::config::Config::load_from(&path);
+    assert_eq!(config.welcome_completed, Some(true));
+    assert_eq!(config.language, "fr");
+    assert_eq!(config.theme, "dark");
+    crate::welcome::wire(&ui, path, false);
+    assert!(
+        !ui.get_welcome_open(),
+        "completed setup must not reappear with no accounts"
+    );
+    ui.hide().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn welcome_account_result_and_completion_failure_are_recoverable() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
+    let dir = std::env::temp_dir().join(format!(
+        "bang-welcome-result-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let blocker = dir.join("blocked");
+    std::fs::write(&blocker, "not a directory").unwrap();
+    let path = blocker.join("config.toml");
+    crate::welcome::wire(&ui, path.clone(), false);
+    assert!(ui.get_welcome_open());
+    assert!(!ui.get_welcome_error().is_empty());
+    ui.set_welcome_step(2);
+    ui.set_welcome_motion(false);
+    ui.window().set_size(LogicalSize::new(720., 480.));
+    ui.show().unwrap();
+    let state = crate::state::UiState::new();
+    let store = bang_core::Store::open(&dir.join("mail.db")).unwrap();
+    ui.set_wizard_open(true);
+    ui.set_wizard_busy(true);
+    ui.set_wizard_attempt(4);
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 3,
+            error: None,
+        },
+    );
+    assert!(
+        ui.get_wizard_busy(),
+        "stale success must not complete onboarding"
+    );
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 4,
+            error: Some(bang_core::events::SetupFailure::Network),
+        },
+    );
+    assert!(ui.get_wizard_open());
+    assert!(ui.get_welcome_open());
+    assert!(!ui.get_wizard_status().is_empty());
+    let account = bang_core::AccountConfig {
+        id: bang_core::AccountId("welcome@example.test".into()),
+        email: "welcome@example.test".into(),
+        imap: bang_core::ImapConfig {
+            host: "imap.example.test".into(),
+            port: 993,
+            tls: bang_core::TlsMode::Tls,
+        },
+        smtp: bang_core::SmtpConfig {
+            host: "smtp.example.test".into(),
+            port: 465,
+            tls: bang_core::TlsMode::Tls,
+        },
+        auth: bang_core::AuthMethod::Password {
+            username: "welcome@example.test".into(),
+            password: "test".into(),
+            smtp_username: String::new(),
+        },
+    };
+    store.save_account(&account).unwrap();
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountSetupFinished {
+            attempt: 4,
+            error: None,
+        },
+    );
+    assert!(!ui.get_wizard_open());
+    assert!(ui.get_welcome_open());
+    assert_eq!(ui.get_account_count(), 1);
+    assert!(!ui.get_welcome_error().is_empty());
+    assert_eq!(
+        store.get_accounts().unwrap().len(),
+        1,
+        "save failure must retain the connected account"
+    );
+    ui.window().take_snapshot().unwrap();
+    let retry = ElementHandle::find_by_accessible_label(&ui, "Open inbox")
+        .next()
+        .unwrap();
+    assert!(retry.absolute_position().y + retry.size().height <= 480.);
+    std::fs::remove_file(&blocker).unwrap();
+    std::fs::create_dir(&blocker).unwrap();
+    retry.mock_single_click(PointerEventButton::Left);
+    assert!(!ui.get_welcome_open());
+    assert_eq!(
+        crate::config::Config::load_from(&path).welcome_completed,
+        Some(true)
+    );
+    ui.hide().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn welcome_motion_settles_and_desktop_reduced_motion_stops_it() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        },
+    )))
+    .unwrap();
+    let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
+    ui.window().set_size(LogicalSize::new(1024., 768.));
+    ui.set_welcome_open(true);
+    ui.show().unwrap();
+    let first = ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(450));
+    let middle = ui.window().take_snapshot().unwrap();
+    assert_ne!(first.as_bytes(), middle.as_bytes(), "envelope must animate");
+    ui.set_welcome_motion(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+    let reduced = ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_secs(2));
+    assert_eq!(
+        reduced.as_bytes(),
+        ui.window().take_snapshot().unwrap().as_bytes()
+    );
+    assert!(!ui.window().has_active_animations());
+    ui.set_welcome_motion(true);
+    ui.set_welcome_step(1);
+    ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+    let entering = ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(300));
+    let settled = ui.window().take_snapshot().unwrap();
+    assert_ne!(
+        entering.as_bytes(),
+        settled.as_bytes(),
+        "step change must animate"
+    );
+    ui.set_welcome_step(2);
+    ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(80));
+    ui.set_welcome_open(false);
+    // Remove the conditional tree, then refresh Slint's per-frame activity flag.
+    // The flag can still reflect bindings evaluated before that tree was removed.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+    ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+    ui.window().take_snapshot().unwrap();
+    assert!(
+        !ui.window().has_active_animations(),
+        "closed welcome must not animate"
+    );
+    ui.hide().unwrap();
+}
+
+#[test]
+fn account_removal_updates_sidebar_selection_and_clears_pending_state() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    let store = bang_core::Store::open_in_memory().unwrap();
+    let state = crate::state::UiState::new();
+    state
+        .removing_accounts
+        .lock()
+        .unwrap()
+        .insert("removed".into());
+    ui.set_selected_folder(99);
+    state.apply(
+        &ui,
+        &store,
+        bang_core::MailEvent::AccountRemoved {
+            account: bang_core::AccountId("removed".into()),
+            error: None,
+        },
+    );
+    assert_eq!(ui.get_selected_folder(), bang_core::UNIFIED_INBOX_ID as i32);
+    assert!(state.removing_accounts.lock().unwrap().is_empty());
 }

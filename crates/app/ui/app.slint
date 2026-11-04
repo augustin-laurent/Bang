@@ -11,6 +11,7 @@ import { Sidebar } from "sidebar.slint";
 import { MessageList } from "messagelist.slint";
 import { ReadingPane } from "readingpane.slint";
 import { AccountWizard } from "accountwizard.slint";
+import { WelcomeScreen } from "welcome.slint";
 import { SettingsDialog } from "settingsdialog.slint";
 import { AttachmentPreview } from "attachmentpreview.slint";
 import { SaveDialog } from "savedialog.slint";
@@ -73,10 +74,25 @@ export component BangApp inherits Window {
     in-out property <bool> drafts-open: false; in-out property <bool> templates-open: false;
     in-out property <bool> sends-open: false;
     in property <[DraftRow]> drafts; in property <[TemplateRow]> templates; in property <[PendingSendRow]> sends;
+    in-out property <bool> welcome-open: false;
+    in-out property <int> welcome-step: 0;
+    in-out property <string> welcome-error;
+    in-out property <bool> welcome-motion: true;
+    callback welcome-add-account(); callback welcome-finish();
+    callback welcome-focus();
+    private property <int> welcome-focus-request: 0;
+    welcome-focus => { root.welcome-focus-request += 1; }
     in-out property <bool> wizard-open: false; in-out property <bool> wizard-manual: false; in-out property <string> wizard-status;
     in-out property <bool> wizard-busy: false;
     in-out property <int> wizard-attempt: 0;
     in-out property <string> wizard-provider;
+    in-out property <bool> wizard-advanced: false;
+    in-out property <bool> wizard-settings-ready: false;
+    in-out property <bool> wizard-storage-error: false;
+    in-out property <string> wizard-reconnect-id;
+    in-out property <bool> google-available: true;
+    in-out property <bool> microsoft-available: false;
+    in-out property <string> smtp-username;
     in-out property <bool> settings-open: false;
     in property <[AccountRow]> settings-accounts; in property <string> settings-theme: "system";
     in property <string> settings-language: "system";
@@ -85,6 +101,8 @@ export component BangApp inherits Window {
     in-out property <string> smtp-port: "465"; in-out property <string> username;
     in-out property <string> password; in-out property <bool> starttls: false; in-out property <bool> smtp-starttls: false;
     callback wizard-provider-selected(string); callback wizard-oauth-clicked(string); callback wizard-add-generic(); callback wizard-cancel();
+    callback wizard-discover(); callback wizard-storage-choice(bool); callback wizard-app-password();
+    callback wizard-email-edited(string);
     callback folder-selected(int); callback account-toggled(string);
     callback message-selected(int); callback message-action(int, string);
     callback reveal-message(int);
@@ -103,8 +121,10 @@ export component BangApp inherits Window {
     callback quit();
     callback settings-opened(); callback settings-theme-selected(string);
     callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
+    callback settings-account-reconnect(string);
+    callback settings-account-unlock(string);
 
-    private property <bool> modal-open: root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open || root.organization-open;
+    private property <bool> modal-open: root.welcome-open || root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open || root.organization-open;
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
@@ -122,11 +142,13 @@ export component BangApp inherits Window {
     keyboard := FocusScope {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         key-pressed(e) => {
+            if e.modifiers.control && (e.text == "q" || e.text == "Q") { root.quit(); return accept; }
             if root.modal-open {
                 if e.text == Key.Escape {
                     if root.organization-open { root.organization-close(); }
                     else if root.wizard-open { root.wizard-cancel(); }
                     else if root.settings-open { root.settings-close(); }
+                    else if root.welcome-open { root.welcome-step = max(0, root.welcome-step - 1); }
                     else { root.drafts-open = false; root.templates-open = false; root.sends-open = false; }
                     return accept;
                 }
@@ -135,7 +157,6 @@ export component BangApp inherits Window {
             // Global shortcuts.
             if e.modifiers.control && (e.text == "n" || e.text == "N") { root.compose-clicked(); return accept; }
             if e.modifiers.control && (e.text == "f" || e.text == "F") { if root.narrow { list-search.focus-input(); } else { search.focus-input(); } return accept; }
-            if e.modifiers.control && (e.text == "q" || e.text == "Q") { root.quit(); return accept; }
             if e.text == Key.Escape { root.detail-open = false; root.sidebar-overlay = false; return accept; }
             // Message navigation: j/k mirror the arrows; Home/End jump to the ends.
             if e.text == Key.DownArrow || e.text == "j" { root.navigate-message(1); return accept; }
@@ -150,6 +171,8 @@ export component BangApp inherits Window {
             }
             return reject;
         }
+    Rectangle {
+        width: parent.width; height: parent.height; visible: !root.welcome-open;
     Sidebar {
         visible: root.show-nav; x: 0px; y: 0px; width: root.nav-width; height: parent.height;
         folders: root.folders; selected-folder: root.selected-folder;
@@ -262,17 +285,37 @@ export component BangApp inherits Window {
             account-toggled(id) => { root.account-toggled(id); }
         }
     }
+    }
+    if root.welcome-open: WelcomeScreen {
+        active: true; focus-request: root.welcome-focus-request;
+        width: parent.width; height: parent.height;
+        step <=> root.welcome-step; motion: root.welcome-open && root.welcome-motion;
+        interactive: root.welcome-open && !root.wizard-open;
+        theme: root.settings-theme; language: root.settings-language;
+        error: root.welcome-error; connected: root.account-count > 0;
+        theme-selected(mode) => { root.settings-theme-selected(mode); }
+        language-selected(mode) => { root.settings-language-selected(mode); }
+        add-account => { root.welcome-add-account(); }
+        finish => { root.welcome-finish(); }
+    }
     AccountWizard { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.wizard-open; manual <=> root.wizard-manual; status: root.wizard-status; busy: root.wizard-busy; provider <=> root.wizard-provider;
+        advanced <=> root.wizard-advanced; settings-ready: root.wizard-settings-ready; storage-error: root.wizard-storage-error;
+        google-available: root.google-available; microsoft-available: root.microsoft-available; smtp-username <=> root.smtp-username;
+        reconnecting: root.wizard-reconnect-id != "";
         email <=> root.email; imap-host <=> root.imap-host; imap-port <=> root.imap-port;
         smtp-host <=> root.smtp-host; smtp-port <=> root.smtp-port; username <=> root.username;
         password <=> root.password; starttls <=> root.starttls; smtp-starttls <=> root.smtp-starttls;
         provider-selected(p) => { root.wizard-provider-selected(p); }
         oauth-clicked(p) => { root.wizard-oauth-clicked(p); } add-generic => { root.wizard-add-generic(); } cancel => { root.wizard-cancel(); }
+        discover => { root.wizard-discover(); } storage-choice(session) => { root.wizard-storage-choice(session); } app-password => { root.wizard-app-password(); }
+        email-edited(value) => { root.wizard-email-edited(value); }
     }
     SettingsDialog { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.settings-open; accounts: root.settings-accounts; theme: root.settings-theme; language: root.settings-language;
         online-avatars: root.online-avatars; avatars-toggled(enabled) => { root.avatars-toggled(enabled); }
         theme-selected(m) => { root.settings-theme-selected(m); } language-selected(m) => { root.settings-language-selected(m); }
         account-remove(id) => { root.settings-account-remove(id); } add-account => { root.settings-open = false; root.wizard-open = true; }
+        account-reconnect(id) => { root.settings-account-reconnect(id); }
+        account-unlock(id) => { root.settings-account-unlock(id); }
         close => { root.settings-close(); }
     }
     OrganizationDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;

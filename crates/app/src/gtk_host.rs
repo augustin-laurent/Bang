@@ -36,6 +36,19 @@ pub fn attach(
     });
 }
 
+/// Apply and follow the Linux desktop's reduced-animation preference.
+pub(crate) fn watch_welcome_motion(ui: &crate::BangApp) {
+    if let Some(settings) = gtk::Settings::default() {
+        ui.set_welcome_motion(settings.is_gtk_enable_animations());
+        let weak = ui.as_weak();
+        settings.connect_gtk_enable_animations_notify(move |settings| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_welcome_motion(settings.is_gtk_enable_animations());
+            }
+        });
+    }
+}
+
 struct GtkPlatform;
 struct Proxy;
 impl EventLoopProxy for Proxy {

@@ -106,26 +106,6 @@ queried during the automated tests.
 The implementation follows the accepted references in `assets/design/`.
 Screenshots use fictional offline fixtures; no real recipient was contacted.
 
-## Real first-open latency — 2026-11-02
-
-Read-only Gmail probes (`BODY.PEEK[]`) measured uncached messages from both
-ends of the existing inbox, without changing server flags or exposing message
-content in the timing output. Connections took 255–494 ms; SELECT 35–205 ms;
-body transfers 50–266 ms; MIME parsing 0–7 ms. These samples had no attachments.
-
-The native reader rendered three large cached HTML bodies in 227–346 ms.
-A complete first-open probe used the real Bridge, MailService, IMAP workers,
-Slint and WebKit with an isolated in-memory store and no outgoing queue. Three
-uncached old messages reached the UI in 475/127/141 ms and completed HTML
-loading in 691/209/228 ms. Temporary profiling code was removed afterward.
-These probes did not reproduce the reported 5–10 s delay.
-
-The existing release executable predated the IDLE fix; it was rebuilt. The
-standard launch script now builds and runs the same release profile. Shell
-syntax and a stubbed launch check verify both Cargo commands include `--release`.
-Confirmation of the user's launch path and a slow interaction in the instrumented
-window remained pending at the end of this investigation.
-
 ## Native click regression — 2026-11-02
 
 A real-pointer test reproduced clicks being swallowed before they reached Slint,
@@ -223,3 +203,16 @@ focus, window raising, file-picker selection/cancellation and scrolling still
 need hands-on verification in the final installed package on both Wayland and
 X11. Browser screenshots verify the editor layout; they are not WebKit screen
 captures. Provider OAuth and real-account delivery were not exercised.
+
+## First-launch welcome setup
+
+The welcome flow has isolated eligibility/configuration tests and software-rendered
+UI tests for theme/language selection, navigation and keyboard focus, shortcut
+blocking, Set up later, account-result correlation, save failure/retry, and
+animation/reduced-motion lifecycle. Fixtures never use real account credentials.
+
+Inspected all three steps at 1440×900, 1024×768 and 720×480 in light/dark and
+English/French (36 screens), plus intermediate envelope frames, reduced motion,
+and completion-error states. The minimum-size illustration hides secondary text
+rather than clipping it. The welcome UI uses native Slint vectors and existing
+fonts, tokens and account controls; browser layout checks do not apply.

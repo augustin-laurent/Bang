@@ -9,6 +9,7 @@ description = "Bang desktop mail client UI (Slint) and tokio/Slint bridge."
 preview-renderer = ["dep:i-slint-backend-testing"]
 
 [dependencies]
+libc = "0.2"
 dom_query = "0.27"
 gtk = "0.18"
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
