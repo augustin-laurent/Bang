@@ -47,8 +47,9 @@ only required when building from source. The release also includes a source
 archive and checksum-pinned Arch `PKGBUILD`; no AUR package is published.
 
 Google's publisher parameter is not stored in the repository, and Microsoft
-registration is deferred. Their sign-in buttons remain disabled in unconfigured
-preview builds. Gmail needs publisher configuration and live consent checks; generic
+registration is deferred. Google is enabled in release builds through the publisher’s GitHub Actions secret;
+unconfigured source/CI builds and Microsoft keep their sign-in buttons disabled.
+Gmail still requires live consent checks; generic
 IMAP/SMTP and iCloud app-password setup are also supported. See
 [account setup](docs/ACCOUNTS.md) and [release preparation](docs/RELEASING.md).
 
