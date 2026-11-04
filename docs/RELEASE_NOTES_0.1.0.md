@@ -16,8 +16,8 @@ artifact against `SHA256SUMS`. Node.js and Rust are not required at runtime.
 
 ## Before publishing this draft
 
-Google production consent, packaged browser login, sync/send, token refresh and
-restart with Secret Service are **not yet verified**. The release must remain a
+Google and Microsoft production consent, packaged browser login, sync/send, token
+refresh and restart with Secret Service are **not yet verified**. The release must remain a
 **draft** until the publisher completes the checklist in `docs/RELEASING.md` and
 records its results here. Automated registration checks do not satisfy this gate.
 
@@ -25,7 +25,8 @@ records its results here. Automated registration checks do not satisfy this gate
 
 This is early-access software. Back up important mail and use a test account
 before relying on it. Only x86_64 and the listed distributions are validated.
-Microsoft sign-in is disabled until a public registration is supplied. Categories
+Microsoft sign-in uses a bundled public Desktop registration without a client
+secret; live account and tenant-policy compatibility are not yet verified. Categories
 and labels are local and do not synchronize to other clients. A running Secret
 Service is required for persistent credentials; session-only sign-in must be
 explicitly selected when it is unavailable. No AUR or distribution repository

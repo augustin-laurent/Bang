@@ -8,8 +8,10 @@ Aucun identifiant développeur ni fichier de configuration n’est nécessaire.
 - **Google** : continuer dans le navigateur système, choisir le compte et
   autoriser Bang. L’adresse est récupérée auprès de Google.
   Dans une préversion sans configuration complète, ce bouton est désactivé.
-- **Microsoft** : la connexion est préparée dans le moteur mais reste désactivée
-  dans cette version, en attendant l’enregistrement public de l’éditeur.
+- **Microsoft** : saisir l’adresse de la boîte, puis continuer dans le navigateur
+  système pour autoriser Bang. L’enregistrement public de bureau est intégré,
+  sans secret client. Les essais réels de consentement et de connexion restent
+  à effectuer ; les politiques d’un tenant professionnel peuvent limiter l’accès.
 - **iCloud** : saisir son adresse et un **mot de passe d’application**. Le bouton
   **Créer un mot de passe d’application** ouvre les instructions Apple. Les
   serveurs et les ports sont déjà renseignés ; les modifications éventuelles
@@ -97,7 +99,7 @@ complète, le bouton Google est désactivé dans les builds de préversion.
 Ne jamais embarquer les identifiants confidentiels d’un client Web.
 
 Les valeurs publiques peuvent être fixées à la compilation avec
-`BANG_GOOGLE_CLIENT_ID`, `BANG_GOOGLE_DESKTOP_PARAMETER` et, plus tard,
+`BANG_GOOGLE_CLIENT_ID`, `BANG_GOOGLE_DESKTOP_PARAMETER` et
 `BANG_MICROSOFT_CLIENT_ID`. Cargo reconstruit les références `option_env!` lorsque
 ces variables changent. Le Microsoft client doit être un client public de bureau,
 sans secret, autorisant les comptes personnels et d’organisation. La redirection
@@ -158,7 +160,10 @@ ne lit pas les identifiants personnels. Les tests OAuth utilisent un serveur sim
 Avant la publication, essayer le paquet réel avec un profil utilisateur vierge :
 consentement Google, synchronisation/envoi, expiration/renouvellement, redémarrage,
 annulation du navigateur, révocation, trousseau verrouillé et session temporaire.
-Microsoft reste différé tant que son enregistrement public n’est pas fourni.
+L’ID client Microsoft public intégré est `17d82cc7-8458-43c3-a8c9-19f737d366fe`.
+Vérifier dans Entra les comptes personnels et professionnels autorisés, la redirection
+`http://localhost/callback` sur la plateforme mobile/bureau et les autorisations
+déléguées Exchange avant de valider la publication.
 
 Références : [OAuth Google Desktop](https://developers.google.com/identity/protocols/oauth2/native-app),
 [IMAP/SMTP Gmail](https://developers.google.com/workspace/gmail/imap/xoauth2-protocol),
