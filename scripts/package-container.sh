@@ -28,7 +28,9 @@ chown -R bang:bang /workspace
 # The container is destroyed after this invocation. Never disable WebKit sandboxing
 # in installed launchers; this override only permits WebKit smoke tests in Docker.
 export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
-su -s /bin/bash - bang -c 'set -euo pipefail; cd /workspace; curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal; export PATH="$HOME/.cargo/bin:$PATH"; npm ci --prefix crates/composer/web; npm run build --prefix crates/composer/web; cargo build --workspace --release --locked -j2; bash scripts/package.sh '"$format"
+su -s /bin/bash - bang -c 'set -euo pipefail; curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
+# Login resets the environment: explicitly preserve only this publisher parameter.
+su --whitelist-environment=BANG_GOOGLE_DESKTOP_PARAMETER -s /bin/bash - bang -c 'set -euo pipefail; export PATH="$HOME/.cargo/bin:$PATH"; cd /workspace; bash scripts/build-package.sh '"$format"
 case "$format" in
   deb)
     apt-get install -y /workspace/dist/*.deb
