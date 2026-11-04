@@ -19,7 +19,7 @@ use crate::account::OAuthProvider;
 use crate::error::{Error, Result};
 
 /// Tokens obtained from an OAuth2 flow.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OAuthTokens {
     /// Access token.
     pub access_token: String,
@@ -27,6 +27,79 @@ pub struct OAuthTokens {
     pub refresh_token: Option<String>,
     /// Expiry as Unix timestamp (seconds), if known.
     pub expires_at: Option<i64>,
+}
+
+impl std::fmt::Debug for OAuthTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OAuthTokens([redacted])")
+    }
+}
+
+/// Renew a grant using the registration that originally issued it.
+pub(crate) async fn refresh(
+    provider: OAuthProvider,
+    registration: &crate::OAuthRegistration,
+    refresh_token: &str,
+    override_url: Option<&str>,
+) -> Result<OAuthTokens> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| Error::Network("Could not start token renewal.".into()))?;
+    let mut params = vec![
+        ("grant_type", "refresh_token"),
+        ("client_id", registration.client_id.as_str()),
+        ("refresh_token", refresh_token),
+    ];
+    if provider == OAuthProvider::Google {
+        if let Some(parameter) = registration.desktop_parameter.as_deref() {
+            params.push(("client_secret", parameter));
+        }
+    }
+    let response = client
+        .post(override_url.unwrap_or(provider_config(provider).token_url))
+        .form(&params)
+        .send()
+        .await
+        .map_err(|_| Error::Network("Token renewal is temporarily unavailable.".into()))?;
+    let success = response.status().is_success();
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| Error::Network("Invalid token renewal response.".into()))?;
+    if !success {
+        return Err(
+            if matches!(
+                json.get("error").and_then(|e| e.as_str()),
+                Some("invalid_grant" | "invalid_client" | "unauthorized_client")
+            ) {
+                Error::ReconnectRequired
+            } else {
+                Error::Network("Token renewal is temporarily unavailable.".into())
+            },
+        );
+    }
+    let access_token = json
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| Error::Network("Invalid token renewal response.".into()))?
+        .to_owned();
+    let seconds = json
+        .get("expires_in")
+        .and_then(|v| v.as_i64())
+        .filter(|v| *v > 0 && *v < 365 * 86400)
+        .ok_or_else(|| Error::Network("Invalid token expiry.".into()))?;
+    Ok(OAuthTokens {
+        access_token,
+        refresh_token: json
+            .get("refresh_token")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned),
+        expires_at: Some(chrono::Utc::now().timestamp() + seconds),
+    })
 }
 
 /// Endpoints and scopes for a provider.
@@ -130,7 +203,7 @@ pub async fn start_flow_with_options(
     if provider == OAuthProvider::Google {
         request = request
             .add_extra_param("access_type", "offline")
-            .add_extra_param("prompt", "consent");
+            .add_extra_param("prompt", "consent select_account");
     } else {
         request = request.add_extra_param("prompt", "select_account");
     }
@@ -143,8 +216,7 @@ pub async fn start_flow_with_options(
     let _cancel_on_drop = CancelListener(cancelled.clone());
     let code = tokio::task::spawn_blocking(move || wait_for_code(&server, &state, &cancelled))
         .await
-        .map_err(|e| Error::Auth(e.to_string()))?
-        .map_err(Error::Auth)?;
+        .map_err(|e| Error::Auth(e.to_string()))??;
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -156,7 +228,7 @@ pub async fn start_flow_with_options(
         .set_pkce_verifier(verifier)
         .request_async(&http)
         .await
-        .map_err(|e| Error::Auth(format!("token exchange: {e}")))?;
+        .map_err(|_| Error::Auth("The provider could not complete sign-in. Try again.".into()))?;
 
     let expires_at = tokens.expires_in().map(|d| {
         std::time::SystemTime::now()
@@ -192,8 +264,11 @@ pub async fn fetch_email(provider: OAuthProvider, access_token: &str) -> Result<
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|e| Error::Auth(e.to_string()))?;
-    let json: serde_json::Value = resp.json().await.map_err(|e| Error::Auth(e.to_string()))?;
+        .map_err(|_| Error::Auth("Could not check the signed-in account.".into()))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|_| Error::Auth("Could not check the signed-in account.".into()))?;
     let email = json
         .get("email")
         .and_then(|v| v.as_str())
@@ -208,32 +283,55 @@ impl Drop for CancelListener {
     }
 }
 
+#[derive(Debug)]
+enum CallbackError {
+    Invalid,
+    Declined,
+}
+
 /// Parse an origin-relative callback from tiny_http and validate state first.
 fn callback_code(
     target: &str,
     expected_state: &str,
-) -> std::result::Result<Option<String>, String> {
+) -> std::result::Result<Option<String>, CallbackError> {
+    if target.len() > 8192
+        || !target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains('\\')
+    {
+        return Ok(None);
+    }
     let url = url::Url::parse("http://127.0.0.1")
         .unwrap()
         .join(target)
-        .map_err(|e| e.to_string())?;
-    if url.path() != "/callback" {
+        .map_err(|_| CallbackError::Invalid)?;
+    if url.host_str() != Some("127.0.0.1") || url.fragment().is_some() || url.path() != "/callback"
+    {
         return Ok(None);
     }
-    let params: std::collections::HashMap<String, String> =
-        url.query_pairs().into_owned().collect();
+    let mut params = std::collections::HashMap::new();
+    for (key, value) in url.query_pairs().into_owned() {
+        if params.insert(key.clone(), value).is_some()
+            && matches!(key.as_str(), "state" | "code" | "error")
+        {
+            return Err(CallbackError::Invalid);
+        }
+    }
     if params.get("state").map(String::as_str) != Some(expected_state) {
-        return Err("Invalid sign-in state. Return to Bang and try again.".into());
+        return Err(CallbackError::Invalid);
     }
     if params.contains_key("error") {
-        return Err("Sign-in was declined. Return to Bang to try again.".into());
+        if params.contains_key("code") {
+            return Err(CallbackError::Invalid);
+        }
+        return Err(CallbackError::Declined);
     }
     params
         .get("code")
         .filter(|code| !code.is_empty())
         .cloned()
         .map(Some)
-        .ok_or_else(|| "Missing sign-in code. Return to Bang and try again.".into())
+        .ok_or(CallbackError::Invalid)
 }
 
 /// Block until a valid callback, cancellation, refusal or timeout.
@@ -241,21 +339,28 @@ fn wait_for_code(
     server: &tiny_http::Server,
     expected_state: &CsrfToken,
     cancelled: &AtomicBool,
-) -> std::result::Result<String, String> {
+) -> Result<String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(300);
     loop {
         if cancelled.load(Ordering::SeqCst) {
-            return Err("Sign-in cancelled".into());
+            return Err(Error::Cancelled);
         }
         if std::time::Instant::now() > deadline {
-            return Err("Sign-in timed out. Try again.".into());
+            return Err(Error::Timeout);
         }
         let request = match server.recv_timeout(Duration::from_millis(200)) {
             Ok(Some(r)) => r,
             Ok(None) => continue,
-            Err(e) => return Err(e.to_string()),
+            Err(_) => return Err(Error::Auth("Could not receive browser sign-in.".into())),
         };
-        let outcome = callback_code(request.url(), expected_state.secret());
+        let outcome = if request.method() == &tiny_http::Method::Get
+            && request.url().starts_with('/')
+            && !request.url().starts_with("//")
+        {
+            callback_code(request.url(), expected_state.secret())
+        } else {
+            Ok(None)
+        };
         let (status, body) = match &outcome {
             Ok(Some(_)) => (
                 200,
@@ -276,11 +381,13 @@ fn wait_for_code(
                 )
                 .unwrap(),
             );
-        request.respond(response).map_err(|e| e.to_string())?;
+        // A disconnected foreign request must not cancel the user's sign-in.
+        let _ = request.respond(response);
         match outcome {
             Ok(Some(code)) => return Ok(code),
             Ok(None) => {}
-            Err(error) => return Err(error),
+            Err(CallbackError::Declined) => return Err(Error::Declined),
+            Err(_) => {}
         }
     }
 }
@@ -329,6 +436,8 @@ mod tests {
         });
         for (path, expected) in [
             ("/favicon.ico", "404"),
+            ("/callback?code=unrelated&state=wrong", "400"),
+            ("/callback?code=one&code=two&state=expected", "400"),
             ("/callback?code=local-code&state=expected", "200"),
         ] {
             let mut stream = std::net::TcpStream::connect(addr).unwrap();
@@ -351,6 +460,7 @@ mod tests {
         assert!(
             wait_for_code(&server, &CsrfToken::new("state".into()), &cancelled)
                 .unwrap_err()
+                .to_string()
                 .contains("cancelled")
         );
     }

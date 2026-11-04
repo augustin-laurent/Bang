@@ -8,22 +8,41 @@ use slint::{include_modules, ComponentHandle, Global};
 include_modules!();
 
 mod accounts;
-mod avatars;
-mod organization;
-mod gtk_host;
-mod reader;
 mod attachments;
+mod avatars;
 mod bridge;
 mod composer;
 mod config;
+mod gtk_host;
 mod i18n;
+mod organization;
 mod preview;
+mod reader;
 mod state;
 #[cfg(all(test, feature = "preview-renderer"))]
 mod ui_tests;
+mod welcome;
 use i18n::tr;
 
 fn main() -> Result<(), slint::PlatformError> {
+    if std::env::args().any(|a| a == "--check-oauth-release") {
+        match bang_core::providers::registration(bang_core::OAuthProvider::Google) {
+            Some(google) if google.client_id.ends_with(".apps.googleusercontent.com") => {
+                println!("Google Desktop registration bundled: {}", google.client_id);
+            }
+            _ => println!("Google: not configured; provider disabled"),
+        }
+        println!(
+            "Microsoft: {}",
+            if bang_core::providers::registration(bang_core::OAuthProvider::Microsoft).is_some() {
+                "public registration bundled"
+            } else {
+                "deferred; provider disabled"
+            }
+        );
+        println!("Publisher must verify production consent and perform a live browser login before release.");
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--preview") {
         return preview::run();
     }
@@ -33,7 +52,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let dirs = directories::ProjectDirs::from("", "", "bang")
         .ok_or_else(|| slint::PlatformError::Other("no data directory".into()))?;
-    std::fs::create_dir_all(dirs.data_dir()).ok();
     let store = Arc::new(
         bang_core::Store::open(&dirs.data_dir().join("bang.db"))
             .map_err(|e| slint::PlatformError::Other(e.to_string()))?,
@@ -47,7 +65,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // Apply the saved theme (light / dark / system).
     let config = config::Config::load();
     ui.set_online_avatars(config.online_avatars);
-    bridge.send(bang_core::UiCommand::SetOnlineAvatars(config.online_avatars));
+    bridge.send(bang_core::UiCommand::SetOnlineAvatars(
+        config.online_avatars,
+    ));
     avatars::wire(&ui, bridge.clone());
     organization::wire(&ui, &store, &state, bridge.clone());
     apply_theme(&ui, &config.theme);
@@ -64,12 +84,8 @@ fn main() -> Result<(), slint::PlatformError> {
         load_folder_view(&ui, &store, bang_core::UNIFIED_INBOX_ID);
     }
 
-    // Resume syncing any saved accounts.
-    if let Ok(accounts) = store.get_accounts() {
-        for account in accounts {
-            bridge.send(bang_core::UiCommand::AddAccount(account));
-        }
-    }
+    // Only the core resolves credentials and migrates old account records.
+    bridge.send(bang_core::UiCommand::RestoreAccounts);
 
     gtk_host::attach(&ui, Some(store.clone()), Some(bridge.clone()));
     accounts::wire(&ui, bridge.clone());
@@ -78,6 +94,12 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_attachments(&ui, &store);
     wire_drafts(&ui, &store, bridge.clone());
     wire_settings(&ui, &store, &state, bridge);
+    welcome::wire(
+        &ui,
+        dirs.config_dir().join("config.toml"),
+        ui.get_account_count() > 0,
+    );
+    gtk_host::watch_welcome_motion(&ui);
     let weak = ui.as_weak();
     ui.window().on_close_requested({
         let weak = weak.clone();
@@ -194,7 +216,9 @@ fn wire_selection(
                 .store(id, std::sync::atomic::Ordering::SeqCst);
             ui.set_selected_label(-1);
             ui.set_selected_category("".into());
-            state.selected_message.store(-1, std::sync::atomic::Ordering::SeqCst);
+            state
+                .selected_message
+                .store(-1, std::sync::atomic::Ordering::SeqCst);
             // Selecting a folder leaves search mode.
             ui.set_search_text("".into());
             state
@@ -223,7 +247,9 @@ fn wire_selection(
                 let id = state
                     .selected_folder
                     .load(std::sync::atomic::Ordering::SeqCst);
-                state.selected_message.store(-1, std::sync::atomic::Ordering::SeqCst);
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
                 load_folder_view(&ui, &store, id);
                 return;
             }
@@ -294,9 +320,13 @@ fn wire_selection(
             // Reply / forward open the composer prefilled with a quote.
             if action == "reply" || action == "forward" {
                 if let Some(ui) = weak.upgrade() {
-                    if let Err(e) =
-                        composer::reply_or_forward(&ui, store.clone(), bridge.clone(), id, action == "forward")
-                    {
+                    if let Err(e) = composer::reply_or_forward(
+                        &ui,
+                        store.clone(),
+                        bridge.clone(),
+                        id,
+                        action == "forward",
+                    ) {
                         ui.set_status_message(format!("{} {e}", tr("Reply unavailable:")).into());
                     }
                 }
@@ -306,9 +336,15 @@ fn wire_selection(
             if action == "snooze" || action == "follow-up" {
                 let at = tomorrow_at(9);
                 let command = if action == "snooze" {
-                    bang_core::UiCommand::Snooze { message_ids: vec![id], until: at }
+                    bang_core::UiCommand::Snooze {
+                        message_ids: vec![id],
+                        until: at,
+                    }
                 } else {
-                    bang_core::UiCommand::SetFollowUp { message_ids: vec![id], at }
+                    bang_core::UiCommand::SetFollowUp {
+                        message_ids: vec![id],
+                        at,
+                    }
                 };
                 bridge.send(command);
                 return;
@@ -442,17 +478,23 @@ fn apply_theme(ui: &BangApp, mode: &str) {
 }
 
 /// Build the settings dialog's account list from the store.
-fn account_rows(store: &Arc<bang_core::Store>) -> Vec<AccountRow> {
+fn account_rows(store: &bang_core::Store, state: &state::UiState) -> Vec<AccountRow> {
     store
         .get_accounts()
         .unwrap_or_default()
         .into_iter()
         .map(|a| AccountRow {
+            reconnect: state.auth_attention.lock().unwrap().contains(&a.id.0),
+            storage_locked: state.storage_locked.lock().unwrap().contains(&a.id.0),
             provider: match a.auth {
-                bang_core::AuthMethod::OAuth2 { provider: bang_core::OAuthProvider::Google, .. } => "google",
-                bang_core::AuthMethod::OAuth2 { .. } => "microsoft",
+                bang_core::StoredAuth::OAuth2 {
+                    provider: bang_core::OAuthProvider::Google,
+                    ..
+                } => "google",
+                bang_core::StoredAuth::OAuth2 { .. } => "microsoft",
                 _ => "",
-            }.into(),
+            }
+            .into(),
             id: a.id.0.clone().into(),
             email: a.email.clone().into(),
         })
@@ -468,12 +510,13 @@ fn wire_settings(
 ) {
     ui.on_settings_opened({
         let store = store.clone();
+        let state = state.clone();
         let weak = ui.as_weak();
         move || {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
-            let rows = account_rows(&store);
+            let rows = account_rows(&store, &state);
             ui.set_settings_accounts(slint::ModelRc::new(slint::VecModel::from(rows)));
             ui.set_settings_theme(config::Config::load().theme.into());
             ui.set_settings_language(config::Config::load().language.into());
@@ -490,7 +533,7 @@ fn wire_settings(
             let mode = mode.to_string();
             let mut config = config::Config::load();
             config.theme = mode.clone();
-            if config.save().is_err() {
+            if welcome::save_preferences(&ui, &mut config).is_err() {
                 ui.set_status_message(tr("Could not save settings").into());
                 return;
             }
@@ -508,7 +551,7 @@ fn wire_settings(
             if let Some(ui) = weak.upgrade() {
                 let mut config = config::Config::load();
                 config.language = mode.to_string();
-                if config.save().is_err() {
+                if welcome::save_preferences(&ui, &mut config).is_err() {
                     ui.set_status_message(tr("Could not save settings").into());
                     return;
                 }
@@ -542,39 +585,34 @@ fn wire_settings(
             }
         }
     });
-    ui.on_settings_account_remove({
+    ui.on_settings_account_reconnect({
+        let weak = ui.as_weak();
         let store = store.clone();
-        let state = state.clone();
+        move |id| {
+            if let (Some(ui), Ok(Some(record))) = (weak.upgrade(), store.get_account(&id)) {
+                accounts::reconnect(&ui, &record);
+            }
+        }
+    });
+    ui.on_settings_account_unlock({
+        let bridge = bridge.clone();
+        move |id| {
+            bridge.send(bang_core::UiCommand::UnlockAccount(bang_core::AccountId(
+                id.into(),
+            )));
+        }
+    });
+    ui.on_settings_account_remove({
         let bridge = bridge.clone();
         let weak = ui.as_weak();
         move |id: slint::SharedString| {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
-            let id = id.to_string();
-            // Delete from the store synchronously so the list refresh is
-            // correct; the command below stops the account's syncer.
-            let _ = store.delete_account(&id);
+            ui.set_status_message(i18n::tr("Removing account…").into());
             bridge.send(bang_core::UiCommand::RemoveAccount(bang_core::AccountId(
-                id,
+                id.into(),
             )));
-            let rows = account_rows(&store);
-            ui.set_settings_accounts(slint::ModelRc::new(slint::VecModel::from(rows)));
-            state.refresh_folders(&ui, &store);
-            state.selected_folder.store(
-                bang_core::UNIFIED_INBOX_ID,
-                std::sync::atomic::Ordering::SeqCst,
-            );
-            load_folder_view(&ui, &store, bang_core::UNIFIED_INBOX_ID);
-        }
-    });
-
-    ui.on_settings_close({
-        let weak = ui.as_weak();
-        move || {
-            if let Some(ui) = weak.upgrade() {
-                ui.set_settings_open(false);
-            }
         }
     });
 }

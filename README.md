@@ -1,10 +1,56 @@
 # Bang
 
+[![CI](https://github.com/augustin-laurent/Bang/actions/workflows/ci.yml/badge.svg)](https://github.com/augustin-laurent/Bang/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+
 A desktop mail client for Linux, written in Rust, with a Mail macOS 26-inspired interface adapted to Linux.
 
 - **UI**: [Slint](https://slint.dev) (Slint chrome in a GTK3 host, embedded WebKit HTML reader; isolated local rich composer)
 - **Engine**: IMAP (per-account syncer thread, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
 - **Status**: early development — see [PLAN.md](PLAN.md) for the roadmap
+
+![Bang inbox in light mode, rendered from fictional offline messages](assets/screenshots/inbox-light.png)
+
+<details>
+<summary>Dark appearance</summary>
+
+![Bang inbox in dark mode, rendered from fictional offline messages](assets/screenshots/inbox-dark.png)
+
+</details>
+
+These are captures of the running Slint UI using fictional offline data, not design mockups.
+
+## Install
+
+Bang is experimental pre-1.0 software. Packages target **Linux x86_64**:
+Ubuntu 24.04, Fedora 44, and current Arch Linux. Other distributions and older
+versions have not been validated. The first `v0.1.0` prerelease is being prepared;
+packages appear in [GitHub Releases](https://github.com/augustin-laurent/Bang/releases)
+only after the manual Google OAuth release checks pass.
+
+Download the matching package and `SHA256SUMS` from the same release. Verify it:
+
+```sh
+# Run in the download directory; select the checksum for your downloaded file.
+grep '  bang_0.1.0-1_amd64.deb$' SHA256SUMS | sha256sum --check
+sudo apt install ./bang_0.1.0-1_amd64.deb      # Ubuntu 24.04
+sudo dnf install ./bang-0.1.0-1.fc44.x86_64.rpm # Fedora 44
+sudo pacman -U ./bang-0.1.0-1-x86_64.pkg.tar.zst # Arch
+bang
+```
+
+For RPM and Arch, select their filenames from `SHA256SUMS` instead. Package managers
+install runtime dependencies, including WebKitGTK and GNOME Keyring. A running
+Secret Service keyring is needed for persistent credentials. Node.js and Rust are
+only required when building from source. The release also includes a source
+archive and checksum-pinned Arch `PKGBUILD`; no AUR package is published.
+
+Google's publisher parameter is not stored in the repository, and Microsoft
+registration is deferred. Their sign-in buttons remain disabled in unconfigured
+preview builds. Gmail needs publisher configuration and live consent checks; generic
+IMAP/SMTP and iCloud app-password setup are also supported. See
+[account setup](docs/ACCOUNTS.md) and [release preparation](docs/RELEASING.md).
 
 ## Features
 
@@ -43,6 +89,11 @@ text field has focus.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organized and how data flows
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — build, test, conventions, and Slint gotchas
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contributing and pull requests
+- [docs/RELEASING.md](docs/RELEASING.md) — packages and release checklist
+- [Discussions](https://github.com/augustin-laurent/Bang/discussions) — questions and ideas
+- [Issues](https://github.com/augustin-laurent/Bang/issues/new/choose) — reproducible bugs and feature requests
+- [SECURITY.md](SECURITY.md) — private vulnerability reporting
 
 ## Build
 
@@ -63,13 +114,22 @@ embedded CID images are local. The isolated rich composer loads only bundled ass
 
 ## Account sign-in
 
-Google and Microsoft use browser-based OAuth with desktop client registrations.
-iCloud has prefilled servers; other providers use separate IMAP/SMTP settings.
-New accounts are checked before saving, without sending a message.
+Google uses browser-based OAuth when a distributor supplies the complete Desktop
+registration at build time; end users never create an OAuth app or edit configuration. Microsoft’s public-client flow
+is implemented but its registration is deferred, so its provider button is disabled
+unless a distributor supplies a public registration.
 
-See [docs/ACCOUNTS.md](docs/ACCOUNTS.md) for Google/Microsoft registration,
-iCloud app passwords, configuration examples and the current OAuth token renewal
-limitation.
+iCloud uses a guided app-password form. Other accounts discover the domain’s
+published IMAP/SMTP settings before offering manual configuration. Both mail
+transports are checked before saving, without sending a message.
+
+Credentials are saved in the Linux session’s Secret Service keyring, separately
+from the mail cache. OAuth tokens renew automatically. If secure storage is
+unavailable, users can explicitly continue for this session and sign in again
+on the next launch. Cached mail remains available when an account needs reconnecting.
+
+See [docs/ACCOUNTS.md](docs/ACCOUNTS.md) for user steps, publisher registration,
+secure-storage behavior, migrations and release checks.
 
 ## Layout
 
@@ -78,3 +138,8 @@ limitation.
 - `crates/composer` — isolated GTK/WebKit host and local TypeScript/Tiptap editor.
 - `assets/design/` — accepted visual references; `assets/fonts/` — bundled OFL fonts.
 - `docs/` — architecture, design and development notes.
+
+## License
+
+Bang is licensed under [MIT](LICENSE). Bundled Noto Sans fonts use the
+[SIL Open Font License](assets/fonts/OFL.txt).

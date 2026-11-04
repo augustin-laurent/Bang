@@ -7,6 +7,8 @@
 
 pub mod account;
 pub mod avatars;
+pub mod credentials;
+pub mod discovery;
 pub mod error;
 pub mod events;
 pub mod imap;
@@ -14,6 +16,7 @@ pub mod message;
 pub mod mime;
 pub mod oauth;
 pub mod organization;
+pub mod providers;
 pub mod service;
 pub mod smtp;
 pub mod store;
@@ -26,7 +29,8 @@ pub use imap::{ImapConn, ImapSession, MailboxStatus, MetaMessage};
 pub use store::{Store, UNIFIED_INBOX_ID};
 
 pub use account::{
-    AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, SmtpConfig, TlsMode,
+    AccountConfig, AccountId, AuthMethod, ImapConfig, OAuthProvider, OAuthRegistration, SmtpConfig,
+    StoredAccount, StoredAuth, TlsMode,
 };
 pub use error::{Error, Result};
 pub use events::{MailEvent, OutgoingAttachment, SendRequest, UiCommand};

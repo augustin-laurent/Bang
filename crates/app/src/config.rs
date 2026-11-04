@@ -17,6 +17,9 @@ pub struct Config {
     /// Fetch sender photos and logos online.
     #[serde(default = "default_online_avatars")]
     pub online_avatars: bool,
+    /// First-launch setup: absent for legacy installs, false while pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub welcome_completed: Option<bool>,
 }
 
 impl Default for Config {
@@ -26,11 +29,14 @@ impl Default for Config {
             theme: default_theme(),
             language: default_theme(),
             online_avatars: true,
+            welcome_completed: None,
         }
     }
 }
 
-fn default_online_avatars() -> bool { true }
+fn default_online_avatars() -> bool {
+    true
+}
 
 fn default_theme() -> String {
     "system".into()
@@ -50,12 +56,35 @@ pub struct OAuthConfig {
 /// One provider's OAuth2 settings.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ProviderConfig {
-    /// OAuth2 client id (empty = not configured).
+    /// Development client ID override (empty = bundled public registration).
     #[serde(default)]
     pub client_id: String,
     /// Optional desktop secret issued with a Google OAuth client.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub client_secret: String,
+}
+
+impl OAuthConfig {
+    /// Resolve a complete development override or the bundled public registration.
+    pub fn registration(
+        &self,
+        provider: bang_core::OAuthProvider,
+    ) -> Option<bang_core::OAuthRegistration> {
+        let settings = match provider {
+            bang_core::OAuthProvider::Google => &self.google,
+            bang_core::OAuthProvider::Microsoft => &self.microsoft,
+        };
+        if !settings.client_id.trim().is_empty() {
+            Some(bang_core::OAuthRegistration {
+                client_id: settings.client_id.trim().into(),
+                desktop_parameter: (provider == bang_core::OAuthProvider::Google
+                    && !settings.client_secret.is_empty())
+                .then(|| settings.client_secret.clone()),
+            })
+        } else {
+            bang_core::providers::registration(provider)
+        }
+    }
 }
 
 impl Config {
@@ -64,7 +93,11 @@ impl Config {
         let Some(dirs) = directories::ProjectDirs::from("", "", "bang") else {
             return Self::default();
         };
-        match std::fs::read_to_string(dirs.config_dir().join("config.toml")) {
+        Self::load_from(&dirs.config_dir().join("config.toml"))
+    }
+
+    pub(crate) fn load_from(path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(path) {
             Ok(s) => toml::from_str(&s).unwrap_or_default(),
             Err(_) => Self::default(),
         }
@@ -78,7 +111,7 @@ impl Config {
         self.save_to(&dirs.config_dir().join("config.toml"))
     }
 
-    fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub(crate) fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -93,6 +126,35 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bundled_registration_is_not_serialized_and_overrides_are_complete() {
+        let mut config = super::Config::default();
+        let bundled = config.oauth.registration(bang_core::OAuthProvider::Google);
+        assert_eq!(
+            bundled.is_some(),
+            bang_core::providers::registration(bang_core::OAuthProvider::Google).is_some()
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(!serialized.contains(bang_core::providers::GOOGLE_CLIENT_ID));
+        if let Some(parameter) = bundled.and_then(|r| r.desktop_parameter) {
+            assert!(!serialized.contains(&parameter));
+        }
+        config.oauth.google.client_id = "development-id".into();
+        let custom = config
+            .oauth
+            .registration(bang_core::OAuthProvider::Google)
+            .unwrap();
+        assert_eq!(custom.client_id, "development-id");
+        assert!(custom.desktop_parameter.is_none());
+        config.oauth.microsoft.client_id = "public-microsoft".into();
+        config.oauth.microsoft.client_secret = "do-not-use".into();
+        assert!(config
+            .oauth
+            .registration(bang_core::OAuthProvider::Microsoft)
+            .unwrap()
+            .desktop_parameter
+            .is_none());
+    }
     #[test]
     fn existing_config_remains_compatible() {
         let cfg: super::Config = toml::from_str("theme = 'dark'").unwrap();
@@ -132,5 +194,23 @@ mod tests {
         // The atomic save must not leave a temp file behind.
         assert!(!path.with_extension("toml.tmp").exists());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn welcome_marker_round_trips_without_changing_legacy_config() {
+        let mut config: super::Config = toml::from_str("theme = 'dark'\nlanguage = 'fr'").unwrap();
+        assert_eq!(config.welcome_completed, None);
+        assert!(!toml::to_string(&config)
+            .unwrap()
+            .contains("welcome_completed"));
+        config.oauth.google.client_id = "preserved-client".into();
+        for completed in [false, true] {
+            config.welcome_completed = Some(completed);
+            let restored: super::Config =
+                toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.welcome_completed, Some(completed));
+            assert_eq!(restored.theme, "dark");
+            assert_eq!(restored.language, "fr");
+            assert_eq!(restored.oauth.google.client_id, "preserved-client");
+        }
     }
 }

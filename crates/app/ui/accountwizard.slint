@@ -6,6 +6,9 @@ component ProviderOption inherits Rectangle {
     in property <string> name; in property <string> description;
     in property <image> logo; in property <bool> branded: false;
     in property <bool> enabled: true;
+    in property <bool> initial-focus: false;
+    changed initial-focus => { if self.initial-focus { focus.focus(); } }
+    init => { if root.initial-focus { focus.focus(); } }
     callback selected();
     height: 72px; border-radius: 8px;
     background: touch.has-hover ? Theme.hover : Theme.bg;
@@ -34,11 +37,20 @@ export component AccountWizard inherits Rectangle {
     in-out property <string> username; in-out property <string> password;
     in-out property <bool> starttls; in-out property <bool> smtp-starttls;
     in-out property <bool> manual: false;
+    in-out property <bool> advanced: false;
+    in property <bool> settings-ready: false;
+    in property <bool> storage-error: false;
+    in property <bool> google-available: true;
+    in property <bool> microsoft-available: false;
+    in property <bool> reconnecting: false;
+    in-out property <string> smtp-username;
+    callback discover(); callback storage-choice(bool); callback app-password();
+    callback email-edited(string);
     callback provider-selected(string); callback oauth-clicked(string); callback add-generic(); callback cancel();
     visible: open; background: #00000044; TouchArea { }
     Rectangle {
         width: min(552px, parent.width - 32px);
-        height: min(root.manual ? 760px : root.provider != "" ? 480px : 552px, parent.height - 32px);
+        height: min(root.manual && root.advanced ? 760px : root.manual ? 560px : root.provider != "" ? 480px : 552px, parent.height - 32px);
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
         background: Theme.bg; border-radius: 16px;
         VerticalLayout { padding: 24px; spacing: 16px;
@@ -46,12 +58,12 @@ export component AccountWizard inherits Rectangle {
                 Text { text: @tr("Add account"); color: Theme.text; font-size: 20px; font-weight: 600; vertical-alignment: center; }
                 ActionButton { modal: true; compact: true; text: @tr("Cancel"); icon: @image-url("icons/close.svg"); clicked => { root.cancel(); } }
             }
-            Text { text: root.provider == "" && !root.manual ? @tr("All your mail, in one place. Choose your provider.") : root.manual ? @tr("Use your provider’s mail settings and app password.") : @tr("Continue in your browser, then come back to Bang."); color: Theme.text-secondary; font-size: 13px; wrap: word-wrap; }
+            Text { text: root.storage-error ? @tr("Choose how to save this account.") : root.provider == "" && !root.manual ? @tr("All your mail, in one place. Choose your provider.") : root.provider == "manual" && !root.settings-ready ? @tr("Enter your email address. Bang will look for your mail settings.") : root.provider == "icloud" ? @tr("Use an app-specific password from your Apple Account.") : root.manual ? @tr("Use your provider’s mail settings and app password.") : @tr("Continue in your browser, then come back to Bang."); color: Theme.text-secondary; font-size: 13px; wrap: word-wrap; }
             ScrollView { content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 VerticalLayout { padding: 4px; spacing: 16px; alignment: start;
                     if !root.manual && root.provider == "": VerticalLayout { spacing: 10px;
-                        ProviderOption { name: "Google"; description: "Gmail · Google Workspace"; logo: @image-url("icons/google.svg"); branded: true; selected => { root.provider-selected("google"); } }
-                        ProviderOption { name: "Microsoft"; description: "Outlook · Hotmail · Microsoft 365"; logo: @image-url("icons/microsoft.svg"); branded: true; selected => { root.provider-selected("microsoft"); } }
+                        ProviderOption { initial-focus: root.open; name: "Google"; description: root.google-available ? "Gmail · Google Workspace" : @tr("Available in a future release"); enabled: root.google-available; logo: @image-url("icons/google.svg"); branded: true; selected => { root.provider-selected("google"); } }
+                        ProviderOption { name: "Microsoft"; description: root.microsoft-available ? "Outlook · Hotmail · Microsoft 365" : @tr("Available in a future release"); enabled: root.microsoft-available; logo: @image-url("icons/microsoft.svg"); branded: true; selected => { root.provider-selected("microsoft"); } }
                         ProviderOption { name: "iCloud"; description: @tr("Apple Mail · App password"); logo: @image-url("icons/cloud.svg"); selected => { root.provider-selected("icloud"); } }
                         ProviderOption { name: @tr("Other mail account"); description: @tr("IMAP / SMTP · Custom server"); logo: @image-url("icons/server.svg"); selected => { root.provider-selected("manual"); } }
                     }
@@ -60,31 +72,44 @@ export component AccountWizard inherits Rectangle {
                             Image { source: root.provider == "google" ? @image-url("icons/google.svg") : @image-url("icons/microsoft.svg"); width: 32px; height: 32px; }
                             Text { text: root.provider == "google" ? "Google" : "Microsoft"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
                         }
-                        Field { label: root.provider == "microsoft" ? @tr("Email address") : @tr("Email address (optional)"); placeholder: root.provider == "google" ? "name@gmail.com" : "name@outlook.com"; text <=> root.email; enabled: !root.busy; }
+                        if root.provider == "microsoft": Field { label: @tr("Email address"); placeholder: "name@outlook.com"; text <=> root.email; enabled: !root.busy && !root.reconnecting; }
                         Text { text: @tr("Your password stays with your provider. Bang receives permission to read and send mail."); color: Theme.text-secondary; font-size: 13px; wrap: word-wrap; }
                     }
-                    if root.manual: VerticalLayout { spacing: 16px;
-                        Field { label: @tr("Email address"); text <=> root.email; placeholder: "name@example.com"; enabled: !root.busy; }
-                        Field { label: @tr("Username (if different)"); text <=> root.username; placeholder: @tr("Same as email address"); enabled: !root.busy; }
-                        Field { label: @tr("App password or password"); text <=> root.password; secret: true; enabled: !root.busy; }
-                        Text { text: @tr("Incoming IMAP"); color: Theme.text; font-size: 14px; font-weight: 600; }
-                        HorizontalLayout { spacing: 12px;
-                            Field { label: @tr("Server"); text <=> root.imap-host; placeholder: "imap.example.com"; enabled: !root.busy; }
-                            Field { width: 88px; label: @tr("Port"); text <=> root.imap-port; enabled: !root.busy; }
+                    if root.manual && !root.storage-error: VerticalLayout { spacing: 16px;
+                        Field { label: @tr("Email address"); text <=> root.email; placeholder: "name@example.com"; enabled: !root.busy && !root.reconnecting; edited(value) => { root.email-edited(value); } }
+                        if root.provider == "icloud" || root.settings-ready: VerticalLayout { spacing: 12px;
+                            if root.provider != "icloud": Text { text: @tr("Review these servers before signing in:") + "\nIMAP: " + root.imap-host + " · SMTP: " + root.smtp-host; color: Theme.text-secondary; font-size: 13px; wrap: word-wrap; }
+                            Field { label: root.provider == "icloud" ? @tr("App-specific password") : @tr("App password or password"); text <=> root.password; secret: true; enabled: !root.busy; }
+                            if root.provider == "icloud": ActionButton { modal: true; text: @tr("Create an app password"); icon: @image-url("icons/external.svg"); enabled: !root.busy; clicked => { root.app-password(); } }
                         }
-                        HorizontalLayout { spacing: 8px;
-                            ActionButton { modal: true; framed: true; text: "TLS"; active: !root.starttls; enabled: !root.busy; clicked => { root.starttls = false; root.imap-port = "993"; } }
-                            ActionButton { modal: true; framed: true; text: "STARTTLS"; active: root.starttls; enabled: !root.busy; clicked => { root.starttls = true; root.imap-port = "143"; } }
+                        if root.provider == "icloud" || root.settings-ready: ActionButton { modal: true; framed: true; text: root.advanced ? @tr("Hide advanced settings") : @tr("Advanced"); enabled: !root.busy; clicked => { root.advanced = !root.advanced; } }
+                        if root.advanced: VerticalLayout { spacing: 16px;
+                            Field { label: @tr("Incoming username (if different)"); text <=> root.username; placeholder: @tr("Same as email address"); enabled: !root.busy; }
+                            Field { label: @tr("Outgoing username (if different)"); text <=> root.smtp-username; placeholder: @tr("Same as email address"); enabled: !root.busy; }
+                            Text { text: @tr("Incoming IMAP"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                            HorizontalLayout { spacing: 12px;
+                                Field { label: @tr("Server"); text <=> root.imap-host; placeholder: "imap.example.com"; enabled: !root.busy; }
+                                Field { width: 88px; label: @tr("Port"); text <=> root.imap-port; enabled: !root.busy; }
+                            }
+                            HorizontalLayout { spacing: 8px;
+                                ActionButton { modal: true; framed: true; text: "TLS"; active: !root.starttls; enabled: !root.busy; clicked => { root.starttls = false; root.imap-port = "993"; } }
+                                ActionButton { modal: true; framed: true; text: "STARTTLS"; active: root.starttls; enabled: !root.busy; clicked => { root.starttls = true; root.imap-port = "143"; } }
+                            }
+                            Text { text: @tr("Outgoing SMTP"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                            HorizontalLayout { spacing: 12px;
+                                Field { label: @tr("Server"); text <=> root.smtp-host; placeholder: "smtp.example.com"; enabled: !root.busy; }
+                                Field { width: 88px; label: @tr("Port"); text <=> root.smtp-port; enabled: !root.busy; }
+                            }
+                            HorizontalLayout { spacing: 8px;
+                                ActionButton { modal: true; framed: true; text: "TLS"; active: !root.smtp-starttls; enabled: !root.busy; clicked => { root.smtp-starttls = false; root.smtp-port = "465"; } }
+                                ActionButton { modal: true; framed: true; text: "STARTTLS"; active: root.smtp-starttls; enabled: !root.busy; clicked => { root.smtp-starttls = true; root.smtp-port = "587"; } }
+                            }
                         }
-                        Text { text: @tr("Outgoing SMTP"); color: Theme.text; font-size: 14px; font-weight: 600; }
-                        HorizontalLayout { spacing: 12px;
-                            Field { label: @tr("Server"); text <=> root.smtp-host; placeholder: "smtp.example.com"; enabled: !root.busy; }
-                            Field { width: 88px; label: @tr("Port"); text <=> root.smtp-port; enabled: !root.busy; }
-                        }
-                        HorizontalLayout { spacing: 8px;
-                            ActionButton { modal: true; framed: true; text: "TLS"; active: !root.smtp-starttls; enabled: !root.busy; clicked => { root.smtp-starttls = false; root.smtp-port = "465"; } }
-                            ActionButton { modal: true; framed: true; text: "STARTTLS"; active: root.smtp-starttls; enabled: !root.busy; clicked => { root.smtp-starttls = true; root.smtp-port = "587"; } }
-                        }
+                    }
+                    if root.storage-error: VerticalLayout { spacing: 10px;
+                        Text { text: @tr("For this session, credentials stay in memory. You will sign in again after closing Bang."); color: Theme.text-secondary; font-size: 13px; wrap: word-wrap; }
+                        ActionButton { modal: true; framed: true; text: @tr("Try secure storage again"); enabled: !root.busy; clicked => { root.storage-choice(false); } }
+                        ActionButton { modal: true; text: @tr("Continue for this session"); enabled: !root.busy; clicked => { root.storage-choice(true); } }
                     }
                     if root.status != "": Rectangle {
                         min-height: status-layout.min-height; background: Theme.sidebar-bg; border-radius: 6px;
@@ -99,11 +124,11 @@ export component AccountWizard inherits Rectangle {
                 Image { source: @image-url("icons/shield.svg"); width: 16px; height: 16px; colorize: Theme.text-secondary; }
                 Text { text: @tr("Secure sign-in. Your mail stays yours."); color: Theme.text-secondary; font-size: 12px; wrap: word-wrap; }
             }
-            if root.manual || root.provider != "": HorizontalLayout { spacing: 8px;
+            if (root.manual || root.provider != "") && !root.storage-error: HorizontalLayout { spacing: 8px;
                 ActionButton { modal: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); enabled: !root.busy; clicked => { root.provider-selected(""); } }
                 Rectangle { horizontal-stretch: 1; }
-                ActionButton { modal: true; primary: true; enabled: !root.busy; text: root.busy ? @tr("Connecting…") : root.manual ? @tr("Connect account") : @tr("Continue"); icon: root.manual ? @image-url("icons/check.svg") : @image-url("icons/external.svg");
-                    clicked => { if root.manual { root.add-generic(); } else { root.oauth-clicked(root.provider); } }
+                ActionButton { modal: true; primary: true; enabled: !root.busy; text: root.busy ? @tr("Connecting…") : root.provider == "manual" && !root.settings-ready ? @tr("Find settings") : root.manual ? @tr("Connect account") : @tr("Continue"); icon: root.manual ? @image-url("icons/check.svg") : @image-url("icons/external.svg");
+                    clicked => { if root.provider == "manual" && !root.settings-ready { root.discover(); } else if root.manual { root.add-generic(); } else { root.oauth-clicked(root.provider); } }
                 }
             }
         }

@@ -1,0 +1,36 @@
+name: Bug report
+description: Report reproducible behavior using fictional or redacted data.
+title: "fix: "
+body:
+  - type: markdown
+    attributes:
+      value: Never attach real messages, credentials, tokens, or unredacted account details.
+  - type: input
+    id: version
+    attributes:
+      label: Bang version or commit
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Distribution, desktop, and display server
+      placeholder: Ubuntu 24.04, GNOME, Wayland
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted logs or screenshots

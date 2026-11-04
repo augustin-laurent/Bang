@@ -1,0 +1,86 @@
+name: Draft prerelease
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full SHA of the merged main commit to release
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: draft-prerelease
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.prepare.outputs.sha }}
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate commit and prepare source recipe
+        id: prepare
+        env:
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse origin/main)" = "$RELEASE_COMMIT"
+          # Require successful CI on the exact main commit, not only on its PR.
+          gh run list --commit "$RELEASE_COMMIT" --workflow ci.yml --event push --json conclusion \
+            --jq 'map(select(.conclusion == "success")) | length > 0' | grep -qx true
+          git checkout --detach "$RELEASE_COMMIT"
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p dist
+          git archive --format=tar --prefix="Bang-$version/" "$RELEASE_COMMIT" | gzip -n > "dist/Bang-$version.tar.gz"
+          source_sha=$(sha256sum "dist/Bang-$version.tar.gz" | cut -d' ' -f1)
+          sed "s/@SOURCE_SHA256@/$source_sha/" packaging/arch/PKGBUILD > dist/PKGBUILD
+          cp docs/RELEASE_NOTES_0.1.0.md dist/RELEASE_NOTES.md
+          echo "sha=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bang-source
+          path: dist/*
+          if-no-files-found: error
+  packages:
+    needs: prepare
+    uses: ./.github/workflows/packages.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+  draft:
+    needs: [prepare, packages]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: bang-*
+          merge-multiple: true
+          path: dist
+      - name: Create or update draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cd dist
+          sha256sum -- *.deb *.rpm *.pkg.tar.zst *.tar.gz PKGBUILD > SHA256SUMS
+          tag="v$RELEASE_VERSION"
+          if gh release view "$tag" --json isDraft > /tmp/bang-release.json 2>/tmp/bang-release-error; then
+            python3 -c 'import json; assert json.load(open("/tmp/bang-release.json"))["isDraft"], "Refusing to modify a published release"'
+            gh release edit "$tag" --draft --prerelease --target "$RELEASE_SHA" --notes-file RELEASE_NOTES.md
+          else
+            grep -qi 'release not found' /tmp/bang-release-error
+            gh release create "$tag" --draft --prerelease --target "$RELEASE_SHA" \
+              --title "Bang $tag — Linux preview" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$tag" --clobber -- *.deb *.rpm *.pkg.tar.zst *.tar.gz PKGBUILD SHA256SUMS

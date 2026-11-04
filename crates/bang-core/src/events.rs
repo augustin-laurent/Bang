@@ -1,12 +1,30 @@
 //! Commands and events crossing the core/UI boundary.
 
-use crate::account::{AccountId, AccountConfig};
+use crate::account::{AccountConfig, AccountId};
 use crate::message::{AccountStatus, Folder, MessageFlags, MessageFull, MessageSummary};
 use serde::{Deserialize, Serialize};
 
 /// A command from the UI to the mail core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UiCommand {
+    /// Restore metadata and resolve credentials inside the core.
+    RestoreAccounts,
+    /// Retry secure-storage access without opening a browser or discarding tokens.
+    UnlockAccount(AccountId),
+    /// Discover settings without sending mailbox credentials.
+    DiscoverSettings {
+        /// Mailbox address used only for local domain/username processing.
+        email: String,
+        /// Correlate discovery with the visible wizard.
+        attempt: i32,
+    },
+    /// Retry saving validated credentials, or keep them only in memory.
+    RetryAccountStorage {
+        /// Attempt which owns the retained validated credentials.
+        attempt: i32,
+        /// Explicitly avoid persistent secret storage.
+        session_only: bool,
+    },
     /// Add an account and start syncing it.
     AddAccount(AccountConfig),
     /// Validate a new account before saving it; correlated with the open wizard.
@@ -20,6 +38,8 @@ pub enum UiCommand {
     CancelAccountSetup,
     /// Run an interactive OAuth2 login and add the resulting account.
     OAuthLogin {
+        /// Existing account being reconnected; preserve its local cache.
+        replace: Option<AccountId>,
         /// Provider to authenticate against.
         provider: crate::account::OAuthProvider,
         /// Wizard attempt number.
@@ -28,7 +48,7 @@ pub enum UiCommand {
         email: String,
         /// Optional desktop client secret required by some Google registrations.
         client_secret: Option<String>,
-        /// OAuth2 client id from the local config.
+        /// Resolved public client ID, usually from the bundled registration.
         client_id: String,
     },
     /// Remove an account and stop its syncer.
@@ -171,6 +191,56 @@ pub enum UiCommand {
     Quit,
 }
 
+/// Progress of the currently visible account setup attempt.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum SetupStage {
+    /// The system browser is being launched.
+    OpeningBrowser,
+    /// Waiting for provider authorization.
+    WaitingForAuthorization,
+    /// Authenticating both mail transports.
+    CheckingAccount,
+    /// Resolving public provider settings.
+    FindingSettings,
+    /// Saving credentials to the system keyring.
+    SavingCredentials,
+}
+
+/// Actionable setup errors; UI translations never inspect raw protocol text.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SetupFailure {
+    /// Authorization was declined.
+    Declined,
+    /// Setup exceeded its deadline.
+    Timeout,
+    /// The keyring needs unlocking or a session-only choice.
+    SecureStorage,
+    /// Credentials or provider access policy rejected mail authentication.
+    Authentication,
+    /// Temporary network failure.
+    Network,
+    /// The publisher registration is unavailable or the inputs are invalid.
+    Configuration,
+}
+
+impl SetupFailure {
+    /// Classify a core error without parsing provider error strings.
+    pub fn from_error(error: &crate::Error) -> Self {
+        match error {
+            crate::Error::Declined => Self::Declined,
+            crate::Error::Timeout => Self::Timeout,
+            crate::Error::SecureStorage => Self::SecureStorage,
+            crate::Error::Auth(_) | crate::Error::ReconnectRequired => Self::Authentication,
+            crate::Error::Imap(imap::Error::No(_)) | crate::Error::Imap(imap::Error::Bad(_)) => {
+                Self::Authentication
+            }
+            crate::Error::Smtp(e) if e.is_permanent() => Self::Authentication,
+            crate::Error::Config(_) => Self::Configuration,
+            _ => Self::Network,
+        }
+    }
+}
+
 /// An attachment to include in an outgoing email.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutgoingAttachment {
@@ -213,6 +283,27 @@ pub struct SendRequest {
 /// An event from the mail core to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MailEvent {
+    /// Stage of the current setup or settings-discovery attempt.
+    AccountSetupProgress {
+        /// Wizard attempt number.
+        attempt: i32,
+        /// Current stage.
+        stage: SetupStage,
+    },
+    /// Settings discovery finished without authenticating.
+    AccountSettingsDiscovered {
+        /// Wizard attempt number.
+        attempt: i32,
+        /// Safe editable settings or fallback outcome.
+        result: crate::discovery::DiscoveryResult,
+    },
+    /// Local account removal completed or needs secure-storage recovery.
+    AccountRemoved {
+        /// Removed account.
+        account: AccountId,
+        /// Typed failure, if removal could not complete.
+        error: Option<SetupFailure>,
+    },
     /// Sign-in completed; incoming/outgoing server validation is starting.
     AccountSetupChecking {
         /// Wizard attempt number.
@@ -223,7 +314,7 @@ pub enum MailEvent {
         /// Wizard attempt number.
         attempt: i32,
         /// Failure message; absent after the validated account has been saved.
-        error: Option<String>,
+        error: Option<SetupFailure>,
     },
     /// Account connection status changed.
     AccountStatus {

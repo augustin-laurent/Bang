@@ -89,7 +89,9 @@ impl<T: Read + Write> ImapSession<T> {
     /// Returns `Error::Imap` on failure.
     fn authenticate(client: Client<T>, auth: &AuthMethod, user: &str) -> Result<Self> {
         let session = match auth {
-            AuthMethod::Password { username, password } => client
+            AuthMethod::Password {
+                username, password, ..
+            } => client
                 .login(username, password)
                 .map_err(|(e, _)| e)
                 .map_err(Error::from),
@@ -194,14 +196,16 @@ impl<T: Read + Write> ImapSession<T> {
     /// # Errors
     /// Returns `Error::Imap` on failure.
     pub fn fetch_body(&mut self, uid: u32) -> Result<Vec<u8>> {
-        let fetches = self.session.uid_fetch(&uid.to_string(), "(UID BODY.PEEK[])")?;
+        let fetches = self
+            .session
+            .uid_fetch(&uid.to_string(), "(UID BODY.PEEK[])")?;
         fetches
             .iter()
             .find_map(|f| f.body().map(|b| b.to_vec()))
             .ok_or_else(|| {
-                Error::Imap(imap::Error::Parse(
-                    imap::error::ParseError::Unexpected("no body in FETCH response".into()),
-                ))
+                Error::Imap(imap::Error::Parse(imap::error::ParseError::Unexpected(
+                    "no body in FETCH response".into(),
+                )))
             })
     }
 
@@ -244,7 +248,6 @@ impl<T: Read + Write> ImapSession<T> {
             Err(e) => Err(e.into()),
         }
     }
-
 }
 
 /// A connected IMAP session, TLS or plaintext.
@@ -378,8 +381,7 @@ impl ImapConn {
                 ImapSession::authenticate(client, auth, user).map(Self::Tls)
             }
             TlsMode::Plaintext => {
-                let tcp =
-                    TcpStream::connect(addr).map_err(|e| Error::Network(e.to_string()))?;
+                let tcp = TcpStream::connect(addr).map_err(|e| Error::Network(e.to_string()))?;
                 let mut client = Client::new(tcp);
                 client.read_greeting()?;
                 ImapSession::authenticate(client, auth, user).map(Self::Plain)
@@ -433,7 +435,9 @@ fn convert_fetch(f: &imap::types::Fetch) -> Option<MetaMessage> {
         cc,
         subject,
         size: f.size.unwrap_or(0),
-        classification: f.header().map(crate::organization::ClassificationSignals::from_headers),
+        classification: f
+            .header()
+            .map(crate::organization::ClassificationSignals::from_headers),
     })
 }
 
@@ -451,10 +455,7 @@ fn flag_to_flags(flag: &Flag<'_>) -> MessageFlags {
 
 /// Convert an IMAP address to an `EmailAddress`.
 fn convert_address(a: &imap_proto::types::Address<'_>) -> EmailAddress {
-    let name = a
-        .name
-        .map(crate::mime::decode_header)
-        .unwrap_or_default();
+    let name = a.name.map(crate::mime::decode_header).unwrap_or_default();
     let address = match (&a.mailbox, &a.host) {
         (Some(m), Some(h)) => format!(
             "{}@{}",

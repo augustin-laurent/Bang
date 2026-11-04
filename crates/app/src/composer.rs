@@ -325,10 +325,7 @@ pub fn open(
                     match build_request(&store, &s, &content) {
                         Some(request) => {
                             s.awaiting_save = true;
-                            bridge.send(bang_core::UiCommand::SaveTemplate {
-                                name,
-                                request,
-                            });
+                            bridge.send(bang_core::UiCommand::SaveTemplate { name, request });
                         }
                         None => {
                             let _ = write(
@@ -345,10 +342,7 @@ pub fn open(
                     match build_request(&store, &s, &content) {
                         Some(request) => {
                             s.awaiting_save = true;
-                            bridge.send(bang_core::UiCommand::ScheduleSend {
-                                send_at,
-                                request,
-                            });
+                            bridge.send(bang_core::UiCommand::ScheduleSend { send_at, request });
                         }
                         None => {
                             let _ = write(
@@ -464,7 +458,10 @@ pub fn reply_or_forward(
     }
     let subject = full.summary.subject.clone();
     let prefix = if forward { "Fwd: " } else { "Re: " };
-    let subject = if subject.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase()) {
+    let subject = if subject
+        .to_ascii_lowercase()
+        .starts_with(&prefix.to_ascii_lowercase())
+    {
         subject
     } else {
         format!("{prefix}{subject}")
@@ -551,7 +548,10 @@ mod tests {
     #[test]
     fn quoted_body_escapes_markup() {
         let html = quoted_body_html("<b>bold</b> & more");
-        assert_eq!(html, "<p></p><p>&gt; &lt;b&gt;bold&lt;/b&gt; &amp; more</p>");
+        assert_eq!(
+            html,
+            "<p></p><p>&gt; &lt;b&gt;bold&lt;/b&gt; &amp; more</p>"
+        );
     }
 }
 

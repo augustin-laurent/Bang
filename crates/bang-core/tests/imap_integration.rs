@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use bang_core::account::{AccountId, AccountConfig, AuthMethod, ImapConfig, SmtpConfig, TlsMode};
+use bang_core::account::{AccountConfig, AccountId, AuthMethod, ImapConfig, SmtpConfig, TlsMode};
 use bang_core::events::MailEvent;
 use bang_core::message::{AccountStatus, MessageFlags};
 use bang_core::store::Store;
@@ -61,7 +61,12 @@ impl MiniImap {
     fn start(folders: Vec<(String, Vec<TestMsg>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test port");
         let addr = listener.local_addr().unwrap();
-        let state = Arc::new(Mutex::new(ServerState { folders, commands: Vec::new(), uid_validity: 1, ..Default::default() }));
+        let state = Arc::new(Mutex::new(ServerState {
+            folders,
+            commands: Vec::new(),
+            uid_validity: 1,
+            ..Default::default()
+        }));
         let push_flag = Arc::new(AtomicBool::new(false));
         let thread_state = state.clone();
         let thread_push = push_flag.clone();
@@ -133,7 +138,10 @@ fn unquote(s: &str) -> &str {
 /// Expand a UID set (`N`, `N:*`, `N:M`) against the folder's UIDs.
 fn expand_uid_set(set: &str, msgs: &[TestMsg]) -> Vec<u32> {
     if set.contains(',') {
-        return set.split(',').flat_map(|part| expand_uid_set(part, msgs)).collect();
+        return set
+            .split(',')
+            .flat_map(|part| expand_uid_set(part, msgs))
+            .collect();
     }
     let uids: Vec<u32> = msgs.iter().map(|m| m.uid).collect();
     let (lo_s, hi_s) = match set.split_once(':') {
@@ -203,10 +211,19 @@ fn handle_conn(
                 "* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)",
             );
             let validity = state.lock().unwrap().uid_validity;
-            write_line(&mut writer, &format!("* OK [UIDVALIDITY {validity}] UIDs valid"));
+            write_line(
+                &mut writer,
+                &format!("* OK [UIDVALIDITY {validity}] UIDs valid"),
+            );
             let uid_next = msgs.last().map(|m| m.uid + 1).unwrap_or(1);
-            write_line(&mut writer, &format!("* OK [UIDNEXT {uid_next}] Predicted next UID"));
-            write_line(&mut writer, &format!("{tag} OK [READ-WRITE] SELECT completed"));
+            write_line(
+                &mut writer,
+                &format!("* OK [UIDNEXT {uid_next}] Predicted next UID"),
+            );
+            write_line(
+                &mut writer,
+                &format!("{tag} OK [READ-WRITE] SELECT completed"),
+            );
         } else if upper.starts_with("FETCH") {
             // Translate sequence numbers into the corresponding message UIDs.
             let name = selected.clone().unwrap_or_default();
@@ -214,14 +231,28 @@ fn handle_conn(
             let (set, query) = args.split_once(' ').unwrap();
             let st = state.lock().unwrap();
             let msgs = &st.folders.iter().find(|(n, _)| *n == name).unwrap().1;
-            let sequence_msgs: Vec<_> = msgs.iter().enumerate().map(|(i, m)| {
-                let mut m = m.clone(); m.uid = i as u32 + 1; m
-            }).collect();
-            let uids = expand_uid_set(set, &sequence_msgs).iter()
+            let sequence_msgs: Vec<_> = msgs
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let mut m = m.clone();
+                    m.uid = i as u32 + 1;
+                    m
+                })
+                .collect();
+            let uids = expand_uid_set(set, &sequence_msgs)
+                .iter()
                 .map(|seq| msgs[*seq as usize - 1].uid.to_string())
-                .collect::<Vec<_>>().join(",");
+                .collect::<Vec<_>>()
+                .join(",");
             drop(st);
-            handle_uid_fetch(&mut writer, tag, &state, &selected, &format!("UID FETCH {uids} {query}"))?;
+            handle_uid_fetch(
+                &mut writer,
+                tag,
+                &state,
+                &selected,
+                &format!("UID FETCH {uids} {query}"),
+            )?;
         } else if upper.starts_with("UID FETCH") {
             handle_uid_fetch(&mut writer, tag, &state, &selected, rest)?;
         } else if upper.starts_with("UID STORE") {
@@ -230,7 +261,9 @@ fn handle_conn(
             handle_uid_expunge(&mut writer, tag, &state, &selected, rest);
         } else if upper.starts_with("IDLE") {
             write_line(&mut writer, "+ idling");
-            writer.set_read_timeout(Some(Duration::from_millis(200))).ok();
+            writer
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .ok();
             let done = idle_loop(&mut reader, &mut writer, tag, &state, &selected, &push_flag);
             writer.set_read_timeout(None).ok();
             if !done {
@@ -271,7 +304,12 @@ fn idle_loop(
                 // Any other command during IDLE is a protocol error for our
                 // test client; ignore and keep waiting.
             }
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
                 if push_flag.swap(false, Ordering::SeqCst) {
                     let name = selected.clone().unwrap_or_default();
                     let count = state
@@ -322,7 +360,10 @@ fn handle_uid_fetch(
         let delay = {
             let mut st = state.lock().unwrap();
             if std::mem::take(&mut st.fail_body_once) {
-                return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "test disconnect"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "test disconnect",
+                ));
             }
             st.body_delay
         };
@@ -344,7 +385,13 @@ fn handle_uid_fetch(
                 .and_then(|_| writer.write_all(&msg.raw))
                 .and_then(|_| writer.write_all(b")\r\n"))?;
         } else if query.trim() == "(UID FLAGS)" {
-            write_line(writer, &format!("* {seq} FETCH (UID {uid} FLAGS ({}))", imap_flags(msg.flags)));
+            write_line(
+                writer,
+                &format!(
+                    "* {seq} FETCH (UID {uid} FLAGS ({}))",
+                    imap_flags(msg.flags)
+                ),
+            );
         } else {
             let date = chrono::DateTime::from_timestamp(msg.date, 0)
                 .map(|d| d.format("%d-%b-%Y %H:%M:%S %z").to_string())
@@ -361,11 +408,30 @@ fn handle_uid_fetch(
             let prefix = format!("* {seq} FETCH (UID {uid} FLAGS ({}) INTERNALDATE \"{date}\" ENVELOPE {envelope} RFC822.SIZE {}", imap_flags(msg.flags), msg.raw.len());
             if query.contains("HEADER.FIELDS") {
                 let raw = String::from_utf8_lossy(&msg.raw);
-                let headers = raw.split("\r\n\r\n").next().unwrap_or("").lines().filter(|line| ["list-id:","list-unsubscribe:","precedence:","auto-submitted:"].iter().any(|field|line.to_ascii_lowercase().starts_with(field))).collect::<Vec<_>>().join("\r\n") + "\r\n\r\n";
+                let headers = raw
+                    .split("\r\n\r\n")
+                    .next()
+                    .unwrap_or("")
+                    .lines()
+                    .filter(|line| {
+                        [
+                            "list-id:",
+                            "list-unsubscribe:",
+                            "precedence:",
+                            "auto-submitted:",
+                        ]
+                        .iter()
+                        .any(|field| line.to_ascii_lowercase().starts_with(field))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\r\n")
+                    + "\r\n\r\n";
                 write!(writer,"{prefix} BODY[HEADER.FIELDS (LIST-ID LIST-UNSUBSCRIBE PRECEDENCE AUTO-SUBMITTED)] {{{}}}\r\n",headers.len())?;
                 writer.write_all(headers.as_bytes())?;
                 writer.write_all(b")\r\n")?;
-            } else {write_line(writer,&format!("{prefix})"));}
+            } else {
+                write_line(writer, &format!("{prefix})"));
+            }
         }
     }
     write_line(writer, &format!("{tag} OK UID FETCH completed"));
@@ -470,6 +536,7 @@ fn test_account(addr: std::net::SocketAddr) -> AccountConfig {
             tls: TlsMode::Plaintext,
         },
         auth: AuthMethod::Password {
+            smtp_username: String::new(),
             username: "test@bang.test".into(),
             password: "secret".into(),
         },
@@ -515,10 +582,7 @@ fn wait_for_event(
 fn start_and_connect(
     server: &MiniImap,
     store: Arc<Store>,
-) -> (
-    mpsc::Sender<SyncerCommand>,
-    UnboundedReceiver<MailEvent>,
-) {
+) -> (mpsc::Sender<SyncerCommand>, UnboundedReceiver<MailEvent>) {
     let config = test_account(server.addr);
     // The syncer assumes the account already exists in the store (the app's
     // MailService saves it before starting the syncer).
@@ -655,7 +719,10 @@ fn delete_removes_message_from_server_and_store() {
     // The syncer expunges on the server and removes the local row.
     let gone = wait_for_event(&mut rx, Duration::from_secs(10), |e| {
         matches!(e, MailEvent::MessagesUpdated { .. })
-            && store.get_message(doomed).map(|m| m.is_none()).unwrap_or(false)
+            && store
+                .get_message(doomed)
+                .map(|m| m.is_none())
+                .unwrap_or(false)
     });
     assert!(gone.is_some(), "deletion was not applied");
 
@@ -721,7 +788,6 @@ fn encoded_metadata_and_body_are_decoded_over_imap() {
     tx.send(SyncerCommand::Quit).unwrap();
 }
 
-
 #[test]
 fn sync_fetches_metadata_only_and_preserves_lazy_cache_on_flag_refresh() {
     use bang_core::events::UiCommand;
@@ -774,7 +840,9 @@ fn sync_fetches_metadata_only_and_preserves_lazy_cache_on_flag_refresh() {
     assert!(commands
         .iter()
         .any(|c| c == "UID FETCH 2:2 (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (LIST-ID LIST-UNSUBSCRIBE PRECEDENCE AUTO-SUBMITTED)])"));
-    assert!(commands.iter().all(|c| !c.contains("BODY.PEEK[]") && !c.contains("BODY.PEEK[TEXT]")));
+    assert!(commands
+        .iter()
+        .all(|c| !c.contains("BODY.PEEK[]") && !c.contains("BODY.PEEK[TEXT]")));
 
     // A flags-only update with no new UID must not refetch any envelope.
     let checkpoint = server.state.lock().unwrap().commands.len();
@@ -874,7 +942,6 @@ fn uidvalidity_change_discards_old_cached_bodies() {
     );
     tx.send(SyncerCommand::Quit).unwrap();
 }
-
 
 #[test]
 fn opening_a_message_does_not_wait_for_idle_or_server_push() {
@@ -1069,15 +1136,35 @@ fn interactive_fetch_refuses_a_reused_uid_before_background_resync() {
 
 #[test]
 fn list_headers_classify_without_fetching_a_body() {
-    let mut message=msg(1,"Project briefing",MessageFlags::empty());
-    message.raw=[b"List-Id: <weekly.bang.test>\r\nList-Unsubscribe: <https://example.com/unsubscribe>\r\n".as_slice(),&message.raw].concat();
-    let server=MiniImap::start(vec![("INBOX".into(),vec![message])]);
-    let store=Arc::new(Store::open_in_memory().unwrap());
-    let (tx,_events)=start_and_connect(&server,store.clone());
-    let message=store.get_unified_inbox(10).unwrap().remove(0);
-    assert_eq!(store.message_organization(message.id).unwrap().category,bang_core::organization::MailCategory::Updates);
+    let mut message = msg(1, "Project briefing", MessageFlags::empty());
+    message.raw = [
+        b"List-Id: <weekly.bang.test>\r\nList-Unsubscribe: <https://example.com/unsubscribe>\r\n"
+            .as_slice(),
+        &message.raw,
+    ]
+    .concat();
+    let server = MiniImap::start(vec![("INBOX".into(), vec![message])]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, _events) = start_and_connect(&server, store.clone());
+    let message = store.get_unified_inbox(10).unwrap().remove(0);
+    assert_eq!(
+        store.message_organization(message.id).unwrap().category,
+        bang_core::organization::MailCategory::Updates
+    );
     assert!(store.get_message_full(message.id).unwrap().is_none());
-    assert!(server.state.lock().unwrap().commands.iter().any(|c|c.contains("BODY.PEEK[HEADER.FIELDS")));
-    assert!(server.state.lock().unwrap().commands.iter().all(|c|!c.contains("BODY.PEEK[]")));
+    assert!(server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .any(|c| c.contains("BODY.PEEK[HEADER.FIELDS")));
+    assert!(server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .all(|c| !c.contains("BODY.PEEK[]")));
     tx.send(SyncerCommand::Quit).unwrap();
 }

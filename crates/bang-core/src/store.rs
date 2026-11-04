@@ -8,7 +8,10 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::account::AccountConfig;
+#[path = "private_storage.rs"]
+mod private_storage;
+
+use crate::account::{AccountConfig, StoredAccount};
 use crate::error::{Error, Result};
 use crate::events::SendRequest;
 use crate::message::{
@@ -206,23 +209,27 @@ pub struct Store {
 impl Store {
     /// Open (or create) the store at the given path.
     ///
-    /// Enables WAL mode and runs any pending migrations.
+    /// Enables WAL mode and runs any pending migrations. File-backed stores
+    /// require an owned directory not writable by other users. Existing parent
+    /// directory modes are preserved; credential files are restricted to 0600.
+    /// SQLite memory/temporary paths and file URIs with `mode`/`cache` options
+    /// retain their SQLite semantics; other URI options are rejected explicitly.
     ///
     /// # Errors
     /// Returns `Error::Store` if the database cannot be opened or migrated.
     pub fn open(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Store(format!("create data dir: {e}")))?;
-        }
-        let conn = Connection::open(path).map_err(|e| Error::Store(e.to_string()))?;
+        let storage_path = private_storage::prepare(path)
+            .map_err(|e| Error::Store(format!("protect mail store: {e}")))?;
+        let flags = rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let conn =
+            Connection::open_with_flags(path, flags).map_err(|e| Error::Store(e.to_string()))?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| Error::Store(e.to_string()))?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(|e| Error::Store(e.to_string()))?;
         let store = Self {
             conn: Mutex::new(conn),
-            attachments_dir: path.parent().map(|p| p.join("attachments")),
+            attachments_dir: storage_path.and_then(|p| p.parent().map(|p| p.join("attachments"))),
         };
         store.migrate()?;
         Ok(store)
@@ -235,7 +242,8 @@ impl Store {
     #[cfg(any(test, feature = "integration"))]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(|e| Error::Store(e.to_string()))?;
-        conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| Error::Store(e.to_string()))?;
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .map_err(|e| Error::Store(e.to_string()))?;
         let store = Self {
             conn: Mutex::new(conn),
             attachments_dir: None,
@@ -311,11 +319,18 @@ impl Store {
     // Accounts
     // ------------------------------------------------------------------
 
-    /// Insert or update an account.
+    /// Insert or update session-only metadata extracted from a runtime account.
+    /// This deliberately does not persist credentials. Production sign-in uses
+    /// CredentialManager to save the secret and its metadata together.
     ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
     pub fn save_account(&self, config: &AccountConfig) -> Result<()> {
+        self.save_account_record(&config.metadata(None, None))
+    }
+
+    /// Save only account metadata; mailbox credentials cannot be represented here.
+    pub fn save_account_record(&self, config: &StoredAccount) -> Result<()> {
         let conn = self.lock()?;
         let json = serde_json::to_string(config).map_err(|e| Error::Store(e.to_string()))?;
         conn.execute(
@@ -337,7 +352,7 @@ impl Store {
     ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
-    pub fn get_accounts(&self) -> Result<Vec<AccountConfig>> {
+    pub fn get_accounts(&self) -> Result<Vec<StoredAccount>> {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare("SELECT config FROM accounts ORDER BY created_at")
@@ -348,7 +363,7 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let json = row.map_err(|e| Error::Store(e.to_string()))?;
-            let config: AccountConfig =
+            let config: StoredAccount =
                 serde_json::from_str(&json).map_err(|e| Error::Store(e.to_string()))?;
             out.push(config);
         }
@@ -359,12 +374,14 @@ impl Store {
     ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
-    pub fn get_account(&self, id: &str) -> Result<Option<AccountConfig>> {
+    pub fn get_account(&self, id: &str) -> Result<Option<StoredAccount>> {
         let conn = self.lock()?;
         let json: Option<String> = conn
-            .query_row("SELECT config FROM accounts WHERE id = ?1", params![id], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT config FROM accounts WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(|e| Error::Store(e.to_string()))?;
         match json {
@@ -373,6 +390,20 @@ impl Store {
                 .map_err(|e| Error::Store(e.to_string())),
             None => Ok(None),
         }
+    }
+
+    /// Read an old secret-bearing row only for migration inside the core.
+    pub(crate) fn legacy_account(&self, id: &str) -> Result<Option<AccountConfig>> {
+        let conn = self.lock()?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT config FROM accounts WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(json.and_then(|s| serde_json::from_str::<AccountConfig>(&s).ok()))
     }
 
     /// Delete an account and all its data (folders, messages, attachments).
@@ -441,14 +472,18 @@ impl Store {
             }
         }
         sql.push(')');
-        let mut stmt = conn.prepare(&sql).map_err(|e| Error::Store(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| Error::Store(e.to_string()))?;
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(account_id.to_string())];
         for p in paths {
             params_vec.push(Box::new(p.clone()));
         }
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
-        stmt.execute(refs.as_slice()).map_err(|e| Error::Store(e.to_string()))?;
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|b| b.as_ref()).collect();
+        stmt.execute(refs.as_slice())
+            .map_err(|e| Error::Store(e.to_string()))?;
         Ok(())
     }
 
@@ -842,9 +877,11 @@ impl Store {
         let conn = self.lock()?;
         for id in ids {
             let current: i64 = conn
-                .query_row("SELECT flags FROM messages WHERE id = ?1", params![id], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    "SELECT flags FROM messages WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
                 .map_err(|e| Error::Store(e.to_string()))?;
             let mut current = MessageFlags::from_bits_truncate(current as u32);
             if add {
@@ -1018,7 +1055,9 @@ impl Store {
             .prepare("SELECT id, request FROM pending_sends WHERE send_at <= ?1 ORDER BY send_at")
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(params![now], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .query_map(params![now], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1039,17 +1078,14 @@ impl Store {
             .prepare("SELECT id, account_id, request, send_at FROM pending_sends ORDER BY send_at")
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(
-                [],
-                |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Vec<u8>>(2)?,
-                        r.get::<_, i64>(3)?,
-                    ))
-                },
-            )
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1103,21 +1139,19 @@ impl Store {
             .prepare("SELECT id, account_id, request, updated_at FROM drafts ORDER BY updated_at DESC, id DESC")
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(
-                [],
-                |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Vec<u8>>(2)?,
-                        r.get::<_, i64>(3)?,
-                    ))
-                },
-            )
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, account_id, json, updated_at) = row.map_err(|e| Error::Store(e.to_string()))?;
+            let (id, account_id, json, updated_at) =
+                row.map_err(|e| Error::Store(e.to_string()))?;
             let request: SendRequest =
                 serde_json::from_slice(&json).map_err(|e| Error::Store(e.to_string()))?;
             out.push(Draft {
@@ -1138,9 +1172,11 @@ impl Store {
     pub fn get_draft(&self, id: i64) -> Result<Option<SendRequest>> {
         let conn = self.lock()?;
         let json: Option<Vec<u8>> = conn
-            .query_row("SELECT request FROM drafts WHERE id = ?1", params![id], |r| {
-                r.get::<_, Vec<u8>>(0)
-            })
+            .query_row(
+                "SELECT request FROM drafts WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
             .optional()
             .map_err(|e| Error::Store(e.to_string()))?;
         match json {
@@ -1189,16 +1225,13 @@ impl Store {
             .prepare("SELECT id, name, request FROM templates ORDER BY name COLLATE NOCASE")
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(
-                [],
-                |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Vec<u8>>(2)?,
-                    ))
-                },
-            )
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1221,9 +1254,11 @@ impl Store {
     pub fn get_template(&self, id: i64) -> Result<Option<SendRequest>> {
         let conn = self.lock()?;
         let json: Option<Vec<u8>> = conn
-            .query_row("SELECT request FROM templates WHERE id = ?1", params![id], |r| {
-                r.get::<_, Vec<u8>>(0)
-            })
+            .query_row(
+                "SELECT request FROM templates WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
             .optional()
             .map_err(|e| Error::Store(e.to_string()))?;
         match json {
@@ -1351,7 +1386,12 @@ impl Store {
             .as_ref()
             .ok_or_else(|| Error::Store("in-memory store: no attachment dir".into()))?;
         let msg_dir = dir.join(message_id.to_string());
-        std::fs::create_dir_all(&msg_dir).map_err(|e| Error::Store(e.to_string()))?;
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&msg_dir)
+            .map_err(|e| Error::Store(e.to_string()))?;
         let name = sanitize_filename(filename);
         let mut path = msg_dir.join(&name);
         let mut n = 1;
@@ -1404,7 +1444,12 @@ impl Store {
     ///
     /// # Errors
     /// Returns `Error::Store` on database failure.
-    pub fn search(&self, account_id: &str, query: &str, limit: usize) -> Result<Vec<MessageSummary>> {
+    pub fn search(
+        &self,
+        account_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MessageSummary>> {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
@@ -1418,7 +1463,10 @@ impl Store {
             )
             .map_err(|e| Error::Store(e.to_string()))?;
         let rows = stmt
-            .query_map(params![account_id, query, limit as i64], Self::row_to_summary)
+            .query_map(
+                params![account_id, query, limit as i64],
+                Self::row_to_summary,
+            )
             .map_err(|e| Error::Store(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1458,16 +1506,13 @@ impl Store {
 }
 
 /// Reduce an untrusted attachment file name to a safe single component.
-fn sanitize_filename(name: &str) -> String {
-    let base = Path::new(name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("attachment")
-        .to_string();
-    if base.is_empty() || base == "." || base == ".." {
+pub fn sanitize_filename(name: &str) -> String {
+    // MIME names may use either platform's separator, regardless of our host.
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    if base.is_empty() || base == "." || base == ".." || base.chars().any(char::is_control) {
         "attachment".into()
     } else {
-        base
+        base.into()
     }
 }
 
@@ -1507,6 +1552,7 @@ mod tests {
                 tls: TlsMode::Tls,
             },
             auth: AuthMethod::Password {
+                smtp_username: String::new(),
                 username: id.into(),
                 password: "secret".into(),
             },
@@ -1562,6 +1608,109 @@ mod tests {
         assert!(store.get_account("alice").unwrap().is_none());
     }
 
+    #[tokio::test]
+    async fn legacy_migration_preserves_secrets_until_keyring_commit_and_never_exposes_them_to_ui()
+    {
+        use crate::credentials::{CredentialManager, CredentialStore, MemorySecretStore};
+        use std::{future::Future, pin::Pin, sync::Arc};
+        struct Locked;
+        impl CredentialStore for Locked {
+            fn load<'a>(
+                &'a self,
+                _: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<Option<AuthMethod>>> + Send + 'a>> {
+                Box::pin(async { Err(Error::SecureStorage) })
+            }
+            fn save<'a>(
+                &'a self,
+                _: &'a str,
+                _: &'a AuthMethod,
+            ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+                Box::pin(async { Err(Error::SecureStorage) })
+            }
+            fn delete<'a>(
+                &'a self,
+                _: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let account = test_account("legacy");
+        let legacy_json = serde_json::to_string(&account).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts(id,email,config,created_at) VALUES(?1,?2,?3,0)",
+                params![account.id.0, account.email, legacy_json],
+            )
+            .unwrap();
+        let metadata = store.get_account("legacy").unwrap().unwrap();
+        assert!(!serde_json::to_string(&metadata).unwrap().contains("secret"));
+        let locked = CredentialManager::new(store.clone(), Arc::new(Locked));
+        assert!(matches!(
+            locked.restore(metadata.clone()).await,
+            Err(Error::SecureStorage)
+        ));
+        assert!(store.legacy_account("legacy").unwrap().is_some());
+        let backend = Arc::new(MemorySecretStore::default());
+        let manager = CredentialManager::new(store.clone(), backend.clone());
+        manager.restore(metadata).await.unwrap();
+        assert!(store.legacy_account("legacy").unwrap().is_none());
+        assert!(
+            matches!(manager.current("legacy").await.unwrap(), AuthMethod::Password { password, .. } if password == "secret")
+        );
+        let saved = store.get_account("legacy").unwrap().unwrap();
+        assert!(saved.auth.credential_ref().is_some());
+        let restarted = CredentialManager::new(store, backend);
+        restarted.restore(saved).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_oauth_requires_reconnect_without_deleting_cached_mail() {
+        use crate::credentials::{CredentialManager, MemorySecretStore};
+        let store = std::sync::Arc::new(Store::open_in_memory().unwrap());
+        let mut account = test_account("legacy-oauth");
+        account.auth = AuthMethod::OAuth2 {
+            provider: crate::OAuthProvider::Google,
+            access_token: "legacy-token".into(),
+            refresh_token: Some("legacy-refresh".into()),
+            expires_at: Some(1),
+        };
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO accounts(id,email,config,created_at) VALUES(?1,?2,?3,0)",
+                params![
+                    account.id.0,
+                    account.email,
+                    serde_json::to_string(&account).unwrap()
+                ],
+            )
+            .unwrap();
+        store
+            .upsert_folder(&test_folder("legacy-oauth", "INBOX"))
+            .unwrap();
+        let metadata = store.get_account("legacy-oauth").unwrap().unwrap();
+        assert!(!serde_json::to_string(&metadata)
+            .unwrap()
+            .contains("legacy-token"));
+        let manager = CredentialManager::new(
+            store.clone(),
+            std::sync::Arc::new(MemorySecretStore::default()),
+        );
+        assert!(matches!(
+            manager.restore(metadata).await,
+            Err(Error::ReconnectRequired)
+        ));
+        assert_eq!(store.get_folders("legacy-oauth").unwrap().len(), 1);
+        assert!(store.legacy_account("legacy-oauth").unwrap().is_some());
+    }
+
     #[test]
     fn folder_upsert_and_sync_state() {
         let store = Store::open_in_memory().unwrap();
@@ -1577,13 +1726,8 @@ mod tests {
 
         // Sync state: (last uid, uid validity). A fresh folder starts at
         // (0, None) — the syncer treats last_uid == 0 as "full sync".
-        assert_eq!(
-            store.get_folder_sync_state(id).unwrap(),
-            Some((0, None))
-        );
-        store
-            .set_folder_sync_state(id, 42, Some(7))
-            .unwrap();
+        assert_eq!(store.get_folder_sync_state(id).unwrap(), Some((0, None)));
+        store.set_folder_sync_state(id, 42, Some(7)).unwrap();
         assert_eq!(
             store.get_folder_sync_state(id).unwrap(),
             Some((42, Some(7)))
@@ -1692,7 +1836,10 @@ mod tests {
         let id2 = store.upsert_message(&msg).unwrap();
         assert_eq!(id, id2);
 
-        let got = store.get_message_by_uid("alice", folder_id, 1).unwrap().unwrap();
+        let got = store
+            .get_message_by_uid("alice", folder_id, 1)
+            .unwrap()
+            .unwrap();
         assert_eq!(got.subject, "Hello");
         assert_eq!(got.from.address, "alice@example.com");
 
@@ -2017,7 +2164,10 @@ mod tests {
         let store = Store::open(&path).unwrap();
         store.save_account(&test_account("alice")).unwrap();
         let id = store
-            .schedule_send(&test_send_request("alice"), chrono::Utc::now().timestamp() + 3600)
+            .schedule_send(
+                &test_send_request("alice"),
+                chrono::Utc::now().timestamp() + 3600,
+            )
             .unwrap();
         assert_eq!(store.get_pending_sends().unwrap().len(), 1);
         store.remove_send(id).unwrap();
@@ -2047,8 +2197,12 @@ mod tests {
         assert_eq!(store.get_drafts().unwrap().len(), 1);
 
         // Templates: named, listed by name, full request round-trips.
-        let t1 = store.save_template("Congés", &test_send_request("alice")).unwrap();
-        let t2 = store.save_template("Alpha", &test_send_request("alice")).unwrap();
+        let t1 = store
+            .save_template("Congés", &test_send_request("alice"))
+            .unwrap();
+        let t2 = store
+            .save_template("Alpha", &test_send_request("alice"))
+            .unwrap();
         let templates = store.get_templates().unwrap();
         assert_eq!(templates.len(), 2);
         assert_eq!(templates[0].id, t2); // "Alpha" sorts before "Congés"
@@ -2082,7 +2236,9 @@ mod tests {
         let store = Store::open(&path).unwrap();
         store.save_account(&test_account("alice")).unwrap();
         let d = store.save_draft(&test_send_request("alice")).unwrap();
-        let t = store.save_template("Test", &test_send_request("alice")).unwrap();
+        let t = store
+            .save_template("Test", &test_send_request("alice"))
+            .unwrap();
         assert_eq!(store.get_drafts().unwrap().len(), 1);
         assert_eq!(store.get_templates().unwrap().len(), 1);
         store.delete_draft(d).unwrap();
@@ -2210,7 +2366,9 @@ mod tests {
     #[test]
     fn v5_upgrade_backfills_and_organization_survives_restart() {
         use crate::organization::MailCategory as C;
-        let path = std::env::temp_dir().join(format!("bang-org-{}.db", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bang-org-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mail.db");
         let _ = std::fs::remove_file(&path);
         let conn = Connection::open(&path).unwrap();
         for sql in [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4] {
@@ -2248,8 +2406,6 @@ mod tests {
             assert_eq!(organization.labels.len(), 1);
             assert_eq!(store.search_all("facture", 10).unwrap().len(), 1);
         }
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
-
 }
-
