@@ -31,6 +31,7 @@ Service is required for persistent credentials; session-only sign-in must be
 explicitly selected when it is unavailable. No AUR or distribution repository
 publication is included. Packages and checksums are not separately signed.
 
-Google is disabled in unconfigured preview builds: the repository contains no
-publisher desktop parameter. A distributor must supply the complete registration
-at build time and perform the live checks before enabling and publishing it.
+Release builds receive the Google Desktop publisher parameter from the repository
+Actions secret `BANG_GOOGLE_DESKTOP_PARAMETER`. CI and source builds without that
+parameter keep Google disabled. Live consent, login and refresh still require
+publisher validation before this draft is published.
