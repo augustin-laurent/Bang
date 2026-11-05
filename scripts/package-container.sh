@@ -7,7 +7,7 @@ case "$format" in
   deb)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y build-essential curl ca-certificates git pkg-config python3 nodejs npm libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev dpkg-dev gnome-keyring xvfb xauth dbus-x11 desktop-file-utils
+    apt-get install -y build-essential curl ca-certificates git pkg-config python3 nodejs npm libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev dpkg-dev xvfb xauth dbus-x11 desktop-file-utils
     # Ubuntu's Node 18 is too old for Vite. Install official Node 22 binaries.
     node_version=22.22.0
     curl --fail --location --retry 3 "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-x64.tar.xz" -o /tmp/node.tar.xz
@@ -16,10 +16,10 @@ case "$format" in
     tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
     ;;
   rpm)
-    dnf install -y gcc gcc-c++ make curl ca-certificates git pkgconf-pkg-config python3 nodejs npm openssl-devel gtk3-devel webkit2gtk4.1-devel libxdo-devel rpm-build gnome-keyring xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 desktop-file-utils
+    dnf install -y gcc gcc-c++ make curl ca-certificates git pkgconf-pkg-config python3 nodejs npm openssl-devel gtk3-devel webkit2gtk4.1-develel rpm-build xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 desktop-file-utils
     ;;
   arch)
-    pacman -Syu --noconfirm --needed base-devel curl ca-certificates git python nodejs npm openssl gtk3 webkit2gtk-4.1 xdotool gnome-keyring xorg-server-xvfb xorg-xauth dbus desktop-file-utils
+    pacman -Syu --noconfirm --needed base-devel curl ca-certificates git python nodejs npm openssl gtk3 webkit2gtk-4.1 xorg-server-xvfb xorg-xauth dbus desktop-file-utils
     ;;
   *) exit 1 ;;
 esac

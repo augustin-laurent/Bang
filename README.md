@@ -41,8 +41,11 @@ bang
 ```
 
 For RPM and Arch, select their filenames from `SHA256SUMS` instead. Package managers
-install runtime dependencies, including WebKitGTK and GNOME Keyring. A running
-Secret Service keyring is needed for persistent credentials. Node.js and Rust are
+install runtime dependencies, including WebKitGTK. No keyring provider is installed
+by Bang. Persistent credentials require the session’s configured Secret Service
+provider, such as KWallet/KSecretD, GNOME Keyring or KeePassXC (with its integration
+enabled). Without one, choose session-only sign-in. See the
+[setup requirements](docs/ACCOUNTS.md#fournisseur-secret-service). Node.js and Rust are
 only required when building from source. The release also includes a source
 archive and checksum-pinned Arch `PKGBUILD`; no AUR package is published.
 

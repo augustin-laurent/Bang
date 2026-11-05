@@ -24,7 +24,8 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev libxdo-dev pkg-config gnome-keyring dbus-x11 xvfb
+          # GNOME Keyring is a test fixture for test-keyring.sh, not a Bang runtime dependency.
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev pkg-config gnome-keyring dbus-x11 xvfb
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
