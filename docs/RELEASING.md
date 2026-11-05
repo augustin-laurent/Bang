@@ -66,14 +66,17 @@ in draft until the publisher records successful results:
 
 - [ ] Confirm the bundled Google Desktop OAuth registration's production consent
   configuration, scopes, intended audience and verification status.
-- [ ] Complete browser consent and login using the packaged application.
+- [ ] Confirm the Microsoft public Desktop registration supports the intended
+  personal/work accounts, `http://localhost/callback`, and delegated Exchange scopes.
+- [ ] Complete browser consent and login for Google and Microsoft using the packaged application.
 - [ ] Verify synchronization and a deliberate test send to a controlled mailbox.
 - [ ] Verify expiration/refresh, then restart and reconnect from Secret Service.
 - [ ] Check the release's screenshots, dependencies, artifact checksums and notes.
 
 `bang --check-oauth-release` verifies bundled registration structure only; it
-cannot verify Google's consent configuration or prove live login/refresh.
-Microsoft registration is deferred and its disabled provider button is expected.
+cannot verify provider consent configuration or prove live login/refresh.
+Microsoft uses a bundled public Desktop registration without a client secret;
+its live consent, IMAP/SMTP access and tenant-policy compatibility remain unverified.
 See [ACCOUNTS.md](ACCOUNTS.md) for the detailed provider checks.
 
 Once verified, record the evidence in the release notes and publish the existing
