@@ -15,7 +15,7 @@ body:
     id: environment
     attributes:
       label: Distribution, desktop, and display server
-      placeholder: Ubuntu 24.04, GNOME, Wayland
+      placeholder: Ubuntu 26.04, GNOME, Wayland
     validations:
       required: true
   - type: textarea

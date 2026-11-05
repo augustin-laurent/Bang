@@ -7,7 +7,7 @@ client with a GTK/WebKit reader and an isolated rich-text composer.
 - Guided account setup, a welcome flow, Secret Service credential storage,
   and automatic OAuth token renewal.
 - Light/dark appearance and English/French interface.
-- Ubuntu 24.04 DEB, Fedora 44 RPM, and Arch binary packages, plus an Arch source
+- Ubuntu 26.04 DEB, Fedora 45 RPM, and Arch binary packages, plus an Arch source
   recipe, exact source archive and SHA-256 checksums.
 
 Install the matching package through your package manager; see the

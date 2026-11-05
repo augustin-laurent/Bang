@@ -24,7 +24,7 @@ These are captures of the running Slint UI using fictional offline data, not des
 ## Install
 
 Bang is experimental pre-1.0 software. Packages target **Linux x86_64**:
-Ubuntu 24.04, Fedora 44, and current Arch Linux. Other distributions and older
+Ubuntu 26.04, Fedora 45, and current Arch Linux. Other distributions and older
 versions have not been validated. The first `v0.1.0` prerelease is being prepared;
 packages appear in [GitHub Releases](https://github.com/augustin-laurent/Bang/releases)
 only after the manual Google OAuth release checks pass.
@@ -34,8 +34,8 @@ Download the matching package and `SHA256SUMS` from the same release. Verify it:
 ```sh
 # Run in the download directory; select the checksum for your downloaded file.
 grep '  bang_0.1.0-1_amd64.deb$' SHA256SUMS | sha256sum --check
-sudo apt install ./bang_0.1.0-1_amd64.deb      # Ubuntu 24.04
-sudo dnf install ./bang-0.1.0-1.fc44.x86_64.rpm # Fedora 44
+sudo apt install ./bang_0.1.0-1_amd64.deb      # Ubuntu 26.04
+sudo dnf install ./bang-0.1.0-1.fc45.x86_64.rpm # Fedora 45
 sudo pacman -U ./bang-0.1.0-1-x86_64.pkg.tar.zst # Arch
 bang
 ```
