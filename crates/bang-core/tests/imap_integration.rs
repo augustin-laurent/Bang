@@ -376,13 +376,29 @@ fn handle_uid_fetch(
         };
         let seq = idx + 1;
         if is_body {
+            let limit = query
+                .split("<0.")
+                .nth(1)
+                .and_then(|rest| rest.split('>').next())
+                .and_then(|s| s.parse::<usize>().ok());
+            let body = &msg.raw[..limit.unwrap_or(msg.raw.len()).min(msg.raw.len())];
+            let section = if limit.is_some() {
+                "BODY[]<0>"
+            } else {
+                "BODY[]"
+            };
             // Literal: `{n}\r\n` then exactly n bytes, then `)`.
             writer
                 .write_all(
-                    format!("* {seq} FETCH (UID {uid} BODY[] {{{}}}", msg.raw.len()).as_bytes(),
+                    format!(
+                        "* {seq} FETCH (UID {uid} RFC822.SIZE {} {section} {{{}}}",
+                        msg.raw.len(),
+                        body.len()
+                    )
+                    .as_bytes(),
                 )
                 .and_then(|_| writer.write_all(b"\r\n"))
-                .and_then(|_| writer.write_all(&msg.raw))
+                .and_then(|_| writer.write_all(body))
                 .and_then(|_| writer.write_all(b")\r\n"))?;
         } else if query.trim() == "(UID FLAGS)" {
             write_line(
@@ -984,6 +1000,192 @@ fn opening_a_message_does_not_wait_for_idle_or_server_push() {
         started.elapsed()
     );
     eprintln!("Interactive body fetch while IDLE: {:?}", started.elapsed());
+}
+
+#[test]
+fn otp_scan_is_bounded_unread_and_does_not_cache_the_message() {
+    let mut code_mail = msg(1, "Verification code", MessageFlags::empty());
+    code_mail.date = chrono::Utc::now().timestamp();
+    code_mail.raw = b"From: alice@bang.test\r\nSubject: Verification code\r\nContent-Type: text/plain\r\n\r\nYour code is 001234\r\n".to_vec();
+    let mut huge = msg(2, "Verification code", MessageFlags::empty());
+    huge.date = code_mail.date;
+    huge.raw = [
+        b"Subject: Verification code\r\n\r\n001234 ".as_slice(),
+        &vec![b'x'; bang_core::otp::MAX_MESSAGE_BYTES],
+    ]
+    .concat();
+    let mut boundary = msg(3, "Verification code", MessageFlags::empty());
+    boundary.date = code_mail.date;
+    boundary.raw = b"Subject: Verification code\r\n\r\n001234 ".to_vec();
+    boundary.raw.resize(bang_core::otp::MAX_MESSAGE_BYTES, b'x');
+    let server = MiniImap::start(vec![("INBOX".into(), vec![code_mail, huge, boundary])]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let messages = store.get_messages(folder.id, 10).unwrap();
+    let small = messages.iter().find(|m| m.uid == 1).unwrap();
+    let large = messages.iter().find(|m| m.uid == 2).unwrap();
+    let exact = messages.iter().find(|m| m.uid == 3).unwrap();
+    // A quiet OTP connection may have expired; the scan must reconnect once.
+    server.state.lock().unwrap().fail_body_once = true;
+    tx.send(SyncerCommand::ScanOtp {
+        message_id: small.id,
+    })
+    .unwrap();
+    let event = wait_for_event(&mut events, Duration::from_secs(3), |e| {
+        matches!(e, MailEvent::OtpDetected { .. })
+    })
+    .expect("OTP candidate");
+    assert!(matches!(event, MailEvent::OtpDetected { candidate } if candidate.code == "001234"));
+    assert!(store.get_message_full(small.id).unwrap().is_none());
+    assert!(store
+        .get_message(small.id)
+        .unwrap()
+        .unwrap()
+        .flags
+        .is_unread());
+    tx.send(SyncerCommand::ScanOtp {
+        message_id: large.id,
+    })
+    .unwrap();
+    assert!(
+        wait_for_event(&mut events, Duration::from_millis(500), |e| matches!(
+            e,
+            MailEvent::OtpDetected { .. }
+        ))
+        .is_none()
+    );
+    tx.send(SyncerCommand::ScanOtp {
+        message_id: exact.id,
+    })
+    .unwrap();
+    assert!(wait_for_event(&mut events, Duration::from_secs(3), |e| matches!(
+        e, MailEvent::OtpDetected { candidate } if candidate.message_id == exact.id && candidate.code == "001234"
+    )).is_some());
+    assert!(server
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .any(|cmd| cmd.contains("BODY.PEEK[]<0.262144>")));
+    tx.send(SyncerCommand::Quit).unwrap();
+}
+
+#[test]
+fn otp_scan_drops_message_read_on_another_device_during_fetch() {
+    let mut code_mail = msg(1, "Verification code", MessageFlags::empty());
+    code_mail.date = chrono::Utc::now().timestamp();
+    code_mail.raw = b"Subject: Verification code\r\n\r\nYour code is 001234\r\n".to_vec();
+    let server = MiniImap::start(vec![("INBOX".into(), vec![code_mail])]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folder = store.get_folders("test@bang.test").unwrap().remove(0);
+    let message = store.get_messages(folder.id, 10).unwrap().remove(0);
+    let checkpoint = {
+        let mut state = server.state.lock().unwrap();
+        state.body_delay = Duration::from_millis(400);
+        state.commands.len()
+    };
+    tx.send(SyncerCommand::ScanOtp {
+        message_id: message.id,
+    })
+    .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let mut state = server.state.lock().unwrap();
+        if state
+            .commands
+            .iter()
+            .any(|cmd| cmd.contains("BODY.PEEK[]<0.262144>"))
+        {
+            state.folders[0].1[0].flags.insert(MessageFlags::SEEN);
+            break;
+        }
+        drop(state);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "OTP body fetch did not begin"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        wait_for_event(&mut events, Duration::from_secs(1), |event| matches!(
+            event,
+            MailEvent::OtpDetected { .. }
+        ))
+        .is_none(),
+        "a message read during download produced an OTP"
+    );
+    assert!(
+        server.state.lock().unwrap().commands[checkpoint..]
+            .iter()
+            .filter(|cmd| *cmd == "UID FETCH 1 (UID FLAGS)")
+            .count()
+            >= 2,
+        "the server flags were not checked again after download"
+    );
+    assert!(store.get_message_full(message.id).unwrap().is_none());
+    tx.send(SyncerCommand::Quit).unwrap();
+}
+
+#[test]
+fn otp_scan_fetches_only_recent_unread_inbox_messages() {
+    let now = chrono::Utc::now().timestamp();
+    let make = |uid, date, flags| {
+        let mut message = msg(uid, "Verification code", flags);
+        message.date = date;
+        message.raw = b"Subject: Verification code\r\n\r\nYour code is 001234\r\n".to_vec();
+        message
+    };
+    let server = MiniImap::start(vec![
+        (
+            "INBOX".into(),
+            vec![
+                make(1, now - 181, MessageFlags::empty()),
+                make(2, now, MessageFlags::SEEN),
+                make(3, now, MessageFlags::empty()),
+            ],
+        ),
+        ("Sent".into(), vec![make(4, now, MessageFlags::empty())]),
+    ]);
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let (tx, mut events) = start_and_connect(&server, store.clone());
+    let folders = store.get_folders("test@bang.test").unwrap();
+    let inbox = folders
+        .iter()
+        .find(|folder| folder.path == "INBOX")
+        .unwrap();
+    let sent = folders.iter().find(|folder| folder.path == "Sent").unwrap();
+    let inbox_messages = store.get_messages(inbox.id, 10).unwrap();
+    let sent_message = store.get_messages(sent.id, 10).unwrap().remove(0);
+    let id = |uid| {
+        inbox_messages
+            .iter()
+            .find(|message| message.uid == uid)
+            .unwrap()
+            .id
+    };
+    let checkpoint = server.state.lock().unwrap().commands.len();
+    for message_id in [id(1), id(2), sent_message.id, id(3)] {
+        tx.send(SyncerCommand::ScanOtp { message_id }).unwrap();
+    }
+    let event = wait_for_event(&mut events, Duration::from_secs(3), |event| {
+        matches!(event, MailEvent::OtpDetected { .. })
+    })
+    .expect("eligible code");
+    assert!(matches!(event, MailEvent::OtpDetected { candidate } if candidate.message_id == id(3)));
+    let commands = server.state.lock().unwrap().commands[checkpoint..].to_vec();
+    let bodies: Vec<_> = commands
+        .iter()
+        .filter(|cmd| cmd.contains("BODY.PEEK[]"))
+        .collect();
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].starts_with("UID FETCH 3 "));
+    for message in inbox_messages.iter().chain(std::iter::once(&sent_message)) {
+        assert!(store.get_message_full(message.id).unwrap().is_none());
+    }
+    tx.send(SyncerCommand::Quit).unwrap();
 }
 
 #[test]

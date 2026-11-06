@@ -327,6 +327,7 @@ impl UiState {
                     self.reload_messages(ui, store);
                 }
             }
+            MailEvent::OtpDetected { .. } => {}
             MailEvent::MessagesUpdated { folder_id, .. } => {
                 // Keep the unread badges fresh.
                 self.refresh_folders(ui, store);

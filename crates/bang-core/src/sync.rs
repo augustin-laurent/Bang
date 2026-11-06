@@ -37,6 +37,11 @@ pub enum SyncerCommand {
         /// Local store id of the message.
         message_id: i64,
     },
+    /// Inspect an unread recent inbox message for a verification code.
+    ScanOtp {
+        /// Local store id of the message.
+        message_id: i64,
+    },
     /// Delete messages (expunge on the server, remove from the local store).
     Delete {
         /// Local store ids of the messages.
@@ -81,6 +86,7 @@ fn start_with_source(
 ) -> std::sync::mpsc::Sender<SyncerCommand> {
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<SyncerCommand>();
     let (quit_tx, quit_rx) = std::sync::mpsc::channel::<()>();
+    let (otp_tx, otp_rx) = std::sync::mpsc::channel::<i64>();
     let sync_credentials = credentials.clone();
     let sync_config = config.clone();
     let sync_store = store.clone();
@@ -97,9 +103,27 @@ fn start_with_source(
             )
         })
         .expect("spawn syncer thread");
+    let otp_config = config.clone();
+    let otp_store = store.clone();
+    let otp_events = events_tx.clone();
+    let otp_credentials = credentials.clone();
+    std::thread::Builder::new()
+        .name(format!("otp-{}", config.id.0))
+        .spawn(move || run_otp_commands(otp_config, otp_store, otp_events, otp_rx, otp_credentials))
+        .expect("spawn OTP mail thread");
     std::thread::Builder::new()
         .name(format!("mail-{}", config.id.0))
-        .spawn(move || run_commands(config, store, events_tx, cmd_rx, quit_tx, credentials))
+        .spawn(move || {
+            run_commands(
+                config,
+                store,
+                events_tx,
+                cmd_rx,
+                quit_tx,
+                otp_tx,
+                credentials,
+            )
+        })
         .expect("spawn interactive mail thread");
     cmd_tx
 }
@@ -402,6 +426,7 @@ fn run_commands(
     events_tx: UnboundedSender<MailEvent>,
     cmd_rx: std::sync::mpsc::Receiver<SyncerCommand>,
     quit_tx: std::sync::mpsc::Sender<()>,
+    otp_tx: std::sync::mpsc::Sender<i64>,
     credentials: Option<crate::credentials::CredentialHandle>,
 ) {
     let mut conn = None;
@@ -427,6 +452,12 @@ fn run_commands(
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break 'commands,
             }
+        }
+        if matches!(pending.front(), Some(SyncerCommand::ScanOtp { .. })) {
+            if let Some(SyncerCommand::ScanOtp { message_id }) = pending.pop_front() {
+                let _ = otp_tx.send(message_id);
+            }
+            continue;
         }
         if conn.is_none() {
             match connect_current(&config, credentials.as_ref()) {
@@ -464,8 +495,10 @@ fn run_commands(
         );
         // A quiet command session may have expired on the server. Reads can
         // safely reconnect once; mutations are never replayed automatically.
-        if matches!(command, SyncerCommand::FetchBody { .. })
-            && matches!(&result, Err(Error::Imap(_) | Error::Network(_)))
+        if matches!(
+            command,
+            SyncerCommand::FetchBody { .. } | SyncerCommand::ScanOtp { .. }
+        ) && matches!(&result, Err(Error::Imap(_) | Error::Network(_)))
         {
             result = match connect_current(&config, credentials.as_ref()) {
                 Ok(connected) => {
@@ -499,6 +532,35 @@ fn run_commands(
     let _ = quit_tx.send(());
 }
 
+fn run_otp_commands(
+    config: AccountConfig,
+    store: Arc<Store>,
+    events: UnboundedSender<MailEvent>,
+    commands: std::sync::mpsc::Receiver<i64>,
+    credentials: Option<crate::credentials::CredentialHandle>,
+) {
+    let mut connection = None;
+    while let Ok(message_id) = commands.recv() {
+        if connection.is_none() {
+            connection = connect_current(&config, credentials.as_ref()).ok();
+        }
+        let Some(conn) = connection.as_mut() else {
+            continue;
+        };
+        let mut result = handle_scan_otp(conn, &config, &store, &events, message_id);
+        if matches!(&result, Err(Error::Imap(_) | Error::Network(_))) {
+            connection = connect_current(&config, credentials.as_ref()).ok();
+            if let Some(conn) = connection.as_mut() {
+                result = handle_scan_otp(conn, &config, &store, &events, message_id);
+            }
+        }
+        if result.is_err() {
+            // Failed scans must not interfere with normal mail operations.
+            connection = None;
+        }
+    }
+}
+
 fn execute_command(
     conn: &mut ImapConn,
     config: &AccountConfig,
@@ -510,6 +572,9 @@ fn execute_command(
         SyncerCommand::FetchBody { message_id } => {
             handle_fetch_body(conn, store, events_tx, *message_id)
         }
+        SyncerCommand::ScanOtp { message_id } => {
+            handle_scan_otp(conn, config, store, events_tx, *message_id)
+        }
         SyncerCommand::SetFlags {
             message_ids,
             flags,
@@ -520,6 +585,61 @@ fn execute_command(
         }
         SyncerCommand::Quit => Ok(()),
     }
+}
+
+fn handle_scan_otp(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    message_id: i64,
+) -> Result<()> {
+    let Some(summary) = store.get_message(message_id)? else {
+        return Ok(());
+    };
+    let Some(folder) = store.get_folder_by_id(summary.folder_id)? else {
+        return Ok(());
+    };
+    if summary.account_id != config.id.0
+        || !folder.path.eq_ignore_ascii_case("INBOX")
+        || !summary.flags.is_unread()
+        || !crate::otp::is_fresh(summary.date, chrono::Utc::now().timestamp())
+    {
+        return Ok(());
+    }
+    select_cached_folder(conn, store, folder.id, &folder.path)?;
+    // The user may have read or deleted the message on another device after
+    // the local metadata was synchronized.
+    let flags = conn.fetch_flags(&summary.uid.to_string())?;
+    if !flags
+        .iter()
+        .any(|(uid, flags)| *uid == summary.uid && flags.is_unread())
+    {
+        return Ok(());
+    }
+    let Some(raw) = conn.fetch_body_bounded(summary.uid, crate::otp::MAX_MESSAGE_BYTES)? else {
+        return Ok(());
+    };
+    if let Some(code) = crate::otp::extract_from_message(&raw) {
+        // A slow fetch must not publish a code after its freshness window.
+        let still_unread = conn
+            .fetch_flags(&summary.uid.to_string())?
+            .iter()
+            .any(|(uid, flags)| *uid == summary.uid && flags.is_unread());
+        if still_unread && crate::otp::is_fresh(summary.date, chrono::Utc::now().timestamp()) {
+            let _ = events_tx.send(MailEvent::OtpDetected {
+                candidate: crate::otp::OtpCandidate {
+                    account_id: config.id.0.clone(),
+                    message_id,
+                    sender: summary.from.address,
+                    recipient: config.email.clone(),
+                    received_at: summary.date,
+                    code,
+                },
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Whether cached UIDs are obsolete for the server's current UIDVALIDITY

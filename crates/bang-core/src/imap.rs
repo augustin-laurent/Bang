@@ -209,6 +209,25 @@ impl<T: Read + Write> ImapSession<T> {
             })
     }
 
+    /// Fetch at most `limit` bytes without changing the message's read flag.
+    ///
+    /// Returns `None` when the message exceeds the limit or is unavailable.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_body_bounded(&mut self, uid: u32, limit: usize) -> Result<Option<Vec<u8>>> {
+        let query = format!("(UID RFC822.SIZE BODY.PEEK[]<0.{limit}>)");
+        let fetches = self.session.uid_fetch(uid.to_string(), query)?;
+        Ok(fetches.iter().find_map(|fetch| {
+            if fetch.uid != Some(uid) {
+                return None;
+            }
+            let size = fetch.size? as usize;
+            let body = fetch.body()?;
+            (size <= limit && body.len() == size).then(|| body.to_vec())
+        }))
+    }
+
     /// Add or remove flags on a UID set.
     ///
     /// `flags` is a space-separated flag list, e.g. `"\Seen \Flagged"`.
@@ -322,6 +341,17 @@ impl ImapConn {
         match self {
             ImapConn::Tls(s) => s.fetch_body(uid),
             ImapConn::Plain(s) => s.fetch_body(uid),
+        }
+    }
+
+    /// Fetch a bounded raw message without marking it read.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn fetch_body_bounded(&mut self, uid: u32, limit: usize) -> Result<Option<Vec<u8>>> {
+        match self {
+            ImapConn::Tls(s) => s.fetch_body_bounded(uid, limit),
+            ImapConn::Plain(s) => s.fetch_body_bounded(uid, limit),
         }
     }
 

@@ -119,6 +119,13 @@ pub struct MailService {
 }
 
 impl MailService {
+    /// Queue an independent, bounded OTP scan for a recently received message.
+    pub fn scan_otp(&self, account: &AccountId, message_id: i64) {
+        if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+            let _ = tx.send(SyncerCommand::ScanOtp { message_id });
+        }
+    }
+
     /// Create a service around a store.
     ///
     /// # Arguments

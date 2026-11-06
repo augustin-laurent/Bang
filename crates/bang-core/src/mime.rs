@@ -277,10 +277,21 @@ fn render_node(node: &NodeRef, out: &mut String, quote_depth: usize, depth: usiz
     }) {
         let collapsed = collapse_ws(&text);
         if !collapsed.is_empty() {
+            if text.starts_with(char::is_whitespace)
+                && !out.is_empty()
+                && !out.ends_with(char::is_whitespace)
+            {
+                out.push(' ');
+            }
             for _ in 0..quote_depth {
                 out.push_str("> ");
             }
             out.push_str(&collapsed);
+            if text.ends_with(char::is_whitespace) {
+                out.push(' ');
+            }
+        } else if !text.is_empty() && !out.is_empty() && !out.ends_with(char::is_whitespace) {
+            out.push(' ');
         }
         return;
     }

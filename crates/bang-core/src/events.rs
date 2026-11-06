@@ -354,6 +354,11 @@ pub enum MailEvent {
         /// The loaded message.
         message: MessageFull,
     },
+    /// A verification code was found; it must not be persisted or logged.
+    OtpDetected {
+        /// Ephemeral candidate, including its source and expiration timestamp.
+        candidate: crate::otp::OtpCandidate,
+    },
     /// A scheduled follow-up reminder is due.
     FollowUpDue {
         /// Account the message belongs to.
