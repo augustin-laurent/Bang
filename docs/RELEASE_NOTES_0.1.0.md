@@ -32,7 +32,8 @@ Service is required for persistent credentials; session-only sign-in must be
 explicitly selected when it is unavailable. No AUR or distribution repository
 publication is included. Packages and checksums are not separately signed.
 
-Release builds receive the Google Desktop publisher parameter from the repository
-Actions secret `BANG_GOOGLE_DESKTOP_PARAMETER`. CI and source builds without that
-parameter keep Google disabled. Live consent, login and refresh still require
+Release builds and CI builds on repository branches receive the Google Desktop
+publisher parameter from the Actions secret `BANG_GOOGLE_DESKTOP_PARAMETER`.
+Pull requests from forks and source builds without that parameter keep Google
+disabled. Live consent, login and refresh still require
 publisher validation before this draft is published.

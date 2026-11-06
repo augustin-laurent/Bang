@@ -66,7 +66,7 @@ export component SettingsDialog inherits Rectangle {
                     Text { text: @tr("Accounts"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     if root.accounts.length == 0: Text { text: @tr("No accounts"); color: Theme.text-secondary; font-size: 13px; }
                     for acc in root.accounts: HorizontalLayout { height: 48px; spacing: 12px;
-                        Rectangle { width: 24px; Image { y: (parent.height - self.height) / 2; width: 24px; height: 24px; source: acc.provider == "google" ? @image-url("icons/google.svg") : acc.provider == "microsoft" ? @image-url("icons/microsoft.svg") : @image-url("icons/mail.svg"); colorize: acc.provider == "" ? Theme.text-secondary : transparent; } }
+                        Rectangle { width: 24px; Image { y: (parent.height - self.height) / 2; width: 24px; height: 24px; image-fit: contain; source: acc.provider == "google" ? @image-url("icons/google.svg") : acc.provider == "microsoft" ? @image-url("icons/microsoft.svg") : acc.provider == "icloud" ? @image-url("icons/icloud.svg") : @image-url("icons/mail.svg"); colorize: acc.provider == "" ? Theme.text-secondary : transparent; } }
                         Text { text: acc.email; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
                         if acc.reconnect: ActionButton { modal: true; text: @tr("Reconnect"); clicked => { root.account-reconnect(acc.id); } }
                         if acc.storage-locked: ActionButton { modal: true; text: @tr("Unlock"); clicked => { root.account-unlock(acc.id); } }

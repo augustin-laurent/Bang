@@ -36,6 +36,13 @@ def stop(process):
         time.sleep(0.05)
 
 
+def check_google_registration(output, expected):
+    bundled = 'Google Desktop registration bundled:' in output
+    disabled = 'Google: not configured; provider disabled' in output
+    assert bundled if expected else disabled, output
+    assert 'client_secret' not in output and 'desktop_parameter' not in output
+
+
 def main():
     assert Path('/usr/lib/bang/app').is_file()
     assert Path('/usr/lib/bang/bang-compose').is_file()
@@ -45,7 +52,9 @@ def main():
         linked = subprocess.run(['ldd', f'/usr/lib/bang/{binary}'], check=True,
                                 capture_output=True, text=True).stdout
         assert 'not found' not in linked, linked
-    subprocess.run(['bang', '--check-oauth-release'], check=True)
+    oauth = subprocess.run(['bang', '--check-oauth-release'], check=True,
+                           capture_output=True, text=True).stdout
+    check_google_registration(oauth, os.environ.get('BANG_EXPECT_GOOGLE_OAUTH') == '1')
     with tempfile.TemporaryDirectory(prefix='bang-package-smoke-') as directory:
         env = os.environ.copy()
         for variable, folder in [('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'),

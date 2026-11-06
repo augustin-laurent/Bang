@@ -46,6 +46,7 @@ fn main() -> Result<(), slint::PlatformError> {
     if std::env::args().any(|a| a == "--preview") {
         return preview::run();
     }
+    gtk::glib::set_prgname(Some("bang"));
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();

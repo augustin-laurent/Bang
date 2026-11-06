@@ -138,6 +138,7 @@ struct Host {
 impl Host {
     fn new() -> Rc<Self> {
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.set_icon_name(Some("io.github.augustin_laurent.Bang"));
         window.set_default_size(1440, 900);
         let overlay = gtk::Overlay::new();
         let area = gtk::DrawingArea::new();
