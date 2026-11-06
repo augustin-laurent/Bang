@@ -16,7 +16,7 @@ case "$format" in
     tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
     ;;
   rpm)
-    dnf install -y gcc gcc-c++ make curl ca-certificates git pkgconf-pkg-config python3 nodejs npm openssl-devel gtk3-devel webkit2gtk4.1-develel rpm-build xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 desktop-file-utils
+    dnf install -y gcc gcc-c++ make curl ca-certificates git pkgconf-pkg-config python3 nodejs npm openssl-devel gtk3-devel webkit2gtk4.1-devel rpm-build xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 desktop-file-utils
     ;;
   arch)
     pacman -Syu --noconfirm --needed base-devel curl ca-certificates git python nodejs npm openssl gtk3 webkit2gtk-4.1 xorg-server-xvfb xorg-xauth dbus desktop-file-utils
