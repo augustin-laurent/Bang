@@ -196,3 +196,25 @@ impl std::fmt::Display for AccountStatus {
         f.write_str(s)
     }
 }
+
+/// Broad classification of a folder by its IMAP path suffix.
+///
+/// Used for icons, delete semantics (Trash/Junk make "delete" permanent) and
+/// default mailbox resolution. Matching is suffix-based and case-insensitive
+/// so `[Gmail]/Trash`, `INBOX.Trash`, `Deleted Messages` and `Junk`,
+/// `Junk E-Mail`, `Spam Messages` all resolve correctly.
+pub fn folder_kind(path: &str) -> &'static str {
+    let last = path
+        .rsplit(['/', '.'])
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    match last.as_str() {
+        "inbox" => "inbox",
+        "sent" | "sent messages" => "sent",
+        "drafts" => "draft",
+        "trash" | "deleted messages" => "trash",
+        "junk" | "junk e-mail" | "junk mail" | "spam" | "spam messages" => "junk",
+        _ => "folder",
+    }
+}

@@ -703,6 +703,18 @@ impl MailService {
                     let _ = tx.send(SyncerCommand::Delete { message_ids });
                 }
             }
+            UiCommand::Move {
+                account,
+                message_ids,
+                dest_folder_id,
+            } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::Move {
+                        message_ids,
+                        dest_folder_id,
+                    });
+                }
+            }
             // Snooze and follow-up are local operations: they only touch the
             // store, so they are handled here rather than routed to a syncer.
             UiCommand::Snooze { message_ids, until } => {

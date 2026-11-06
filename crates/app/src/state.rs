@@ -655,18 +655,7 @@ pub(crate) fn load_sends(ui: &BangApp, store: &Store) {
 }
 
 fn folder_kind(path: &str) -> &'static str {
-    let last = path
-        .rsplit(['/', '.'])
-        .next()
-        .unwrap_or(path)
-        .to_ascii_lowercase();
-    match last.as_str() {
-        "inbox" => "inbox",
-        "sent" | "sent messages" => "sent",
-        "drafts" => "draft",
-        "trash" | "deleted messages" => "trash",
-        _ => "folder",
-    }
+    bang_core::message::folder_kind(path)
 }
 
 #[cfg(test)]
@@ -676,6 +665,7 @@ mod presentation_tests {
         assert_eq!(super::folder_kind("INBOX"), "inbox");
         assert_eq!(super::folder_kind("[Gmail]/Sent"), "sent");
         assert_eq!(super::folder_kind("My projects"), "folder");
+        assert_eq!(super::folder_kind("[Gmail]/Junk"), "junk");
     }
 }
 

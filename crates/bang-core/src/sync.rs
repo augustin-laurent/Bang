@@ -42,6 +42,13 @@ pub enum SyncerCommand {
         /// Local store ids of the messages.
         message_ids: Vec<i64>,
     },
+    /// Move messages to another folder of the same account.
+    Move {
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+        /// Local store id of the destination folder.
+        dest_folder_id: i64,
+    },
     /// Stop the syncer.
     Quit,
 }
@@ -518,6 +525,17 @@ fn execute_command(
         SyncerCommand::Delete { message_ids } => {
             handle_delete(conn, config, store, events_tx, message_ids)
         }
+        SyncerCommand::Move {
+            message_ids,
+            dest_folder_id,
+        } => handle_move(
+            conn,
+            config,
+            store,
+            events_tx,
+            message_ids,
+            *dest_folder_id,
+        ),
         SyncerCommand::Quit => Ok(()),
     }
 }
@@ -614,7 +632,25 @@ fn group_by_folder(
     Ok(by_folder)
 }
 
-/// Delete messages: expunge on the server, remove from the local store.
+/// Move a UID set to another selected-by-path mailbox: RFC 6851 `MOVE` when
+/// the server supports it, otherwise `COPY` followed by marking the UID set
+/// `\Deleted` and expunging it.
+fn move_uids(conn: &mut ImapConn, uid_set: &str, dest_path: &str) -> Result<()> {
+    if conn.supports_move()? {
+        conn.uid_mv(uid_set, dest_path)
+    } else {
+        conn.uid_copy(uid_set, dest_path)?;
+        conn.set_flags(uid_set, "\\Deleted", true)?;
+        conn.expunge(uid_set)
+    }
+}
+
+/// Delete messages.
+///
+/// Deletion moves to Trash: the first folder classified [`folder_kind`]
+/// `"trash"` of the account receives the messages via a normal move. Inside
+/// Trash/Junk (or when the account has no Trash mailbox) deletion is a
+/// permanent expunge, matching desktop mail conventions.
 fn handle_delete(
     conn: &mut ImapConn,
     config: &AccountConfig,
@@ -623,6 +659,10 @@ fn handle_delete(
     message_ids: &[i64],
 ) -> Result<()> {
     let by_folder = group_by_folder(store, message_ids)?;
+    let trash = store
+        .get_folders(&config.id.0)?
+        .into_iter()
+        .find(|f| crate::message::folder_kind(&f.path) == "trash");
     let mut folder_ids = Vec::new();
     for (folder_id, (path, uids)) in &by_folder {
         if uids.is_empty() {
@@ -634,10 +674,20 @@ fn handle_delete(
             .map(|u| u.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        conn.expunge(&uid_set)?;
+        let kind = crate::message::folder_kind(path);
+        if kind == "junk" || kind == "trash" || trash.as_ref().filter(|t| t.id == *folder_id).is_some()
+        {
+            // Permanently remove.
+            conn.expunge(&uid_set)?;
+        } else if let Some(trash) = trash.as_ref() {
+            move_uids(conn, &uid_set, &trash.path)?;
+        } else {
+            conn.expunge(&uid_set)?;
+        }
         folder_ids.push(*folder_id);
     }
-    // Remove from the store before emitting: the UI reloads on the event.
+    // Remove the source copies from the store before emitting: the UI reloads
+    // on the event, and a trash re-sync below re-inserts moved messages.
     store.delete_messages(message_ids)?;
     for folder_id in folder_ids {
         let _ = events_tx.send(MailEvent::MessagesUpdated {
@@ -646,6 +696,55 @@ fn handle_delete(
             message_ids: message_ids.to_vec(),
         });
     }
+    if let Some(trash) = trash {
+        // Trash gained (or lost) messages; refresh its cached listing.
+        sync_folder(conn, config, store, events_tx, &trash)?;
+    }
+    Ok(())
+}
+
+/// Move messages to another folder of the same account.
+fn handle_move(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    message_ids: &[i64],
+    dest_folder_id: i64,
+) -> Result<()> {
+    let dest = store
+        .get_folder_by_id(dest_folder_id)?
+        .ok_or_else(|| Error::Store("destination folder not found".into()))?;
+    let by_folder = group_by_folder(store, message_ids)?;
+    let mut folder_ids = Vec::new();
+    for (folder_id, (path, uids)) in &by_folder {
+        if uids.is_empty() {
+            continue;
+        }
+        if *folder_id == dest.id {
+            // A move within the same folder is a no-op.
+            continue;
+        }
+        select_cached_folder(conn, store, *folder_id, path)?;
+        let uid_set = uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        move_uids(conn, &uid_set, &dest.path)?;
+        folder_ids.push(*folder_id);
+    }
+    // Drop the source copies: the destination re-sync below re-inserts every
+    // moved message under the destination folder with fresh store ids.
+    store.delete_messages(message_ids)?;
+    for folder_id in folder_ids {
+        let _ = events_tx.send(MailEvent::MessagesUpdated {
+            account: config.id.clone(),
+            folder_id,
+            message_ids: message_ids.to_vec(),
+        });
+    }
+    sync_folder(conn, config, store, events_tx, &dest)?;
     Ok(())
 }
 

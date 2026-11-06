@@ -396,7 +396,52 @@ fn wire_selection(
             ui.set_menu_msg_starred(summary.flags.is_flagged());
             ui.set_menu_x(x);
             ui.set_menu_y(y);
+            // Deletion inside Trash/Junk is permanent; elsewhere it moves.
+            let kind = store
+                .get_folder_by_id(summary.folder_id)
+                .ok()
+                .flatten()
+                .map(|f| bang_core::message::folder_kind(&f.path))
+                .unwrap_or("folder");
+            ui.set_menu_msg_permanent(kind == "trash" || kind == "junk");
+            // "Move to..." lists the message's account folders except its own.
+            let mut rows: Vec<FolderRow> = Vec::new();
+            if let Ok(folders) = store.get_folders(&summary.account_id) {
+                for folder in folders {
+                    if folder.id == summary.folder_id {
+                        continue;
+                    }
+                    rows.push(FolderRow {
+                        id: folder.id as i32,
+                        name: folder.name.into(),
+                        kind: bang_core::message::folder_kind(&folder.path).into(),
+                        is_header: false,
+                        ..Default::default()
+                    });
+                }
+            }
+            ui.set_move_folders(slint::ModelRc::new(slint::VecModel::from(rows)));
             ui.invoke_show_menu();
+        }
+    });
+
+    // Folder picked in the "Move to..." popup: move the menu's message.
+    ui.on_move_selected({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let weak = ui.as_weak();
+        move |folder_id: i32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let Ok(Some(summary)) = store.get_message(ui.get_menu_message() as i64) else {
+                return;
+            };
+            bridge.send(bang_core::UiCommand::Move {
+                account: bang_core::AccountId(summary.account_id),
+                message_ids: vec![ui.get_menu_message() as i64],
+                dest_folder_id: i64::from(folder_id),
+            });
         }
     });
 }

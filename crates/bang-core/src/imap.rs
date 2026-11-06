@@ -231,6 +231,33 @@ impl<T: Read + Write> ImapSession<T> {
         Ok(())
     }
 
+    /// Move a UID set to another mailbox (RFC 6851 `UID MOVE`).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_mv(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        self.session.uid_mv(uid_set, mailbox)?;
+        Ok(())
+    }
+
+    /// Copy a UID set to another mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_copy(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        self.session.uid_copy(uid_set, mailbox)?;
+        Ok(())
+    }
+
+    /// Whether the server advertises the `MOVE` capability.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn supports_move(&mut self) -> Result<bool> {
+        let capabilities = self.session.capabilities()?;
+        Ok(capabilities.has_str("MOVE"))
+    }
+
     /// Wait for mailbox changes (IMAP IDLE), up to `timeout`.
     ///
     /// Returns `true` if the mailbox changed, `false` on timeout.
@@ -355,6 +382,39 @@ impl ImapConn {
         match self {
             ImapConn::Tls(s) => s.idle_wait(timeout),
             ImapConn::Plain(s) => s.idle_wait(timeout),
+        }
+    }
+
+    /// Move a UID set to another mailbox (RFC 6851 `UID MOVE`).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_mv(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.uid_mv(uid_set, mailbox),
+            ImapConn::Plain(s) => s.uid_mv(uid_set, mailbox),
+        }
+    }
+
+    /// Copy a UID set to another mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_copy(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.uid_copy(uid_set, mailbox),
+            ImapConn::Plain(s) => s.uid_copy(uid_set, mailbox),
+        }
+    }
+
+    /// Whether the server advertises the `MOVE` capability.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn supports_move(&mut self) -> Result<bool> {
+        match self {
+            ImapConn::Tls(s) => s.supports_move(),
+            ImapConn::Plain(s) => s.supports_move(),
         }
     }
 

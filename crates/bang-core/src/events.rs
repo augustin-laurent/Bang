@@ -86,6 +86,15 @@ pub enum UiCommand {
         /// Local store ids of the messages.
         message_ids: Vec<i64>,
     },
+    /// Move messages to another folder of the same account.
+    Move {
+        /// Account the messages belong to.
+        account: AccountId,
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+        /// Local store id of the destination folder.
+        dest_folder_id: i64,
+    },
     /// Snooze messages until the given Unix timestamp (seconds).
     ///
     /// Snoozed messages are hidden from folder listings until the time passes.

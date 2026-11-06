@@ -3,6 +3,7 @@ import "../../../assets/fonts/NotoSans-Bold.ttf";
 import { Theme } from "theme.slint";
 export { Theme } from "theme.slint";
 export { Palette } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 import { ActionButton, SearchField } from "controls.slint";
 import { FolderRow, MessageRow, AccountRow, AttachmentRow, DraftRow, TemplateRow, PendingSendRow, LabelRow, CategoryRow } from "models.slint";
 import { CategoryBar } from "categories.slint";
@@ -59,7 +60,7 @@ export component BangApp inherits Window {
     in property <bool> reader-failed: false;
     in-out property <bool> remote-images: false;
     out property <bool> html-active: root.native-reader-available && !root.reader-failed && !root.message-loading && root.message-html != "";
-    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open;
+    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open;
     out property <float> reader-x-px: reader.body-x / 1px;
     out property <float> reader-y-px: reader.body-y / 1px;
     out property <float> reader-width-px: reader.body-width / 1px;
@@ -114,6 +115,11 @@ export component BangApp inherits Window {
     in-out property <int> menu-message: -1;
     in-out property <bool> menu-msg-unread: false;
     in-out property <bool> menu-msg-starred: false;
+    // True when the message sits in Trash/Junk: delete becomes permanent.
+    in-out property <bool> menu-msg-permanent: false;
+    // Folders offered by the "Move to..." submenu (message's account only).
+    in property <[FolderRow]> move-folders;
+    callback move-selected(int);
     in-out property <length> menu-x: 0px; in-out property <length> menu-y: 0px;
     callback reveal-message(int);
     reveal-message(index) => { message-list.reveal-row(index); }
@@ -363,9 +369,9 @@ export component BangApp inherits Window {
     message-menu := PopupWindow {
         x: root.menu-x; y: root.menu-y;
         width: 252px;
-        // 8 menu items × 32px + 2 separator rows × 7px + vertical padding 12px
-        // + spacing between the 10 rows 9 × 2px = 300px.
-        height: 300px;
+        // 9 menu items × 32px + 2 separator rows × 7px + vertical padding 12px
+        // + spacing between the 11 rows 10 × 2px = 334px.
+        height: 334px;
         Rectangle {
             background: Theme.bg;
             border-radius: 10px;
@@ -400,12 +406,58 @@ export component BangApp inherits Window {
                 }
                 Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
                 ContextMenuItem {
+                    text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
+                    activated => { message-menu.close(); move-menu.show(); }
+                }
+                ContextMenuItem {
                     text: @tr("Snooze"); icon: @image-url("icons/clock.svg");
                     activated => { root.message-action(root.menu-message, "snooze"); message-menu.close(); }
                 }
                 ContextMenuItem {
-                    text: @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
+                    text: root.menu-msg-permanent ? @tr("Delete permanently") : @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { root.message-action(root.menu-message, "delete"); message-menu.close(); }
+                }
+            }
+        }
+    }
+    // In-place replacement of the message menu: the folder list to move the
+    // message's account folders into (message's own folder excluded; filled
+    // by Rust when the context menu is opened).
+    move-menu := PopupWindow {
+        x: root.menu-x; y: root.menu-y;
+        width: 252px;
+        height: 292px;
+        Rectangle {
+            background: Theme.bg;
+            border-radius: 10px;
+            border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout {
+                padding: 6px; spacing: 2px;
+                Text {
+                    height: 24px;
+                    text: @tr("Move to...");
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                ListView {
+                    height: 252px;
+                    for folder in root.move-folders : ContextMenuItem {
+                        text: folder.name;
+                        icon: folder.kind == "trash" ? @image-url("icons/trash.svg") : folder.kind == "inbox" ? @image-url("icons/inbox.svg") : folder.kind == "sent" ? @image-url("icons/send.svg") : folder.kind == "draft" ? @image-url("icons/file.svg") : @image-url("icons/folder.svg");
+                        activated => { move-menu.close(); root.move-selected(folder.id); }
+                    }
+                }
+                if root.move-folders.length == 0 : Text {
+                    height: 24px;
+                    text: @tr("No other folder");
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
             }
         }
