@@ -45,7 +45,10 @@ def main():
         linked = subprocess.run(['ldd', f'/usr/lib/bang/{binary}'], check=True,
                                 capture_output=True, text=True).stdout
         assert 'not found' not in linked, linked
-    subprocess.run(['bang', '--check-oauth-release'], check=True)
+    oauth = subprocess.run(['bang', '--check-oauth-release'], check=True,
+                           capture_output=True, text=True).stdout
+    assert 'Google Desktop registration bundled:' in oauth, oauth
+    assert 'client_secret' not in oauth and 'desktop_parameter' not in oauth
     with tempfile.TemporaryDirectory(prefix='bang-package-smoke-') as directory:
         env = os.environ.copy()
         for variable, folder in [('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'),
