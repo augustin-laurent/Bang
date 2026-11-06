@@ -80,7 +80,10 @@ impl AvatarCache {
             };
             // Gravatar resolves avatars by the MD5 of the lowercased,
             // trimmed address; sender_key is exactly that normalization.
-            let hash = format!("{:x}", Md5::digest(address.as_bytes()));
+            let hash: String = Md5::digest(address.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
             let path = dir.join(format!("{hash}.png"));
             let stamp = dir.join(format!("{hash}.json"));
             let cached = read_cache(&path, &stamp);
@@ -433,7 +436,10 @@ mod tests {
     async fn cached_lookup_deduplicates_and_survives_worker_restart() {
         let dir = std::env::temp_dir().join(format!("bang-avatar-worker-{}", std::process::id()));
         let address = "alice@example.test";
-        let hash = format!("{:x}", Md5::digest(address.as_bytes()));
+        let hash: String = Md5::digest(address.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         let path = dir.join(format!("{hash}.png"));
         let stamp = dir.join(format!("{hash}.json"));
         let mut png = Cursor::new(Vec::new());
