@@ -131,12 +131,12 @@ fn parse(bytes: &[u8], email: &str) -> Result<DiscoveryResult> {
                 if stack.len() >= 16 {
                     return Err(invalid());
                 }
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = e.name().as_ref().to_owned();
                 if stack.is_empty()
                     && (tag != "clientConfig"
                         || !e.attributes().any(|a| {
                             a.is_ok_and(|a| {
-                                a.key.as_ref() == b"version" && a.value.as_ref() == b"1.1"
+                                a.key.as_ref() == "version" && a.value.as_ref() == "1.1"
                             })
                         }))
                 {
@@ -147,9 +147,9 @@ fn parse(bytes: &[u8], email: &str) -> Result<DiscoveryResult> {
                         return Err(invalid());
                     }
                     let incoming = tag == "incomingServer";
-                    let expected: &[u8] = if incoming { b"imap" } else { b"smtp" };
+                    let expected = if incoming { "imap" } else { "smtp" };
                     if e.attributes().any(|a| {
-                        a.is_ok_and(|a| a.key.as_ref() == b"type" && a.value.as_ref() == expected)
+                        a.is_ok_and(|a| a.key.as_ref() == "type" && a.value.as_ref() == expected)
                     }) {
                         server = Some(Server {
                             incoming,
@@ -161,8 +161,8 @@ fn parse(bytes: &[u8], email: &str) -> Result<DiscoveryResult> {
             }
             event @ (Event::Text(_) | Event::CData(_)) => {
                 let text = match event {
-                    Event::Text(e) => e.decode().map_err(|_| invalid())?.into_owned(),
-                    Event::CData(e) => e.decode().map_err(|_| invalid())?.trim().to_owned(),
+                    Event::Text(e) => e.xml10_content().into_owned(),
+                    Event::CData(e) => e.xml10_content().trim().to_owned(),
                     _ => unreachable!(),
                 };
                 if text.len() > 2048 {
@@ -183,7 +183,7 @@ fn parse(bytes: &[u8], email: &str) -> Result<DiscoveryResult> {
                 }
             }
             Event::End(e) => {
-                if matches!(e.name().as_ref(), b"incomingServer" | b"outgoingServer") {
+                if matches!(e.name().as_ref(), "incomingServer" | "outgoingServer") {
                     if let Some(s) = server.take() {
                         servers.push(s);
                     }
