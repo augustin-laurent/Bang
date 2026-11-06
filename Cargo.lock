@@ -251,11 +251,14 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "atspi",
+ "atspi-common",
  "bang-composer",
  "bang-core",
  "chrono",
  "directories",
  "dom_query 0.29.0",
+ "futures-util",
  "gtk",
  "i-slint-backend-testing",
  "image",
@@ -274,6 +277,7 @@ dependencies = [
  "url",
  "webbrowser",
  "webkit2gtk",
+ "zbus",
 ]
 
 [[package]]
@@ -527,6 +531,7 @@ checksum = "c77886257be21c9cd89a4ae7e64860c6f0eefca799bb79127913052bd0eefb3d"
 dependencies = [
  "atspi-common",
  "atspi-proxies",
+ "zbus",
 ]
 
 [[package]]
