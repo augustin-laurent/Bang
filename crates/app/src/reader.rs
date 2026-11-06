@@ -385,6 +385,7 @@ fn mailto_prefill(url: &url::Url) -> crate::composer::Prefill {
     crate::composer::Prefill {
         from: None,
         to,
+        cc: Vec::new(),
         subject,
         body_html: format!(
             "<p>{}</p>",

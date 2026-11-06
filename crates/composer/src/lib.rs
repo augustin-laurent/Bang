@@ -49,6 +49,8 @@ pub enum HostMessage {
         from: Option<String>,
         /// Recipients to prefill in the To field.
         to: Vec<String>,
+        /// Recipients to prefill in the Cc field.
+        cc: Vec<String>,
         /// Subject to prefill.
         subject: String,
         /// Body to prefill (quoted original), as HTML.

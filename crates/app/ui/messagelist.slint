@@ -22,6 +22,9 @@ export component MessageList inherits Rectangle {
     }
     callback message-clicked(int);
     callback message-action(int, string);
+    // Right click: local store id plus the cursor position in window
+    // coordinates (for placing the popup menu).
+    callback message-context(int, length, length);
     list := ListView {
         // GTK may deliver events before the first size allocation. Preserve
         // the ScrollView minimum so its inset viewport never becomes negative.
@@ -51,6 +54,11 @@ export component MessageList inherits Rectangle {
                         if dx > root.swipe-threshold { root.message-action(msg.id, "star"); }
                         else if dx < -root.swipe-threshold { root.message-action(msg.id, "delete"); }
                         else { root.message-clicked(msg.id); }
+                    }
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                            root.message-context(msg.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
                     }
                 }
                 accessible-role: button; accessible-enabled: !Theme.blocked; accessible-label: msg.sender + ", " + msg.subject;

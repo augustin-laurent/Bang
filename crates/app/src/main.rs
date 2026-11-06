@@ -319,15 +319,16 @@ fn wire_selection(
         move |id: i32, action: slint::SharedString| {
             let id = i64::from(id);
             // Reply / forward open the composer prefilled with a quote.
-            if action == "reply" || action == "forward" {
+            if action == "reply" || action == "reply-all" || action == "forward" {
+                let mode = match action.as_str() {
+                    "forward" => composer::ComposerMode::Forward,
+                    "reply-all" => composer::ComposerMode::ReplyAll,
+                    _ => composer::ComposerMode::Reply,
+                };
                 if let Some(ui) = weak.upgrade() {
-                    if let Err(e) = composer::reply_or_forward(
-                        &ui,
-                        store.clone(),
-                        bridge.clone(),
-                        id,
-                        action == "forward",
-                    ) {
+                    if let Err(e) =
+                        composer::reply_or_forward(&ui, store.clone(), bridge.clone(), id, mode)
+                    {
                         ui.set_status_message(format!("{} {e}", tr("Reply unavailable:")).into());
                     }
                 }
@@ -375,6 +376,27 @@ fn wire_selection(
                 _ => return,
             };
             bridge.send(command);
+        }
+    });
+
+    // Right click on a row: resolve the message, prepare menu state, and show
+    // the popup at the cursor.
+    ui.on_message_context({
+        let store = store.clone();
+        let weak = ui.as_weak();
+        move |id: i32, x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let Ok(Some(summary)) = store.get_message(i64::from(id)) else {
+                return;
+            };
+            ui.set_menu_message(id);
+            ui.set_menu_msg_unread(summary.flags.is_unread());
+            ui.set_menu_msg_starred(summary.flags.is_flagged());
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_menu();
         }
     });
 }
@@ -772,6 +794,7 @@ fn resume_draft(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Br
     let prefill = composer::Prefill {
         from: Some(request.account.0.clone()),
         to: request.to.clone(),
+        cc: Vec::new(),
         subject: request.subject.clone(),
         body_html: request.body_html.clone().unwrap_or_default(),
         in_reply_to: request.in_reply_to.clone(),
@@ -790,6 +813,7 @@ fn resume_template(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge:
     let prefill = composer::Prefill {
         from: Some(request.account.0.clone()),
         to: request.to.clone(),
+        cc: Vec::new(),
         subject: request.subject.clone(),
         body_html: request.body_html.clone().unwrap_or_default(),
         in_reply_to: None,

@@ -1,0 +1,32 @@
+import { Theme } from "theme.slint";
+
+// One row of a right-click context menu. Labels are translated by the caller
+// with @tr, since the catalogue is keyed on literal English strings.
+export component ContextMenuItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback activated;
+    height: 32px;
+    border-radius: 6px;
+    background: touch.has-hover && root.enabled ? Theme.hover : transparent;
+    opacity: root.enabled ? 1 : 0.45;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled && !Theme.blocked;
+    accessible-action-default => { if root.enabled { root.activated(); } }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; spacing: 10px;
+        if root.icon != @image-url(""): Rectangle {
+            width: 16px;
+            Image {
+                source: root.icon; width: 16px; height: 16px;
+                y: (parent.height - self.height) / 2;
+                colorize: root.danger ? Theme.danger : Theme.text;
+            }
+        }
+        Text { text: root.text; color: root.danger ? Theme.danger : Theme.text; font-size: 13px; vertical-alignment: center; overflow: elide; }
+    }
+    touch := TouchArea { enabled: root.enabled && !Theme.blocked; mouse-cursor: pointer; clicked => { root.activated(); } }
+}
