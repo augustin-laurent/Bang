@@ -20,6 +20,10 @@ pub struct UiState {
     pub selected_folder: AtomicI64,
     /// Id of the currently selected message (-1 = none).
     pub selected_message: AtomicI64,
+    /// Messages selected for batch actions.
+    pub selected_messages: Mutex<Vec<i64>>,
+    /// Anchor row for shift-click range selection.
+    pub selection_anchor: AtomicI64,
     /// Whether the message list currently shows search results.
     pub search_active: AtomicBool,
     /// Account sections collapsed by the user.
@@ -40,6 +44,8 @@ impl UiState {
         Self {
             selected_folder: AtomicI64::new(-1),
             selected_message: AtomicI64::new(-1),
+            selected_messages: Mutex::new(Vec::new()),
+            selection_anchor: AtomicI64::new(-1),
             search_active: AtomicBool::new(false),
             collapsed_accounts: Mutex::new(HashSet::new()),
             account_status: Mutex::new(HashMap::new()),
@@ -67,7 +73,15 @@ impl UiState {
             } else if let Some(summary) = messages.iter().find(|m| m.id == selected) {
                 set_message_header(ui, summary);
             }
-            let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
+            let selected = self.selected_messages.lock().unwrap().clone();
+            let rows: Vec<MessageRow> = messages
+                .iter()
+                .map(|m| {
+                    let mut row = to_row(m);
+                    row.is_selected = selected.contains(&m.id);
+                    row
+                })
+                .collect();
             set_message_rows(ui, rows);
         }
     }
@@ -515,6 +529,7 @@ pub(crate) fn to_row(m: &MessageSummary) -> MessageRow {
         unread: m.flags.is_unread(),
         starred: m.flags.is_flagged(),
         has_attachments: m.has_attachments,
+        is_selected: false,
     }
 }
 

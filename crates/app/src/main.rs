@@ -161,6 +161,7 @@ fn wire_selection(
     state: &Arc<state::UiState>,
     bridge: bridge::Bridge,
 ) {
+    use slint::Model;
     ui.on_account_toggled({
         let store = store.clone();
         let state = state.clone();
@@ -212,6 +213,11 @@ fn wire_selection(
                 return;
             };
             let id = i64::from(id);
+            state.selected_messages.lock().unwrap().clear();
+            state
+                .selection_anchor
+                .store(-1, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selection_count(0);
             state
                 .selected_folder
                 .store(id, std::sync::atomic::Ordering::SeqCst);
@@ -240,17 +246,81 @@ fn wire_selection(
             let Ok(Some(folder)) = store.get_folder_by_id(i64::from(id)) else {
                 return;
             };
-            // INBOX is protected, while the virtual unified row and account
-            // headers are filtered in the sidebar before this callback.
-            if folder.path.eq_ignore_ascii_case("INBOX") {
-                return;
-            }
+            // The virtual unified row and account headers are filtered in the
+            // sidebar. INBOX can be marked read / used to create a folder,
+            // while the UI hides its rename/delete actions.
             ui.set_menu_folder(id);
             ui.set_menu_folder_kind(bang_core::message::folder_kind(&folder.path).into());
             ui.set_menu_folder_name(folder.name.into());
+            ui.set_menu_folder_inbox(folder.path.eq_ignore_ascii_case("INBOX"));
             ui.set_menu_x(x);
             ui.set_menu_y(y);
             ui.invoke_show_folder_menu();
+        }
+    });
+    ui.on_selection_clicked({
+        let state = state.clone();
+        let store = store.clone();
+        let weak = ui.as_weak();
+        move |id: i32, control: bool, shift: bool, index: i32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let id = i64::from(id);
+            let mut selection = state.selected_messages.lock().unwrap();
+            if shift {
+                let anchor = state
+                    .selection_anchor
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                let model = ui.get_messages();
+                let anchor_index = (0..model.row_count())
+                    .find(|&i| {
+                        model
+                            .row_data(i)
+                            .map(|r| i64::from(r.id) == anchor)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(index as usize);
+                let low = anchor_index.min(index.max(0) as usize);
+                let high = anchor_index
+                    .max(index.max(0) as usize)
+                    .min(model.row_count().saturating_sub(1));
+                for i in low..=high {
+                    if let Some(row) = model.row_data(i) {
+                        let row_id = i64::from(row.id);
+                        if !selection.contains(&row_id) {
+                            selection.push(row_id);
+                        }
+                    }
+                }
+            } else if control {
+                if let Some(position) = selection.iter().position(|&selected| selected == id) {
+                    selection.remove(position);
+                } else {
+                    selection.push(id);
+                }
+                state
+                    .selection_anchor
+                    .store(id, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                selection.clear();
+                selection.push(id);
+                state
+                    .selection_anchor
+                    .store(id, std::sync::atomic::Ordering::SeqCst);
+            }
+            ui.set_selection_count(if control || shift {
+                selection.len() as i32
+            } else {
+                0
+            });
+            let batch = selection.len() > 1 || control || shift;
+            drop(selection);
+            if batch {
+                state.reload_messages(&ui, &store);
+            } else {
+                ui.invoke_message_selected(id as i32);
+            }
         }
     });
     ui.on_folder_action({
@@ -310,6 +380,11 @@ fn wire_selection(
             let Some(ui) = weak.upgrade() else {
                 return;
             };
+            state.selected_messages.lock().unwrap().clear();
+            state
+                .selection_anchor
+                .store(-1, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selection_count(0);
             let query = text.to_string();
             if query.trim().is_empty() {
                 // Leaving search mode: restore the folder view.
@@ -455,6 +530,7 @@ fn wire_selection(
     // the popup at the cursor.
     ui.on_message_context({
         let store = store.clone();
+        let state = state.clone();
         let weak = ui.as_weak();
         move |id: i32, x: f32, y: f32| {
             let Some(ui) = weak.upgrade() else {
@@ -468,6 +544,18 @@ fn wire_selection(
             ui.set_menu_msg_starred(summary.flags.is_flagged());
             ui.set_menu_x(x);
             ui.set_menu_y(y);
+            let mut selected = state.selected_messages.lock().unwrap();
+            if !selected.contains(&i64::from(id)) {
+                selected.clear();
+                selected.push(i64::from(id));
+                ui.set_selection_count(0);
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                ui.set_selected_message(-1);
+            }
+            ui.set_menu_batch(selected.len() > 1);
+            drop(selected);
             // Deletion inside Trash/Junk is permanent; elsewhere it moves.
             let kind = store
                 .get_folder_by_id(summary.folder_id)
@@ -501,19 +589,117 @@ fn wire_selection(
     ui.on_move_selected({
         let store = store.clone();
         let bridge = bridge.clone();
+        let state = state.clone();
         let weak = ui.as_weak();
         move |folder_id: i32| {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
-            let Ok(Some(summary)) = store.get_message(ui.get_menu_message() as i64) else {
+            let ids = {
+                let selected = state.selected_messages.lock().unwrap();
+                if selected.len() > 1 {
+                    selected.clone()
+                } else {
+                    vec![i64::from(ui.get_menu_message())]
+                }
+            };
+            let Ok(Some(destination)) = store.get_folder_by_id(i64::from(folder_id)) else {
                 return;
             };
-            bridge.send(bang_core::UiCommand::Move {
-                account: bang_core::AccountId(summary.account_id),
-                message_ids: vec![ui.get_menu_message() as i64],
-                dest_folder_id: i64::from(folder_id),
-            });
+            let mut message_ids = Vec::new();
+            for id in ids {
+                if let Ok(Some(summary)) = store.get_message(id) {
+                    if summary.account_id == destination.account_id {
+                        message_ids.push(id);
+                    }
+                }
+            }
+            if !message_ids.is_empty() {
+                bridge.send(bang_core::UiCommand::Move {
+                    account: bang_core::AccountId(destination.account_id),
+                    message_ids,
+                    dest_folder_id: i64::from(folder_id),
+                });
+            }
+            state.selected_messages.lock().unwrap().clear();
+            ui.set_selection_count(0);
+            state.reload_messages(&ui, &store);
+        }
+    });
+    ui.on_batch_action({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |action: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let ids = state.selected_messages.lock().unwrap().clone();
+            if ids.is_empty() {
+                return;
+            }
+            if action == "move" {
+                let Some(first) = ids.first().copied() else {
+                    return;
+                };
+                let Ok(Some(summary)) = store.get_message(first) else {
+                    return;
+                };
+                let Ok(folders) = store.get_folders(&summary.account_id) else {
+                    return;
+                };
+                let rows = folders
+                    .into_iter()
+                    .filter(|f| f.id != summary.folder_id)
+                    .map(|f| FolderRow {
+                        id: f.id as i32,
+                        name: f.name.into(),
+                        kind: bang_core::message::folder_kind(&f.path).into(),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                ui.set_menu_message(first as i32);
+                ui.set_move_folders(slint::ModelRc::new(slint::VecModel::from(rows)));
+                ui.set_menu_x(220.0);
+                ui.set_menu_y(80.0);
+                ui.set_menu_batch(true);
+                ui.invoke_show_move_menu();
+                return;
+            }
+            let mut groups: std::collections::HashMap<String, Vec<i64>> =
+                std::collections::HashMap::new();
+            for id in ids {
+                if let Ok(Some(summary)) = store.get_message(id) {
+                    groups.entry(summary.account_id).or_default().push(id);
+                }
+            }
+            for (account_id, message_ids) in groups {
+                let account = bang_core::AccountId(account_id);
+                let command = match action.as_str() {
+                    "delete" => bang_core::UiCommand::Delete {
+                        account,
+                        message_ids,
+                    },
+                    "read" => bang_core::UiCommand::SetFlags {
+                        account,
+                        message_ids,
+                        flags: bang_core::MessageFlags::SEEN,
+                        add: true,
+                    },
+                    "star" => bang_core::UiCommand::SetFlags {
+                        account,
+                        message_ids,
+                        flags: bang_core::MessageFlags::FLAGGED,
+                        add: true,
+                    },
+                    _ => return,
+                };
+                bridge.send(command);
+            }
+            state.selected_messages.lock().unwrap().clear();
+            ui.set_selection_count(0);
+            state.reload_messages(&ui, &store);
         }
     });
 }
