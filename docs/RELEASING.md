@@ -2,12 +2,12 @@
 
 The initial release is **v0.1.0**, an experimental GitHub prerelease, built only for
 Linux x86_64. The source version remains `0.1.0`; Debian uses `0.1.0-1`, Fedora
-uses `0.1.0-1.fc44`, and Arch uses `0.1.0-1`. GitHub's prerelease flag communicates
+uses `0.1.0-1.fc45`, and Arch uses `0.1.0-1`. GitHub's prerelease flag communicates
 its early-access status. These package versions will sort below `0.1.1`.
 
 ## Build and package
 
-The reusable `Packages` workflow builds natively inside Ubuntu 24.04, Fedora 44,
+The reusable `Packages` workflow builds natively inside Ubuntu 26.04, Fedora 45,
 and current Arch containers. Each build uses committed Cargo/npm lockfiles and
 builds the local editor before the Rust workspace. Both executables are installed
 in `/usr/lib/bang`; `/usr/bin/bang` launches the app. The composer resolves its
