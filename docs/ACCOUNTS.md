@@ -45,6 +45,41 @@ Si le trousseau est verrouillé ou indisponible :
    et il faudra se reconnecter au prochain démarrage. Le cache mail reste local.
 
 Aucun repli silencieux vers un fichier de mots de passe en clair n’est effectué.
+
+### Fournisseur Secret Service
+
+Les paquets Bang n’installent aucun fournisseur de trousseau, même en dépendance
+recommandée. Bang utilise le service `org.freedesktop.secrets` du bus D-Bus de la
+session utilisateur, sans sélectionner un fournisseur selon le bureau.
+
+| Solution | Configuration requise |
+| --- | --- |
+| GNOME Keyring | Service Secret Service disponible dans la session et trousseau configuré. |
+| KWallet / KSecretD (KDE) | Version proposant Secret Service et interface activée ; les anciennes versions peuvent nécessiter l’option « Use KWallet for the Secret Service interface ». Les versions récentes utilisent KSecretD. |
+| KeePassXC | Activer **Outils → Paramètres → Intégration Secret Service**, puis exposer un groupe dans **Base de données → Paramètres de la base de données → Intégration Secret Service**. |
+| oo7 | Autre fournisseur Secret Service ; interopérabilité non vérifiée dans Bang. |
+
+Le fournisseur doit exposer une collection par défaut (alias `default`) pour
+l’enregistrement. Configurer cette collection dans le fournisseur et accepter,
+si nécessaire, ses demandes de déverrouillage ou d’autorisation. Pour KeePassXC,
+la base contenant le groupe exposé doit être disponible. Lancer Bang dans la
+session utilisateur disposant du bus D-Bus, plutôt qu’avec `sudo`.
+
+Un seul fournisseur peut posséder le nom `org.freedesktop.secrets` à la fois.
+Bang utilise celui qui répond, sans modifier les services ni les réglages du
+bureau. En cas d’absence, de verrouillage ou de configuration incomplète, utiliser
+le parcours **Réessayer le stockage sécurisé** ou **Continuer pour cette session**
+décrit ci-dessus.
+
+Changer de fournisseur ne transfère pas les secrets : ils restent dans le
+trousseau d’origine. Une reconnexion aux comptes peut être nécessaire pour les
+enregistrer dans le nouveau fournisseur. Retirer la dépendance de Bang ne
+désinstalle pas un trousseau déjà présent.
+
+Références : [KWallet](https://github.com/KDE/kwallet/blob/master/README.md),
+[guide KeePassXC](https://keepassxc.org/docs/KeePassXC_UserGuide/#_secret_service_integration),
+[transition Fedora vers oo7](https://fedoraproject.org/wiki/Changes/oo7_Secrets_Service_Provider).
+
 Si un compte déjà enregistré passe en mode temporaire alors que son ancien
 trousseau est inaccessible, les anciennes références restent conservées pour
 permettre leur suppression ultérieure ; elles ne servent plus à la connexion.
