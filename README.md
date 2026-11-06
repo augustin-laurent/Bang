@@ -8,7 +8,7 @@ A desktop mail client for Linux, written in Rust, with a Mail macOS 26-inspired 
 
 - **UI**: [Slint](https://slint.dev) (Slint chrome in a GTK3 host, embedded WebKit HTML reader; isolated local rich composer)
 - **Engine**: IMAP (per-account syncer thread, IDLE push) + SMTP, SQLite cache, OAuth2 (Gmail/Microsoft) and generic IMAP/SMTP accounts
-- **Status**: early development — see [PLAN.md](PLAN.md) for the roadmap
+- **Status**: early development
 
 ![Bang inbox in light mode, rendered from fictional offline messages](assets/screenshots/inbox-light.png)
 
@@ -70,6 +70,19 @@ IMAP/SMTP and iCloud app-password setup are also supported. See
 - Full-text search across all accounts; French/English interface and locale-aware dates.
 - Light/dark/system theme, desktop notifications for new mail, and a settings
   dialog for theme and account management.
+- Optional detection of recent email verification codes, with a notification to
+  copy the code and accessibility-based insertion when a compatible field is
+  focused. Codes are kept only in memory and are not shown in notifications.
+
+Verification-code suggestions and automatic service startup are separate,
+disabled-by-default settings. Startup uses the desktop's XDG autostart directory
+and does not depend on systemd or OpenRC. When suggestions are enabled the mail
+service keeps running after the window closes; **Ctrl+Q** stops it. Direct
+insertion depends on the target application's accessibility support. In tests
+with Firefox 159 and Chromium in isolated sessions, AT-SPI insertion was
+unavailable; Bang checks the result and offers copying instead. The complete
+verification-code flow and XDG startup have not yet been tested in real-world
+use, including GNOME and Artix or Gentoo sessions using OpenRC.
 
 ## Keyboard shortcuts
 

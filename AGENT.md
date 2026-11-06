@@ -8,7 +8,7 @@ first; it points at the detailed docs instead of duplicating them.
 **Bang** is a desktop mail client for Linux, written in Rust. A Mail-macOS-style
 three-pane UI (folders / message list / reading pane) built on **Slint**, with a
 headless mail engine (IMAP + SMTP + OAuth2 + SQLite cache) and an isolated
-WebKit rich-text composer. Early development — see `PLAN.md` for the roadmap.
+WebKit rich-text composer. Early development.
 
 - `crates/bang-core` — mail engine. **No UI dependencies.** Headless, unit-testable.
 - `crates/app` — Slint UI + the tokio↔Slint bridge. The only crate that touches Slint.
@@ -38,14 +38,14 @@ Runtime state: `~/.local/share/bang/bang.db` (SQLite, WAL),
 
 ## Architecture in one breath
 
-Unidirectional, actor-style. UI → core is `UiCommand` over a tokio channel;
+Unidirectional, actor-style. UI → core is `UiCommand` over a private Unix socket;
 core → UI is `MailEvent`, applied on the Slint event loop via
-`slint::invoke_from_event_loop`. Three thread kinds: the GTK/Slint UI thread,
-one `bang-core` thread (tokio runtime, command loop, SMTP/OAuth tasks), and two
-IMAP workers per account (a background IDLE syncer + an on-demand interactive
-connection). Never call the store or a syncer directly from a UI callback —
-route through `UiCommand` (the one documented exception: local-cache reads of
-folder contents). Full detail: `docs/ARCHITECTURE.md`.
+`slint::invoke_from_event_loop`. The per-user `bang-service` owns the tokio
+runtime and mail engine. Each account has an IDLE syncer, an interactive IMAP
+worker and a separate lazy OTP worker. A small supervisor handles GTK's abrupt
+exit when the desktop session ends. Never call a syncer or write to the store
+from a UI callback; route operations through `UiCommand`. Local-cache reads are
+allowed. Full detail: `docs/ARCHITECTURE.md`.
 
 ## Code conventions
 
@@ -93,4 +93,3 @@ These cost real time to discover. Full list in `docs/DEVELOPMENT.md`:
   debugging.
 - `docs/ACCOUNTS.md` — OAuth registration, iCloud app passwords, token renewal.
 - `docs/DESIGN.md`, `docs/VALIDATION.md` — UI rationale and test notes.
-- `PLAN.md` — product roadmap and milestone commit plan.

@@ -1,8 +1,7 @@
 # Bang — Development Guide
 
 How to build, test, and extend Bang. For the system design see
-[ARCHITECTURE.md](ARCHITECTURE.md); for the roadmap see
-[../PLAN.md](../PLAN.md).
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Prerequisites
 
@@ -42,7 +41,7 @@ cargo build --workspace --release
 cargo run --release -p app
 ```
 
-Keep `app` and `bang-compose` in the same directory when installing. For release,
+Keep `app`, `bang-service` and `bang-compose` in the same directory when installing. For release,
 use `cargo build --workspace --release`. Node/npm are build-time tools only:
 compiled JS, CSS and fonts are embedded in `bang-compose`.
 
@@ -62,6 +61,7 @@ alternate filesystem backend cannot bypass permission enforcement.
 ```toml
 theme = "system"    # system, light, dark
 language = "system" # system, fr, en
+otp_enabled = false # inspect recent unread inbox messages for verification codes
 ```
 
 Existing configuration files remain compatible; missing language defaults to
@@ -75,6 +75,7 @@ cargo test -p bang-core
 
 # IMAP integration tests (in-process test server).
 cargo test -p bang-core --features integration
+
 ```
 
 The integration tests are gated behind the `integration` feature so that a

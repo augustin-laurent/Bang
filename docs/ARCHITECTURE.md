@@ -1,8 +1,7 @@
 # Bang — Architecture
 
 Bang is a desktop mail client for Linux. This document describes how the
-current code is organized and how data flows through it. For the product
-roadmap see [../PLAN.md](../PLAN.md); for build/test instructions see
+current code is organized and how data flows through it. For build/test instructions see
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Workspace layout
@@ -25,7 +24,10 @@ crates/
   app/           # Slint UI + the bridge to bang-core.
     src/
       main.rs      # Entry point, wiring, selection handlers
-      bridge.rs    # tokio runtime thread + event forwarder
+      bridge.rs    # private Unix socket client + event forwarder
+      bin/bang-service.rs # per-user service, IPC and mail engine runtime
+      bin/service/ # desktop notifications, clipboard and accessibility
+      autostart.rs # per-user XDG desktop autostart registration
       state.rs     # Applies MailEvents to the window
       config.rs    # Loads ~/.config/bang/config.toml
     ui/            # .slint files (window, panes, theme, wizard)
@@ -38,37 +40,43 @@ renderer, while a native WebKitGTK widget draws the HTML body.
 
 ## Threading model
 
-There are three kinds of threads:
+There are three main groups of threads:
 
 1. **GTK/Slint event loop** (main thread). GTK owns the native window,
    advances Slint timers and animations, and delivers Slint event-loop proxy
    callbacks through GLib idle sources. All UI mutation happens here.
-2. **`bang-core` thread** (one OS thread). Hosts a multi-thread tokio runtime
-   (2 workers). Runs the `MailService` command loop and the event forwarder.
+2. **`bang-service` process**. Hosts the mail engine and its tokio runtime.
+   The private, versioned Unix socket transports commands and events; a
+   per-user lock prevents duplicate services. A supervisor cleans up the socket
+   if GTK terminates when the Wayland compositor disappears; it does not restart
+   a crashed worker.
    Long-running async work (SMTP sends, OAuth logins) is spawned on this
    runtime.
-3. **IMAP workers** (two per account). The background syncer owns the IDLE
+3. **IMAP workers** (three per account). The background syncer owns the IDLE
    connection. A separate interactive worker opens a second connection on demand
    and reuses it for body fetches, flags and deletion. User actions do not wait
-   for a quiet mailbox or a full folder synchronization.
+   for a quiet mailbox or a full folder synchronization. An independent OTP
+   worker opens a connection only when it receives a scan request.
 
 The reason for the split: Slint must stay responsive, and IMAP `IDLE` must be
 able to block without stalling anything else.
 
 ## The bridge (UI <-> core)
 
-`app/src/bridge.rs` owns the two channels that cross the thread boundary:
+`app/src/bridge.rs` connects to `$XDG_RUNTIME_DIR/bang/service.sock` and
+starts `bang-service` on demand if necessary. The socket and its directory are
+private to the user, peer UIDs are checked, frames are bounded, and the
+handshake checks the protocol version.
 
-- **Commands** (`UiCommand`): UI -> core, over a tokio `UnboundedSender`.
-  The `bang-core` thread's command loop calls
-  `MailService::handle_command` for each one.
-- **Events** (`MailEvent`): core -> UI, over a tokio `UnboundedSender`. A
-  `forward_events` task receives them and hops onto the Slint event loop via
-  `slint::invoke_from_event_loop`, where `UiState::apply` mutates the window.
+- **Commands** (`UiCommand`) cross the socket and reach
+  `MailService::handle_command` in the service runtime.
+- **Events** (`MailEvent`) cross the socket and are posted to the Slint event
+  loop, where `UiState::apply` mutates the window. An attaching client receives
+  current folders and account statuses as well as subsequent events.
 
-`Bridge` holds the command sender and **must stay alive** until the window
-closes; the UI closures also hold senders, which keeps the command channel
-open for the process lifetime.
+The GUI reads cached data through its own SQLite connection. The service owns
+mail connections and all mail commands. It checks scheduled sends and reminders
+only while a GUI client is attached.
 
 ### Command and event surface
 
@@ -92,9 +100,9 @@ open for the process lifetime.
 
 ## The store
 
-`store.rs` is a single `rusqlite` connection (bundled SQLite) guarded by a
-`std::sync::Mutex`, in WAL mode. One connection is enough at this scale; no
-pool is needed.
+Each process opens a `rusqlite` connection (bundled SQLite) guarded by a
+`std::sync::Mutex`, in WAL mode. The interface uses its connection for cache
+reads; the mail service owns synchronization and mail operations.
 
 Tables:
 
@@ -157,7 +165,13 @@ is available; no metadata request is sent when there is no new mail. A changed
 UIDVALIDITY discards cached bodies, attachments and the checkpoint before fetching
 replacement messages, preventing reused UIDs from displaying old content.
 
-Sync never fetches body parts or previews. `OpenMessage` fetches the full MIME
+Normal sync does not fetch body parts or previews. When OTP detection is enabled,
+the separate OTP worker fetches at most 256 KiB of each eligible recent unread
+INBOX message using a partial `BODY.PEEK[]`, without caching it or marking it
+read. Extracted codes are retained only in memory for at most three minutes.
+The service sends an actionable desktop notification without including the code;
+copy requires an action, and insertion uses AT-SPI only for a matching focused
+field. `OpenMessage` fetches the full MIME
 message with `BODY.PEEK[]` on demand and later opens use the local cache, including
 empty and HTML-only bodies. SQL NULL means unfetched; an empty string means
 fetched and empty. Full-text body search covers only bodies already downloaded.
