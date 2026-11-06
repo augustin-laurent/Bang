@@ -8,7 +8,7 @@ available; browser automation is not applicable to these surfaces.
 The flow under test is: Settings → Add account → provider selection → provider
 form / manual presets → validation progress → failure and retry or account saved.
 
-- Provider rows show bundled Google/Microsoft marks, a cloud for iCloud and a
+- Provider rows show bundled Google, Microsoft, and iCloud marks, plus a
   server icon for other mailboxes. Settings account rows use the authentication
   provider rather than guessing it from the email domain.
 - Appearance choices have individual previews; the live theme controls their

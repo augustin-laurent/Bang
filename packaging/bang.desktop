@@ -3,6 +3,7 @@ Type=Application
 Name=Bang
 Comment=Read and compose email
 Exec=bang
+StartupWMClass=bang
 Icon=io.github.augustin_laurent.Bang
 Terminal=false
 Categories=Network;Email;
