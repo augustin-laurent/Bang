@@ -9,6 +9,7 @@ include_modules!();
 
 mod accounts;
 mod attachments;
+mod autostart;
 mod avatars;
 mod bridge;
 mod composer;
@@ -60,7 +61,7 @@ fn main() -> Result<(), slint::PlatformError> {
     gtk_host::init()?;
     let ui = BangApp::new()?;
     let state = Arc::new(state::UiState::new());
-    let bridge = bridge::Bridge::start(&ui, store.clone(), state.clone());
+    let bridge = bridge::Bridge::start(&ui, store.clone(), state.clone())?;
 
     // Apply the saved theme (light / dark / system).
     let config = config::Config::load();
@@ -93,7 +94,7 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_compose(&ui, &store, bridge.clone());
     wire_attachments(&ui, &store);
     wire_drafts(&ui, &store, bridge.clone());
-    wire_settings(&ui, &store, &state, bridge);
+    wire_settings(&ui, &store, &state, bridge.clone());
     welcome::wire(
         &ui,
         dirs.config_dir().join("config.toml"),
@@ -103,13 +104,17 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak = ui.as_weak();
     ui.window().on_close_requested({
         let weak = weak.clone();
-        move || close_application(&weak)
+        move || close_application(&weak, false)
     });
     // Ctrl+Q quits through the same close path as the window button.
     ui.on_quit({
         let weak = weak.clone();
+        let bridge = bridge.clone();
         move || {
-            let _ = close_application(&weak);
+            if !composer::is_open() {
+                bridge.shutdown();
+            }
+            let _ = close_application(&weak, true);
         }
     });
 
@@ -121,6 +126,11 @@ fn main() -> Result<(), slint::PlatformError> {
         std::time::Duration::from_secs(3),
         move || {
             if let Some(ui) = weak_theme.upgrade() {
+                if ui.get_settings_open() {
+                    if let Ok(enabled) = autostart::enabled() {
+                        ui.set_settings_autostart(enabled);
+                    }
+                }
                 if config::Config::load().theme == "system" {
                     let dark = system_dark_mode();
                     if dark != Theme::get(&ui).get_dark() {
@@ -131,9 +141,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         },
     );
-    // When the window closes, `run` returns and the process exits, which
-    // terminates the syncer threads (IMAP servers notice the TCP drop).
-    // The command channel stays open because the UI closures hold senders.
+    // Closing the window detaches the interface from the user service.
     ui.run()
 }
 
@@ -141,9 +149,12 @@ fn main() -> Result<(), slint::PlatformError> {
 ///
 /// Returns [`slint::CloseRequestResponse::KeepWindowShown`] while the composer
 /// is still closing, otherwise hides the window (which ends the process).
-fn close_application(weak: &slint::Weak<BangApp>) -> slint::CloseRequestResponse {
+fn close_application(
+    weak: &slint::Weak<BangApp>,
+    quit_service: bool,
+) -> slint::CloseRequestResponse {
     if composer::is_open() {
-        composer::request_application_close();
+        composer::request_application_close(quit_service);
         slint::CloseRequestResponse::KeepWindowShown
     } else {
         if let Some(ui) = weak.upgrade() {
@@ -521,7 +532,50 @@ fn wire_settings(
             ui.set_settings_accounts(slint::ModelRc::new(slint::VecModel::from(rows)));
             ui.set_settings_theme(config::Config::load().theme.into());
             ui.set_settings_language(config::Config::load().language.into());
+            ui.set_settings_otp(config::Config::load().otp_enabled);
+            match autostart::enabled() {
+                Ok(enabled) => ui.set_settings_autostart(enabled),
+                Err(_) => ui.set_status_message(tr("Could not read startup settings").into()),
+            }
             ui.set_settings_open(true);
+        }
+    });
+
+    ui.on_settings_otp_toggled({
+        let weak = ui.as_weak();
+        let bridge = bridge.clone();
+        move |enabled| {
+            if let Some(ui) = weak.upgrade() {
+                let mut config = config::Config::load();
+                config.otp_enabled = enabled;
+                if welcome::save_preferences(&ui, &mut config).is_ok() {
+                    ui.set_settings_otp(enabled);
+                    bridge.reload_otp_settings();
+                } else {
+                    ui.set_settings_otp(enabled);
+                    ui.set_settings_otp(!enabled);
+                    ui.set_status_message(tr("Could not save settings").into());
+                }
+            }
+        }
+    });
+    ui.on_settings_autostart_toggled({
+        let weak = ui.as_weak();
+        move |enabled| {
+            if let Some(ui) = weak.upgrade() {
+                if autostart::set_enabled(enabled).is_err() {
+                    ui.set_status_message(tr("Could not save startup settings").into());
+                }
+                let actual = match autostart::enabled() {
+                    Ok(actual) => actual,
+                    Err(_) => {
+                        ui.set_status_message(tr("Could not read startup settings").into());
+                        !enabled
+                    }
+                };
+                ui.set_settings_autostart(!actual);
+                ui.set_settings_autostart(actual);
+            }
         }
     });
 

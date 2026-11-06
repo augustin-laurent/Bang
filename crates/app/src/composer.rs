@@ -11,6 +11,7 @@ use std::{
     },
 };
 static CLOSE_MAIN: AtomicBool = AtomicBool::new(false);
+static QUIT_SERVICE: AtomicBool = AtomicBool::new(false);
 struct Session {
     child: Child,
     input: ChildStdin,
@@ -67,8 +68,9 @@ pub fn request_close() {
     }
 }
 /// Close the main window only after the user agrees to close the writer.
-pub fn request_application_close() {
+pub fn request_application_close(quit_service: bool) {
     CLOSE_MAIN.store(true, Ordering::Relaxed);
+    QUIT_SERVICE.store(quit_service, Ordering::Relaxed);
     request_close();
 }
 /// Propagate language and appearance without changing the draft.
@@ -218,6 +220,7 @@ pub fn open(
                 }
                 EditorMessage::CloseCancelled => {
                     CLOSE_MAIN.store(false, Ordering::Relaxed);
+                    QUIT_SERVICE.store(false, Ordering::Relaxed);
                 }
                 EditorMessage::AttachPaths { paths } => {
                     let mut s = session.lock().unwrap();
@@ -365,6 +368,9 @@ pub fn open(
         }
         drop(slot);
         if CLOSE_MAIN.swap(false, Ordering::Relaxed) && status.as_ref().is_ok_and(|s| s.success()) {
+            if QUIT_SERVICE.swap(false, Ordering::Relaxed) {
+                bridge.shutdown();
+            }
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak.upgrade() {

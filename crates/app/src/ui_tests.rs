@@ -3,6 +3,40 @@ use crate::{BangApp, FolderRow, MessageRow};
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Global, LogicalSize, Model, VecModel};
+
+#[test]
+fn verification_and_autostart_controls_are_independent() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    let otp = Arc::new(AtomicBool::new(false));
+    let startup = Arc::new(AtomicBool::new(false));
+    let otp_result = otp.clone();
+    ui.on_settings_otp_toggled(move |enabled| otp_result.store(enabled, Ordering::SeqCst));
+    let startup_result = startup.clone();
+    ui.on_settings_autostart_toggled(move |enabled| {
+        startup_result.store(enabled, Ordering::SeqCst)
+    });
+    ui.set_settings_open(true);
+    ui.show().unwrap();
+    ElementHandle::find_by_accessible_label(&ui, "Suggest verification codes")
+        .next()
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert!(otp.load(Ordering::SeqCst));
+    assert!(!startup.load(Ordering::SeqCst));
+    ElementHandle::find_by_accessible_label(&ui, "Start service when signing in")
+        .next()
+        .unwrap()
+        .mock_single_click(PointerEventButton::Left);
+    assert!(startup.load(Ordering::SeqCst));
+    assert!(otp.load(Ordering::SeqCst));
+    ui.hide().unwrap();
+}
 #[test]
 fn native_navigation_resize_and_grouping() {
     i_slint_backend_testing::init_no_event_loop();
@@ -1441,7 +1475,7 @@ fn welcome_motion_settles_and_desktop_reduced_motion_stops_it() {
 fn account_removal_updates_sidebar_selection_and_clears_pending_state() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = BangApp::new().unwrap();
-    let store = bang_core::Store::open_in_memory().unwrap();
+    let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
     let state = crate::state::UiState::new();
     state
         .removing_accounts

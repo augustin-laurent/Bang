@@ -34,6 +34,8 @@ export component ThemeOption inherits Rectangle {
 export component SettingsDialog inherits Rectangle {
     in property <bool> open; in property <[AccountRow]> accounts;
     in property <bool> online-avatars: true; callback avatars-toggled(bool);
+    in property <bool> otp-enabled: false; in property <bool> autostart-enabled: false;
+    callback otp-toggled(bool); callback autostart-toggled(bool);
     in property <string> theme; in property <string> language;
     private property <string> remove-id; private property <string> remove-email;
     callback theme-selected(string); callback language-selected(string);
@@ -57,6 +59,10 @@ export component SettingsDialog inherits Rectangle {
                         ThemeOption { name: @tr("Dark"); mode: "dark"; selected: root.theme == "dark"; chosen => { root.theme-selected("dark"); } }
                     }
                     CheckControl { text: @tr("Online avatars"); checked: root.online-avatars; toggled => { root.avatars-toggled(self.checked); } }
+                    Text { text: @tr("Verification codes"); color: Theme.text; font-size: 14px; font-weight: 600; }
+                    CheckControl { text: @tr("Suggest verification codes"); checked: root.otp-enabled; toggled => { root.otp-toggled(self.checked); } }
+                    CheckControl { text: @tr("Start service when signing in"); checked: root.autostart-enabled; toggled => { root.autostart-toggled(self.checked); } }
+                    Text { text: @tr("Disabling startup takes effect at the next sign-in."); color: Theme.text-secondary; font-size: 12px; wrap: word-wrap; }
                     Text { text: @tr("Language"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     HorizontalLayout { spacing: 8px;
                         ActionButton { modal: true; text: @tr("System"); active: root.language == "system"; framed: true; clicked => { root.language-selected("system"); } }

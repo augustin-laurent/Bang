@@ -96,6 +96,7 @@ export component BangApp inherits Window {
     in-out property <bool> settings-open: false;
     in property <[AccountRow]> settings-accounts; in property <string> settings-theme: "system";
     in property <string> settings-language: "system";
+    in property <bool> settings-otp: false; in property <bool> settings-autostart: false;
     in-out property <string> email; in-out property <string> imap-host;
     in-out property <string> imap-port: "993"; in-out property <string> smtp-host;
     in-out property <string> smtp-port: "465"; in-out property <string> username;
@@ -121,6 +122,7 @@ export component BangApp inherits Window {
     callback quit();
     callback settings-opened(); callback settings-theme-selected(string);
     callback settings-language-selected(string); callback settings-account-remove(string); callback settings-close();
+    callback settings-otp-toggled(bool); callback settings-autostart-toggled(bool);
     callback settings-account-reconnect(string);
     callback settings-account-unlock(string);
 
@@ -311,6 +313,9 @@ export component BangApp inherits Window {
         email-edited(value) => { root.wizard-email-edited(value); }
     }
     SettingsDialog { x: 0px; y: 0px; width: parent.width; height: parent.height; open: root.settings-open; accounts: root.settings-accounts; theme: root.settings-theme; language: root.settings-language;
+        otp-enabled: root.settings-otp; autostart-enabled: root.settings-autostart;
+        otp-toggled(enabled) => { root.settings-otp-toggled(enabled); }
+        autostart-toggled(enabled) => { root.settings-autostart-toggled(enabled); }
         online-avatars: root.online-avatars; avatars-toggled(enabled) => { root.avatars-toggled(enabled); }
         theme-selected(m) => { root.settings-theme-selected(m); } language-selected(m) => { root.settings-language-selected(m); }
         account-remove(id) => { root.settings-account-remove(id); } add-account => { root.settings-open = false; root.wizard-open = true; }

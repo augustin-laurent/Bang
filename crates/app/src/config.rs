@@ -17,6 +17,9 @@ pub struct Config {
     /// Fetch sender photos and logos online.
     #[serde(default = "default_online_avatars")]
     pub online_avatars: bool,
+    /// Detect verification codes in newly received messages.
+    #[serde(default)]
+    pub otp_enabled: bool,
     /// First-launch setup: absent for legacy installs, false while pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub welcome_completed: Option<bool>,
@@ -29,6 +32,7 @@ impl Default for Config {
             theme: default_theme(),
             language: default_theme(),
             online_avatars: true,
+            otp_enabled: false,
             welcome_completed: None,
         }
     }
