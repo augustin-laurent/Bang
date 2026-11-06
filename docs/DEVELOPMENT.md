@@ -13,7 +13,7 @@ How to build, test, and extend Bang. For the system design see
 Distribution packages:
 
 ```sh
-# Arch / Pond
+# Arch
 sudo pacman -S --needed webkit2gtk-4.1
 # Debian / Ubuntu
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
@@ -243,7 +243,35 @@ is reloaded for each sign-in attempt. New accounts are validated asynchronously
 against IMAP and SMTP before they are persisted; no test message is sent.
 
 Run `bash scripts/test-keyring.sh` for a real Secret Service roundtrip using an
-isolated D-Bus session and temporary keyring (requires `gnome-keyring-daemon`).
+isolated D-Bus session and temporary keyring (requires `gnome-keyring-daemon`
+only as a test dependency). The CI tests job installs it for this check; package
+validation containers do not explicitly install a provider. Runtime storage uses
+the session’s Secret Service provider; see [configuration](ACCOUNTS.md#fournisseur-secret-service).
+
+For manual interoperability checks, use a disposable desktop user/session and a
+test mail account, never a personal keyring. Test KWallet/KSecretD and KeePassXC
+separately, with only the selected provider owning `org.freedesktop.secrets` and a
+configured default collection. Save an account, restart Bang and verify that it
+reconnects, then disconnect it and verify removal of its credential item. Also
+check a locked provider and a session without a provider: secure-storage retry
+and explicit session-only sign-in must remain available. Record the distribution,
+provider version, configuration and observed results in the validation report.
+These provider checks require a desktop environment and are not covered by the
+isolated GNOME Keyring test; KWallet, KeePassXC and oo7 are not yet verified in Bang.
+
+Validation on 2026-11-05 (Arch Linux, implementation environment):
+
+| Check | Result |
+| --- | --- |
+| Debian/RPM/Arch metadata and staging self-checks | Passed with distribution packaging tools stubbed; does not validate native package installation. |
+| Shell syntax, Rust formatting, whitespace checks | Passed. |
+| Credential lifecycle tests | Passed: 9 tests; the isolated GNOME Keyring test was ignored. |
+| Workspace check | Blocked: system `javascriptcoregtk-4.1` development package absent. |
+| Isolated GNOME Keyring roundtrip | Not run: `gnome-keyring-daemon` absent. |
+| KWallet 6.31.0-1 | Installed, but no disposable desktop/test-account roundtrip performed; compatibility unverified. |
+| KeePassXC / oo7 | Not tested; KeePassXC absent. |
+| Native package installation/reinstallation/smoke/uninstallation | Not run locally: Docker absent; retained in the three-format package CI matrix. |
+
 Run `cargo run -p app -- --check-oauth-release` to inspect bundled publisher
 registrations without opening GTK or touching account data. Microsoft is currently
 deferred; its disabled button is expected. A live Google consent/refresh check is

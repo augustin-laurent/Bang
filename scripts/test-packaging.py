@@ -13,6 +13,16 @@ import time
 sys.dont_write_bytecode = True
 
 repo = Path(__file__).resolve().parent.parent
+
+
+def check_dependencies(metadata, expected):
+    for dependency in expected:
+        assert dependency in metadata, f'Missing runtime dependency: {dependency}'
+    for provider in ['gnome-keyring', 'kwallet', 'ksecretd', 'keepassxc',
+                     'oo7', 'org.freedesktop.secrets', 'secret-service', 'xdotool', 'libxdo']:
+        assert provider not in metadata.lower(), f'Package imposes a provider: {provider}'
+
+
 with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
     root = Path(directory)
     (root / 'scripts').mkdir()
@@ -36,19 +46,37 @@ with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
     # Replace distribution tools only. Inspect their complete staged input below.
     (commands / 'dpkg-shlibdeps').write_text('#!/bin/sh\necho "shlibs:Depends=libc6 (>= 2.39)"\n')
     (commands / 'dpkg-deb').write_text('#!/bin/sh\n[ "$1" = --root-owner-group ] && [ "$2" = --build ] || exit 1\ntar -C "$3" -cf "$4" .\n')
+    (commands / 'rpmbuild').write_text(
+        '#!/bin/sh\nset -eu\n'
+        'test "$1" = -bb\n'
+        'cp "$8" "$BANG_TEST_METADATA/rpm.spec"\n'
+        'mkdir -p "${3#_topdir }/RPMS/x86_64"\n'
+        'touch "${3#_topdir }/RPMS/x86_64/bang-test.rpm"\n')
+    (commands / 'makepkg').write_text(
+        '#!/bin/sh\nset -eu\n'
+        'test "$1" = --nodeps\n'
+        'cp PKGBUILD "$BANG_TEST_METADATA/PKGBUILD"\n'
+        'touch bang-test.pkg.tar.zst\n')
     for command in commands.iterdir():
         command.chmod(0o755)
-    env = dict(os.environ, PATH=f'{commands}:{os.environ["PATH"]}')
+    env = dict(os.environ, PATH=f'{commands}:{os.environ["PATH"]}',
+               BANG_TEST_METADATA=str(root))
     subprocess.run(['bash', str(root / 'scripts/package.sh'), 'deb'], env=env, check=True)
     artifact = root / 'dist/bang_0.1.0-1_amd64.deb'
     with tarfile.open(artifact) as package:
         for name in ['usr/lib/bang/app', 'usr/lib/bang/bang-compose', 'usr/bin/bang']:
             assert package.getmember('./' + name).mode == 0o755
         control = package.extractfile('./DEBIAN/control').read().decode()
-        assert 'libc6 (>= 2.39)' in control and 'gnome-keyring' in control
+        check_dependencies(control, ['libc6 (>= 2.39)', 'ca-certificates'])
         launcher = package.extractfile('./usr/bin/bang').read().decode()
         assert 'exec /usr/lib/bang/app "$@"' in launcher
         assert package.getmember('./usr/share/licenses/bang/OFL.txt').size > 0
+    subprocess.run(['bash', str(root / 'scripts/package.sh'), 'rpm'], env=env, check=True)
+    check_dependencies((root / 'rpm.spec').read_text(), ['Requires: ca-certificates'])
+    subprocess.run(['bash', str(root / 'scripts/package.sh'), 'arch'], env=env, check=True)
+    arch_dependencies = ['gtk3', 'webkit2gtk-4.1', 'openssl', 'ca-certificates']
+    check_dependencies((root / 'PKGBUILD').read_text(), arch_dependencies)
+    check_dependencies((root / 'packaging/arch/PKGBUILD').read_text(), arch_dependencies)
     (editor / 'package.json').write_text('{"version":"9.0.0"}')
     rejected = subprocess.run(['bash', str(root / 'scripts/package.sh'), 'deb'],
                               env=env, capture_output=True)

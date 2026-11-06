@@ -15,16 +15,16 @@ permissions:
 jobs:
   package:
     name: Package (${{ matrix.format }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - format: deb
-            image: ubuntu:24.04
+            image: ubuntu:26.04
           - format: rpm
-            image: fedora:44
+            image: fedora:45
           - format: arch
             image: archlinux:base-devel
     steps:

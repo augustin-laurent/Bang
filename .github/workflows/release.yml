@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       sha: ${{ steps.prepare.outputs.sha }}
       version: ${{ steps.prepare.outputs.version }}
@@ -63,7 +63,7 @@ jobs:
       BANG_GOOGLE_DESKTOP_PARAMETER: ${{ secrets.BANG_GOOGLE_DESKTOP_PARAMETER }}
   draft:
     needs: [prepare, packages]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
