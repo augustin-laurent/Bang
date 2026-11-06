@@ -715,6 +715,35 @@ impl MailService {
                     });
                 }
             }
+            UiCommand::MarkFolderRead { account, folder_id } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::MarkFolderRead { folder_id });
+                }
+            }
+            UiCommand::EmptyFolder { account, folder_id } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::EmptyFolder { folder_id });
+                }
+            }
+            UiCommand::CreateFolder { account, name } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::CreateFolder { name });
+                }
+            }
+            UiCommand::RenameFolder {
+                account,
+                folder_id,
+                name,
+            } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::RenameFolder { folder_id, name });
+                }
+            }
+            UiCommand::DeleteFolder { account, folder_id } => {
+                if let Some(tx) = self.syncers.lock().unwrap().get(&account.0) {
+                    let _ = tx.send(SyncerCommand::DeleteFolder { folder_id });
+                }
+            }
             // Snooze and follow-up are local operations: they only touch the
             // store, so they are handled here rather than routed to a syncer.
             UiCommand::Snooze { message_ids, until } => {

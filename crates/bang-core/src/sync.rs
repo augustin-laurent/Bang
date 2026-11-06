@@ -49,6 +49,33 @@ pub enum SyncerCommand {
         /// Local store id of the destination folder.
         dest_folder_id: i64,
     },
+    /// Mark all messages of a folder as read.
+    MarkFolderRead {
+        /// Local store id of the folder.
+        folder_id: i64,
+    },
+    /// Permanently remove every message of a folder.
+    EmptyFolder {
+        /// Local store id of the folder.
+        folder_id: i64,
+    },
+    /// Create a folder at the account's top level.
+    CreateFolder {
+        /// Name of the new folder.
+        name: String,
+    },
+    /// Rename a folder.
+    RenameFolder {
+        /// Local store id of the folder.
+        folder_id: i64,
+        /// New folder name.
+        name: String,
+    },
+    /// Delete a folder (server side; the local cache is purged afterwards).
+    DeleteFolder {
+        /// Local store id of the folder.
+        folder_id: i64,
+    },
     /// Stop the syncer.
     Quit,
 }
@@ -528,14 +555,22 @@ fn execute_command(
         SyncerCommand::Move {
             message_ids,
             dest_folder_id,
-        } => handle_move(
-            conn,
-            config,
-            store,
-            events_tx,
-            message_ids,
-            *dest_folder_id,
-        ),
+        } => handle_move(conn, config, store, events_tx, message_ids, *dest_folder_id),
+        SyncerCommand::MarkFolderRead { folder_id } => {
+            handle_mark_folder_read(conn, config, store, events_tx, *folder_id)
+        }
+        SyncerCommand::EmptyFolder { folder_id } => {
+            handle_empty_folder(conn, config, store, events_tx, *folder_id)
+        }
+        SyncerCommand::CreateFolder { name } => {
+            handle_create_folder(conn, config, store, events_tx, name)
+        }
+        SyncerCommand::RenameFolder { folder_id, name } => {
+            handle_rename_folder(conn, config, store, events_tx, *folder_id, name)
+        }
+        SyncerCommand::DeleteFolder { folder_id } => {
+            handle_delete_folder(conn, config, store, events_tx, *folder_id)
+        }
         SyncerCommand::Quit => Ok(()),
     }
 }
@@ -675,13 +710,17 @@ fn handle_delete(
             .collect::<Vec<_>>()
             .join(",");
         let kind = crate::message::folder_kind(path);
-        if kind == "junk" || kind == "trash" || trash.as_ref().filter(|t| t.id == *folder_id).is_some()
+        if kind == "junk"
+            || kind == "trash"
+            || trash.as_ref().filter(|t| t.id == *folder_id).is_some()
         {
             // Permanently remove.
+            conn.set_flags(&uid_set, "\\Deleted", true)?;
             conn.expunge(&uid_set)?;
         } else if let Some(trash) = trash.as_ref() {
             move_uids(conn, &uid_set, &trash.path)?;
         } else {
+            conn.set_flags(&uid_set, "\\Deleted", true)?;
             conn.expunge(&uid_set)?;
         }
         folder_ids.push(*folder_id);
@@ -746,6 +785,197 @@ fn handle_move(
     }
     sync_folder(conn, config, store, events_tx, &dest)?;
     Ok(())
+}
+
+/// Mark all messages of a folder as read (server and cached copies).
+fn handle_mark_folder_read(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    folder_id: i64,
+) -> Result<()> {
+    let folder = store
+        .get_folder_by_id(folder_id)?
+        .ok_or_else(|| Error::Store("folder not found".into()))?;
+    select_cached_folder(conn, store, folder.id, &folder.path)?;
+    // Storing `\Seen` on the whole mailbox is idempotent and one round trip.
+    conn.set_flags("1:*", "\\Seen", true)?;
+    store.set_folder_all_read(folder.id)?;
+    emit_folder_events(conn, config, store, events_tx, &folder);
+    Ok(())
+}
+
+/// Permanently remove every message of a folder from the server.
+fn handle_empty_folder(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    folder_id: i64,
+) -> Result<()> {
+    let folder = store
+        .get_folder_by_id(folder_id)?
+        .ok_or_else(|| Error::Store("folder not found".into()))?;
+    select_cached_folder(conn, store, folder.id, &folder.path)?;
+    // UID EXPUNGE removes exactly the `\Deleted` UID set, not the whole
+    // mailbox, so a parallel flag change elsewhere is untouched.
+    conn.set_flags("1:*", "\\Deleted", true)?;
+    conn.expunge("1:*")?;
+    store.clear_folder_messages(folder.id)?;
+    emit_folder_events(conn, config, store, events_tx, &folder);
+    Ok(())
+}
+
+/// Create a folder at the account's top level, then reconcile the cache.
+fn handle_create_folder(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    name: &str,
+) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Store("empty folder name".into()));
+    }
+    conn.create_mailbox(name)?;
+    reconcile_folders(conn, config, store, events_tx)?;
+    Ok(())
+}
+
+/// Rename a folder on the server and update the cached rows in place.
+fn handle_rename_folder(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    folder_id: i64,
+    name: &str,
+) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Store("empty folder name".into()));
+    }
+    let folder = store
+        .get_folder_by_id(folder_id)?
+        .ok_or_else(|| Error::Store("folder not found".into()))?;
+    // INBOX may not be renamed (RFC 3501 §6.3.5).
+    if folder.path.eq_ignore_ascii_case("INBOX") {
+        return Err(Error::Store("INBOX cannot be renamed".into()));
+    }
+    // A parent prefix keeps nested folders inside their parent instead of
+    // hopping to the account's top level.
+    let new_path = parent_prefix(conn, &folder.path)
+        .map(|prefix| format!("{prefix}{name}"))
+        .unwrap_or_else(|| name.to_string());
+    if new_path != folder.path {
+        conn.rename_mailbox(&folder.path, &new_path)?;
+    }
+    let display = crate::mime::decode_folder_name(&last_component(&new_path));
+    store.rename_folder(folder.id, &new_path, &display)?;
+    // Children keep living below the (possibly renamed) parent.
+    if let Some(prefix) = parent_prefix(conn, &folder.path) {
+        if let Some(new_prefix) = parent_prefix(conn, &new_path) {
+            store.rename_folder_children(folder.id, &prefix, &new_prefix)?;
+        }
+    }
+    reconcile_folders(conn, config, store, events_tx)?;
+    Ok(())
+}
+
+/// Delete a folder on the server and purge its cached rows and messages.
+fn handle_delete_folder(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    folder_id: i64,
+) -> Result<()> {
+    let folder = store
+        .get_folder_by_id(folder_id)?
+        .ok_or_else(|| Error::Store("folder not found".into()))?;
+    if folder.path.eq_ignore_ascii_case("INBOX") {
+        return Err(Error::Store("INBOX cannot be deleted".into()));
+    }
+    conn.delete_mailbox(&folder.path)?;
+    store.delete_folder(folder.id)?;
+    reconcile_folders(conn, config, store, events_tx)?;
+    // The purge must reflect in an open listing of the folder.
+    let _ = events_tx.send(MailEvent::MessagesUpdated {
+        account: config.id.clone(),
+        folder_id,
+        message_ids: Vec::new(),
+    });
+    Ok(())
+}
+
+/// Emit the folder badge refresh plus a listing refresh for one folder.
+fn emit_folder_events(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+    folder: &Folder,
+) {
+    let _ = conn;
+    let folders = store.get_folders(&config.id.0).unwrap_or_default();
+    let _ = events_tx.send(MailEvent::FoldersUpdated {
+        account: config.id.clone(),
+        folders,
+    });
+    let _ = events_tx.send(MailEvent::MessagesUpdated {
+        account: config.id.clone(),
+        folder_id: folder.id,
+        message_ids: Vec::new(),
+    });
+}
+
+/// Re-list the account's folders, reconcile the cache and notify the UI.
+/// Unlike [`sync_folders`] it leaves cached message contents untouched.
+fn reconcile_folders(
+    conn: &mut ImapConn,
+    config: &AccountConfig,
+    store: &Store,
+    events_tx: &UnboundedSender<MailEvent>,
+) -> Result<()> {
+    let paths = conn.list_folders()?;
+    for path in &paths {
+        let folder = Folder {
+            id: 0,
+            account_id: config.id.0.clone(),
+            name: crate::mime::decode_folder_name(&last_component(path)),
+            path: path.clone(),
+            unread: 0,
+        };
+        store.upsert_folder(&folder)?;
+    }
+    // An empty LIST is not a real mailbox (INBOX always exists); never wipe
+    // the cached folders on an anomalous response.
+    if !paths.is_empty() {
+        store.delete_folders_not_in(&config.id.0, &paths)?;
+    }
+    let folders = store.get_folders(&config.id.0)?;
+    let _ = events_tx.send(MailEvent::FoldersUpdated {
+        account: config.id.clone(),
+        folders,
+    });
+    Ok(())
+}
+
+/// The parent prefix of a path including the delimiter, e.g. `[Gmail]/Trash`
+/// into `[Gmail]/`. Looks the delimiter up on the server and falls back to
+/// the first one found in the path.
+fn parent_prefix(_conn: &mut ImapConn, path: &str) -> Option<String> {
+    let delimiter = if path.contains('/') {
+        "/"
+    } else if path.contains('.') {
+        "."
+    } else {
+        return None;
+    };
+    let half = path.rfind(&delimiter)?;
+    Some(path[..=half].to_string())
 }
 
 /// Fetch a message's full body, parse it, store it, and emit MessageLoaded.

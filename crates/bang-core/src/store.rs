@@ -928,6 +928,152 @@ impl Store {
         Ok(())
     }
 
+    /// Mark every cached message of a folder as read and clear its unread
+    /// badge.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn set_folder_all_read(&self, folder_id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            // `| 1` is the `\Seen` bit of the stored flag integer.
+            "UPDATE messages SET flags = flags | 1 WHERE folder_id = ?1",
+            params![folder_id],
+        )
+        .map_err(|e| Error::Store(e.to_string()))?;
+        conn.execute(
+            "UPDATE folders SET unread = 0 WHERE id = ?1",
+            params![folder_id],
+        )
+        .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete every cached message of a folder and clear its unread badge.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn clear_folder_messages(&self, folder_id: i64) -> Result<()> {
+        let ids: Vec<i64> = {
+            let mut conn = self.lock()?;
+            let transaction = conn
+                .transaction()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            let ids = transaction
+                .prepare("SELECT id FROM messages WHERE folder_id = ?1")
+                .map_err(|e| Error::Store(e.to_string()))?
+                .query_map([folder_id], |r| r.get::<_, i64>(0))
+                .map_err(|e| Error::Store(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            transaction
+                .execute("DELETE FROM messages WHERE folder_id = ?1", [folder_id])
+                .map_err(|e| Error::Store(e.to_string()))?;
+            transaction
+                .execute("UPDATE folders SET unread = 0 WHERE id = ?1", [folder_id])
+                .map_err(|e| Error::Store(e.to_string()))?;
+            transaction
+                .commit()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            ids
+        };
+        for id in ids {
+            self.delete_attachment_files(id)?;
+        }
+        Ok(())
+    }
+
+    /// Update a folder's cached path/name in place (message rows are kept).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn rename_folder(&self, id: i64, path: &str, name: &str) -> Result<()> {
+        self.lock()?
+            .execute(
+                "UPDATE folders SET path = ?2, name = ?3 WHERE id = ?1",
+                params![id, path, name],
+            )
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Rename the cached paths of a folder's children (`old_prefix` based).
+    /// Only paths starting with `old_prefix` are updated.
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn rename_folder_children(
+        &self,
+        folder_id: i64,
+        old_prefix: &str,
+        new_prefix: &str,
+    ) -> Result<()> {
+        let users: Vec<(String, i64)> = {
+            let mut conn = self.lock()?;
+            let transaction = conn
+                .transaction()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            let rows = transaction
+                .prepare(
+                    "SELECT path, id FROM folders WHERE path LIKE ?2 || '%' AND id != ?1 ORDER BY path",
+                )
+                .map_err(|e| Error::Store(e.to_string()))?
+                .query_map(params![folder_id, old_prefix], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })
+                .map_err(|e| Error::Store(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            transaction
+                .commit()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            rows
+        };
+        for (path, child_id) in users {
+            // Filter client side to avoid LIKE escape subtleties.
+            if !path.starts_with(old_prefix) {
+                continue;
+            }
+            let renamed = format!("{new_prefix}{}", &path[old_prefix.len()..]);
+            let name = renamed
+                .rsplit(['/', '.'])
+                .next()
+                .unwrap_or(&renamed)
+                .to_string();
+            self.rename_folder(child_id, &renamed, &name)?;
+        }
+        Ok(())
+    }
+
+    /// Delete a folder row; its messages cascade (attachments are removed).
+    ///
+    /// # Errors
+    /// Returns `Error::Store` on database failure.
+    pub fn delete_folder(&self, id: i64) -> Result<()> {
+        let ids = {
+            let conn = self.lock()?;
+            let mut stmt = conn
+                .prepare("SELECT id FROM messages WHERE folder_id = ?1")
+                .map_err(|e| Error::Store(e.to_string()))?;
+            let mut ids = stmt
+                .query_map([id], |r| r.get::<_, i64>(0))
+                .map_err(|e| Error::Store(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| Error::Store(e.to_string()))?;
+            conn.execute("DELETE FROM folders WHERE id = ?1", [id])
+                .map_err(|e| Error::Store(e.to_string()))?;
+            let removed = conn.changes() > 0;
+            if !removed {
+                ids.clear();
+            }
+            ids
+        };
+        for id in ids {
+            self.delete_attachment_files(id)?;
+        }
+        Ok(())
+    }
+
     /// Snooze messages until the given Unix timestamp (seconds).
     ///
     /// Snoozed messages are hidden from folder listings until the time passes;

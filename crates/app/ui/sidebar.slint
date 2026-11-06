@@ -10,6 +10,7 @@ export component Sidebar inherits Rectangle {
     callback label-clicked(int); callback manage-labels;
     callback add-account; callback settings; callback hide;
     callback folder-clicked(int); callback account-toggled(string);
+    callback folder-context(int, length, length);
     VerticalLayout {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         padding: 12px; spacing: 8px;
@@ -41,7 +42,15 @@ export component Sidebar inherits Rectangle {
                     if folder.is-header && folder.status != "": Text { text: folder.status; color: Theme.text-secondary; font-size: 10px; vertical-alignment: center; }
                     if folder.unread > 0 && !folder.is-header: Text { text: folder.unread; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; }
                 }
-                TouchArea { enabled: !Theme.blocked; clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } } }
+                TouchArea {
+                    enabled: !Theme.blocked;
+                    clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } }
+                    pointer-event(event) => {
+                        if !folder.is-header && folder.id >= 0 && event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                            root.folder-context(folder.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
             }
         }
         HorizontalLayout { height: 32px;

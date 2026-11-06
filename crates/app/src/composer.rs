@@ -472,7 +472,11 @@ pub fn reply_or_forward(
         );
     }
     let subject = full.summary.subject.clone();
-    let prefix = if mode == ComposerMode::Forward { "Fwd: " } else { "Re: " };
+    let prefix = if mode == ComposerMode::Forward {
+        "Fwd: "
+    } else {
+        "Re: "
+    };
     let subject = if subject
         .to_ascii_lowercase()
         .starts_with(&prefix.to_ascii_lowercase())

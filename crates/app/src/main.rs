@@ -230,6 +230,78 @@ fn wire_selection(
         }
     });
 
+    ui.on_folder_context({
+        let store = store.clone();
+        let weak = ui.as_weak();
+        move |id: i32, x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let Ok(Some(folder)) = store.get_folder_by_id(i64::from(id)) else {
+                return;
+            };
+            // INBOX is protected, while the virtual unified row and account
+            // headers are filtered in the sidebar before this callback.
+            if folder.path.eq_ignore_ascii_case("INBOX") {
+                return;
+            }
+            ui.set_menu_folder(id);
+            ui.set_menu_folder_kind(bang_core::message::folder_kind(&folder.path).into());
+            ui.set_menu_folder_name(folder.name.into());
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_folder_menu();
+        }
+    });
+    ui.on_folder_action({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |id: i32, action: slint::SharedString, name: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let folder_id = i64::from(id);
+            let Ok(Some(folder)) = store.get_folder_by_id(folder_id) else {
+                return;
+            };
+            let account = bang_core::AccountId(folder.account_id.clone());
+            let command = match action.as_str() {
+                "read" => bang_core::UiCommand::MarkFolderRead { account, folder_id },
+                "empty" => bang_core::UiCommand::EmptyFolder { account, folder_id },
+                "create" => bang_core::UiCommand::CreateFolder {
+                    account,
+                    name: name.to_string(),
+                },
+                "rename" => bang_core::UiCommand::RenameFolder {
+                    account,
+                    folder_id,
+                    name: name.to_string(),
+                },
+                "delete" => bang_core::UiCommand::DeleteFolder { account, folder_id },
+                _ => return,
+            };
+            if action == "delete"
+                && state
+                    .selected_folder
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    == folder_id
+            {
+                state
+                    .selected_folder
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                ui.set_selected_folder(-1);
+                ui.set_selected_message(-1);
+                ui.set_message_body("".into());
+            }
+            bridge.send(command);
+        }
+    });
+
     ui.on_search_edited({
         let store = store.clone();
         let state = state.clone();
