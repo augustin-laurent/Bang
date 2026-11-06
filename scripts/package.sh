@@ -40,7 +40,7 @@ Maintainer: Augustin Laurent <augustin-laurent@users.noreply.github.com>
 Section: mail
 Priority: optional
 Homepage: https://github.com/augustin-laurent/Bang
-Depends: $depends, ca-certificates, gnome-keyring
+Depends: $depends, ca-certificates
 Description: Experimental Linux desktop mail client
  Rust and Slint mail client with IMAP, SMTP and an isolated rich composer.
 CONTROL
@@ -57,7 +57,7 @@ Summary: Experimental Linux desktop mail client
 License: MIT AND OFL-1.1
 URL: https://github.com/augustin-laurent/Bang
 Source0: root.tar.gz
-Requires: ca-certificates, gnome-keyring
+Requires: ca-certificates
 %description
 Rust and Slint mail client with IMAP, SMTP and an isolated rich composer.
 %install
@@ -86,7 +86,7 @@ pkgdesc='Experimental Linux desktop mail client'
 arch=('x86_64')
 url='https://github.com/augustin-laurent/Bang'
 license=('MIT' 'OFL-1.1')
-depends=('gtk3' 'webkit2gtk-4.1' 'openssl' 'xdotool' 'ca-certificates' 'gnome-keyring')
+depends=('gtk3' 'webkit2gtk-4.1' 'openssl' 'ca-certificates')
 options=('!strip' '!debug')
 package() { cp -a "\$startdir/root/." "\$pkgdir/"; }
 RECIPE
