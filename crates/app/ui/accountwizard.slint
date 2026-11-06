@@ -18,7 +18,7 @@ component ProviderOption inherits Rectangle {
     accessible-action-default => { if root.enabled { root.selected(); } }
     forward-focus: focus;
     HorizontalLayout { padding: 16px; spacing: 16px;
-        Rectangle { width: 28px; Image { width: 28px; height: 28px; y: (parent.height - self.height) / 2; source: root.logo; colorize: root.branded ? transparent : Theme.text-secondary; } }
+        Rectangle { width: 28px; Image { width: 28px; height: 28px; y: (parent.height - self.height) / 2; source: root.logo; image-fit: contain; colorize: root.branded ? transparent : Theme.text-secondary; } }
         VerticalLayout { alignment: center; spacing: 4px;
             Text { text: root.name; color: Theme.text; font-size: 14px; font-weight: 600; }
             Text { text: root.description; color: Theme.text-secondary; font-size: 12px; overflow: elide; }
@@ -64,7 +64,7 @@ export component AccountWizard inherits Rectangle {
                     if !root.manual && root.provider == "": VerticalLayout { spacing: 10px;
                         ProviderOption { initial-focus: root.open; name: "Google"; description: root.google-available ? "Gmail · Google Workspace" : @tr("Available in a future release"); enabled: root.google-available; logo: @image-url("icons/google.svg"); branded: true; selected => { root.provider-selected("google"); } }
                         ProviderOption { name: "Microsoft"; description: root.microsoft-available ? "Outlook · Hotmail · Microsoft 365" : @tr("Available in a future release"); enabled: root.microsoft-available; logo: @image-url("icons/microsoft.svg"); branded: true; selected => { root.provider-selected("microsoft"); } }
-                        ProviderOption { name: "iCloud"; description: @tr("Apple Mail · App password"); logo: @image-url("icons/cloud.svg"); selected => { root.provider-selected("icloud"); } }
+                        ProviderOption { name: "iCloud"; description: @tr("Apple Mail · App password"); logo: @image-url("icons/icloud.svg"); branded: true; selected => { root.provider-selected("icloud"); } }
                         ProviderOption { name: @tr("Other mail account"); description: @tr("IMAP / SMTP · Custom server"); logo: @image-url("icons/server.svg"); selected => { root.provider-selected("manual"); } }
                     }
                     if !root.manual && root.provider != "": VerticalLayout { spacing: 20px;

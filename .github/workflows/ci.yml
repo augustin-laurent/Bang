@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 permissions:
   contents: read
@@ -60,6 +60,10 @@ jobs:
           if-no-files-found: error
   packages:
     uses: ./.github/workflows/packages.yml
+    with:
+      require-google: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    secrets:
+      BANG_GOOGLE_DESKTOP_PARAMETER: ${{ secrets.BANG_GOOGLE_DESKTOP_PARAMETER }}
   required:
     name: Required checks
     if: always()

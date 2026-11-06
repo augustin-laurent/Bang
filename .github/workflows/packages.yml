@@ -6,9 +6,14 @@ on:
         description: Exact commit to build (defaults to the caller commit)
         required: false
         type: string
+      require-google:
+        description: Require the Google Desktop parameter for this build
+        required: false
+        default: false
+        type: boolean
     secrets:
       BANG_GOOGLE_DESKTOP_PARAMETER:
-        description: Google Desktop OAuth parameter, passed only by the release workflow
+        description: Google Desktop OAuth parameter
         required: false
 permissions:
   contents: read
@@ -36,8 +41,13 @@ jobs:
         env:
           PACKAGE_FORMAT: ${{ matrix.format }}
           PACKAGE_IMAGE: ${{ matrix.image }}
+          REQUIRE_GOOGLE: ${{ inputs.require-google }}
           BANG_GOOGLE_DESKTOP_PARAMETER: ${{ secrets.BANG_GOOGLE_DESKTOP_PARAMETER }}
         run: |
+          if [[ "$REQUIRE_GOOGLE" == true && -z "$BANG_GOOGLE_DESKTOP_PARAMETER" ]]; then
+            echo 'Google Desktop OAuth parameter is required for this build.' >&2
+            exit 1
+          fi
           docker run --rm --init \
             -e BANG_PACKAGE_CONTAINER=1 -e CARGO_INCREMENTAL=0 \
             -e BANG_GOOGLE_DESKTOP_PARAMETER \
