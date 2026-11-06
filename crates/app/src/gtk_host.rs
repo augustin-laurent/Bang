@@ -138,7 +138,16 @@ struct Host {
 impl Host {
     fn new() -> Rc<Self> {
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
-        window.set_wmclass("bang", "Bang");
+        // gtk-rs does not expose this deprecated GTK3 function, but the X11
+        // desktop entry still needs the window class for its launcher identity.
+        unsafe {
+            use gtk::glib::translate::ToGlibPtr;
+            gtk::ffi::gtk_window_set_wmclass(
+                window.to_glib_none().0,
+                c"bang".as_ptr(),
+                c"Bang".as_ptr(),
+            );
+        }
         window.set_icon_name(Some("io.github.augustin_laurent.Bang"));
         window.set_default_size(1440, 900);
         let overlay = gtk::Overlay::new();
