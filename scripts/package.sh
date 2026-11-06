@@ -17,6 +17,7 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 root="$work/root"
 install -Dm755 target/release/app "$root/usr/lib/bang/app"
+install -Dm755 target/release/bang-service "$root/usr/lib/bang/bang-service"
 install -Dm755 target/release/bang-compose "$root/usr/lib/bang/bang-compose"
 install -Dm755 packaging/bang "$root/usr/bin/bang"
 install -Dm644 packaging/bang.desktop "$root/usr/share/applications/bang.desktop"
@@ -27,10 +28,10 @@ install -Dm644 README.md "$root/usr/share/doc/bang/README.md"
 case "$format" in
   deb)
     mkdir -p "$root/DEBIAN"
-    # dpkg-shlibdeps derives distribution-specific ELF dependencies for both binaries.
+    # Derive distribution-specific ELF dependencies for each native binary.
     mkdir -p "$work/debian"
     printf 'Source: bang\nSection: mail\nPriority: optional\nMaintainer: Augustin Laurent <augustin-laurent@users.noreply.github.com>\nStandards-Version: 4.6.2\n\nPackage: bang\nArchitecture: amd64\nDescription: Experimental Linux mail client\n' > "$work/debian/control"
-    depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/lib/bang/app" "$root/usr/lib/bang/bang-compose" | sed -n 's/^shlibs:Depends=//p')
+    depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/lib/bang/app" "$root/usr/lib/bang/bang-compose" "$root/usr/lib/bang/bang-service" | sed -n 's/^shlibs:Depends=//p')
     test -n "$depends"
     cat > "$root/DEBIAN/control" <<CONTROL
 Package: bang

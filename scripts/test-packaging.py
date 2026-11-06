@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
         (editor / name).write_text(json.dumps({'version': '0.1.0'}))
     binaries = root / 'target/release'
     binaries.mkdir(parents=True)
-    for name in ['app', 'bang-compose']:
+    for name in ['app', 'bang-compose', 'bang-service']:
         (binaries / name).write_text('#!/bin/sh\nexit 0\n')
     commands = root / 'commands'
     commands.mkdir()
@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
     subprocess.run(['bash', str(root / 'scripts/package.sh'), 'deb'], env=env, check=True)
     artifact = root / 'dist/bang_0.1.0-1_amd64.deb'
     with tarfile.open(artifact) as package:
-        for name in ['usr/lib/bang/app', 'usr/lib/bang/bang-compose', 'usr/bin/bang']:
+        for name in ['usr/lib/bang/app', 'usr/lib/bang/bang-compose', 'usr/lib/bang/bang-service', 'usr/bin/bang']:
             assert package.getmember('./' + name).mode == 0o755
         control = package.extractfile('./DEBIAN/control').read().decode()
         check_dependencies(control, ['libc6 (>= 2.39)', 'ca-certificates'])

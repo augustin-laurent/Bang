@@ -25,6 +25,7 @@ check() {
 package() {
   cd "Bang-$pkgver"
   install -Dm755 target/release/app "$pkgdir/usr/lib/bang/app"
+  install -Dm755 target/release/bang-service "$pkgdir/usr/lib/bang/bang-service"
   install -Dm755 target/release/bang-compose "$pkgdir/usr/lib/bang/bang-compose"
   install -Dm755 packaging/bang "$pkgdir/usr/bin/bang"
   install -Dm644 packaging/bang.desktop "$pkgdir/usr/share/applications/bang.desktop"
