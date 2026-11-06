@@ -88,6 +88,20 @@ print('Packaging staging, executable modes, dependencies and version rejection p
 spec = importlib.util.spec_from_file_location('bang_smoke', repo / 'scripts/smoke-installed.py')
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
+smoke.check_google_registration(
+    'Google Desktop registration bundled: public-client-id\n', True)
+smoke.check_google_registration('Google: not configured; provider disabled\n', False)
+for output, expected in [
+    ('Google: not configured; provider disabled\n', True),
+    ('Google Desktop registration bundled: public-client-id\n', False),
+    ('Google Desktop registration bundled: client_secret=secret\n', True),
+]:
+    try:
+        smoke.check_google_registration(output, expected)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('Google packaging smoke accepted an invalid registration state')
 child_program = "import time; time.sleep(60)"
 parent_program = (
     "import signal, subprocess, sys, time; "

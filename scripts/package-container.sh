@@ -45,7 +45,12 @@ case "$format" in
     pacman -U --noconfirm /workspace/dist/*.pkg.tar.zst
     ;;
 esac
-su -s /bin/bash - bang -c 'set -euo pipefail; export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1; cd /workspace; dbus-run-session -- xvfb-run -a python3 scripts/smoke-installed.py'
+if [[ -n ${BANG_GOOGLE_DESKTOP_PARAMETER:-} ]]; then
+  export BANG_EXPECT_GOOGLE_OAUTH=1
+else
+  export BANG_EXPECT_GOOGLE_OAUTH=0
+fi
+su --whitelist-environment=BANG_EXPECT_GOOGLE_OAUTH -s /bin/bash - bang -c 'set -euo pipefail; export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1; cd /workspace; dbus-run-session -- xvfb-run -a python3 scripts/smoke-installed.py'
 case "$format" in
   deb) apt-get remove -y bang ;;
   rpm) dnf remove -y bang ;;
