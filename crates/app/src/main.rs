@@ -841,14 +841,7 @@ fn wire_settings(
     state: &Arc<state::UiState>,
     bridge: bridge::Bridge,
 ) {
-    ui.on_settings_close({
-        let weak = ui.as_weak();
-        move || {
-            if let Some(ui) = weak.upgrade() {
-                ui.set_settings_open(false);
-            }
-        }
-    });
+    wire_settings_close(ui);
 
     ui.on_settings_opened({
         let store = store.clone();
@@ -968,6 +961,17 @@ fn wire_settings(
             bridge.send(bang_core::UiCommand::RemoveAccount(bang_core::AccountId(
                 id.into(),
             )));
+        }
+    });
+}
+
+fn wire_settings_close(ui: &BangApp) {
+    ui.on_settings_close({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_settings_open(false);
+            }
         }
     });
 }

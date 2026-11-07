@@ -3,10 +3,25 @@ use crate::{BangApp, FolderRow, MessageRow};
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Global, LogicalSize, Model, VecModel};
+
+#[test]
+fn settings_close_callback_hides_dialog() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
+    crate::wire_settings_close(&ui);
+    ui.set_settings_open(true);
+
+    ui.invoke_settings_close();
+
+    assert!(!ui.get_settings_open());
+}
+
 #[test]
 fn native_navigation_resize_and_grouping() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
     ui.window().set_size(LogicalSize::new(1440., 900.));
     ui.set_account_count(1);
     ui.set_folders(slint::ModelRc::new(VecModel::from(vec![FolderRow {
@@ -873,6 +888,7 @@ fn account_wizard_provider_presets_theme_and_correlated_results() {
     )))
     .unwrap();
     let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
     let weak = ui.as_weak();
     ui.on_wizard_provider_selected(move |provider| {
         crate::accounts::select_provider(&weak.upgrade().unwrap(), &provider)
@@ -1027,6 +1043,7 @@ fn account_discovery_storage_recovery_and_reconnect_preserve_metadata() {
     )))
     .unwrap();
     let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
     let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
     let state = crate::state::UiState::new();
     ui.window().set_size(LogicalSize::new(720., 480.));
