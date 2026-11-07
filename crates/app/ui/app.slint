@@ -313,8 +313,8 @@ export component BangApp inherits Window {
             HorizontalLayout { padding: 10px; spacing: 2px;
                 if root.narrow: ActionButton { compact: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); clicked => { root.detail-open = false; } }
                 ActionButton { compact: true; text: @tr("Classify message"); icon: @image-url("icons/tag.svg"); enabled: root.selected-message >= 0; clicked => { root.organization-opened(false); } }
-                ActionButton { compact: true; text: @tr("Reply"); icon: @image-url("icons/back.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "reply"); } }
-                ActionButton { compact: true; text: @tr("Forward"); icon: @image-url("icons/send.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "forward"); } }
+                ActionButton { compact: true; text: @tr("Reply"); icon: @image-url("icons/reply.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "reply"); } }
+                ActionButton { compact: true; text: @tr("Forward"); icon: @image-url("icons/forward.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "forward"); } }
                 ActionButton { compact: true; text: @tr("Star"); icon: @image-url("icons/star.svg"); enabled: root.selected-message >= 0; active: root.message-starred; clicked => { root.message-action(root.selected-message, "star"); } }
                 ActionButton { compact: true; text: @tr("Read / unread"); icon: @image-url("icons/mail.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "read"); } }
                 ActionButton { compact: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "delete"); } }
@@ -459,7 +459,7 @@ export component BangApp inherits Window {
                 }
                 ContextMenuItem {
                     visible: !root.menu-batch;
-                    text: @tr("Reply"); icon: @image-url("icons/back.svg");
+                    text: @tr("Reply"); icon: @image-url("icons/reply.svg");
                     activated => { root.message-action(root.menu-message, "reply"); message-menu.close(); }
                 }
                 ContextMenuItem {
