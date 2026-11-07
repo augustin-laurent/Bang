@@ -310,10 +310,8 @@ export component BangApp inherits Window {
         drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
-            HorizontalLayout { padding: 10px; spacing: 4px;
+            HorizontalLayout { padding: 10px; spacing: 2px;
                 if root.narrow: ActionButton { compact: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); clicked => { root.detail-open = false; } }
-                Rectangle { width: 294px; height: 32px; background: Theme.bg; border-width: 1px; border-color: Theme.border; border-radius: 12px;
-                    HorizontalLayout { spacing: 0px;
                 ActionButton { compact: true; text: @tr("Classify message"); icon: @image-url("icons/tag.svg"); enabled: root.selected-message >= 0; clicked => { root.organization-opened(false); } }
                 ActionButton { compact: true; text: @tr("Reply"); icon: @image-url("icons/back.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "reply"); } }
                 ActionButton { compact: true; text: @tr("Forward"); icon: @image-url("icons/send.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "forward"); } }
@@ -322,12 +320,11 @@ export component BangApp inherits Window {
                 ActionButton { compact: true; text: @tr("Delete"); icon: @image-url("icons/trash.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "delete"); } }
                 ActionButton { compact: true; text: @tr("Snooze"); icon: @image-url("icons/clock.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "snooze"); } }
                 ActionButton { compact: true; text: @tr("Follow up"); icon: @image-url("icons/bell.svg"); enabled: root.selected-message >= 0; clicked => { root.message-action(root.selected-message, "follow-up"); } }
-                    }
-                }
                 Rectangle { horizontal-stretch: 1; }
                 search := SearchField { max-width: 264px; min-width: 100px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
             }
         }
+        Rectangle { y: 52px; height: 1px; width: parent.width; background: Theme.border; }
         reader := ReadingPane { x: 0px; width: parent.width; y: 53px; height: parent.height - 53px - (root.status-message == "" ? 0px : 36px);
             sender: root.message-sender; subject: root.message-subject; date: root.message-date; body: root.message-body;
             sender-address: root.message-sender-address; recipients: root.message-recipients; initials: root.message-initials;
