@@ -6,7 +6,7 @@ license.workspace = true
 description = "Bang desktop mail client UI (Slint) and tokio/Slint bridge."
 
 [features]
-preview-renderer = ["dep:i-slint-backend-testing"]
+preview-renderer = ["dep:i-slint-backend-testing", "bang-core/integration"]
 
 [dependencies]
 libc = "0.2"

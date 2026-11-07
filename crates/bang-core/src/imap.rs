@@ -231,6 +231,60 @@ impl<T: Read + Write> ImapSession<T> {
         Ok(())
     }
 
+    /// Move a UID set to another mailbox (RFC 6851 `UID MOVE`).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_mv(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        self.session.uid_mv(uid_set, mailbox)?;
+        Ok(())
+    }
+
+    /// Copy a UID set to another mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_copy(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        self.session.uid_copy(uid_set, mailbox)?;
+        Ok(())
+    }
+
+    /// Whether the server advertises the `MOVE` capability.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn supports_move(&mut self) -> Result<bool> {
+        let capabilities = self.session.capabilities()?;
+        Ok(capabilities.has_str("MOVE"))
+    }
+
+    /// Create a mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn create_mailbox(&mut self, name: &str) -> Result<()> {
+        self.session.create(name)?;
+        Ok(())
+    }
+
+    /// Delete a mailbox (server side; cached content stays local until purged).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn delete_mailbox(&mut self, path: &str) -> Result<()> {
+        self.session.delete(path)?;
+        Ok(())
+    }
+
+    /// Rename a mailbox; both names must be full paths.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn rename_mailbox(&mut self, from: &str, to: &str) -> Result<()> {
+        self.session.rename(from, to)?;
+        Ok(())
+    }
+
     /// Wait for mailbox changes (IMAP IDLE), up to `timeout`.
     ///
     /// Returns `true` if the mailbox changed, `false` on timeout.
@@ -355,6 +409,72 @@ impl ImapConn {
         match self {
             ImapConn::Tls(s) => s.idle_wait(timeout),
             ImapConn::Plain(s) => s.idle_wait(timeout),
+        }
+    }
+
+    /// Move a UID set to another mailbox (RFC 6851 `UID MOVE`).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_mv(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.uid_mv(uid_set, mailbox),
+            ImapConn::Plain(s) => s.uid_mv(uid_set, mailbox),
+        }
+    }
+
+    /// Copy a UID set to another mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn uid_copy(&mut self, uid_set: &str, mailbox: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.uid_copy(uid_set, mailbox),
+            ImapConn::Plain(s) => s.uid_copy(uid_set, mailbox),
+        }
+    }
+
+    /// Whether the server advertises the `MOVE` capability.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn supports_move(&mut self) -> Result<bool> {
+        match self {
+            ImapConn::Tls(s) => s.supports_move(),
+            ImapConn::Plain(s) => s.supports_move(),
+        }
+    }
+
+    /// Create a mailbox.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn create_mailbox(&mut self, name: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.create_mailbox(name),
+            ImapConn::Plain(s) => s.create_mailbox(name),
+        }
+    }
+
+    /// Delete a mailbox (server side; cached content stays local until purged).
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn delete_mailbox(&mut self, path: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.delete_mailbox(path),
+            ImapConn::Plain(s) => s.delete_mailbox(path),
+        }
+    }
+
+    /// Rename a mailbox; both names must be full paths.
+    ///
+    /// # Errors
+    /// Returns `Error::Imap` on failure.
+    pub fn rename_mailbox(&mut self, from: &str, to: &str) -> Result<()> {
+        match self {
+            ImapConn::Tls(s) => s.rename_mailbox(from, to),
+            ImapConn::Plain(s) => s.rename_mailbox(from, to),
         }
     }
 

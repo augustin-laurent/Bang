@@ -19,6 +19,7 @@ type Host = {
   error?: string;
   message?: string;
   to?: string[];
+  cc?: string[];
   subject?: string;
   body_html?: string;
   from?: string;
@@ -234,6 +235,15 @@ function applyPrefill(msg: Host) {
   if (msg.from && accounts.some((a) => a.id === msg.from))
     el<HTMLSelectElement>("from").value = msg.from;
   input("to").value = (msg.to || []).join(", ");
+  const cc = msg.cc || [];
+  input("cc").value = cc.join(", ");
+  if (cc.length) {
+    // Reply-all: reveal the optional header row so Cc is visible.
+    el("cc-toggle").setAttribute("aria-expanded", "true");
+    document
+      .querySelectorAll<HTMLElement>(".optional")
+      .forEach((n) => (n.hidden = false));
+  }
   input("subject").value = msg.subject || "";
   editor.commands.setContent(msg.body_html || "", { emitUpdate: false });
   setDirty();

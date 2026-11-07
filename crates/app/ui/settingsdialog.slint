@@ -1,4 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
+import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ActionButton, CheckControl } from "controls.slint";
 import { AccountRow } from "models.slint";
@@ -59,9 +59,16 @@ export component SettingsDialog inherits Rectangle {
                     CheckControl { text: @tr("Online avatars"); checked: root.online-avatars; toggled => { root.avatars-toggled(self.checked); } }
                     Text { text: @tr("Language"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     HorizontalLayout { spacing: 8px;
-                        ActionButton { modal: true; text: @tr("System"); active: root.language == "system"; framed: true; clicked => { root.language-selected("system"); } }
-                        ActionButton { modal: true; text: "Français"; active: root.language == "fr"; framed: true; clicked => { root.language-selected("fr"); } }
-                        ActionButton { modal: true; text: "English"; active: root.language == "en"; framed: true; clicked => { root.language-selected("en"); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        ComboBox {
+                            width: 320px;
+                            model: [@tr("System"), "Français", "English"];
+                            current-index: root.language == "fr" ? 1 : root.language == "en" ? 2 : 0;
+                            selected(value) => {
+                                root.language-selected(value == @tr("System") ? "system" : value == "Français" ? "fr" : "en");
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                     Text { text: @tr("Accounts"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     if root.accounts.length == 0: Text { text: @tr("No accounts"); color: Theme.text-secondary; font-size: 13px; }
@@ -70,12 +77,21 @@ export component SettingsDialog inherits Rectangle {
                         Text { text: acc.email; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }
                         if acc.reconnect: ActionButton { modal: true; text: @tr("Reconnect"); clicked => { root.account-reconnect(acc.id); } }
                         if acc.storage-locked: ActionButton { modal: true; text: @tr("Unlock"); clicked => { root.account-unlock(acc.id); } }
-                        ActionButton { modal: true; text: @tr("Remove"); enabled: !acc.removing; icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton { modal: true; compact: true; framed: true; text: @tr("Remove"); enabled: !acc.removing; icon: @image-url("icons/trash.svg"); clicked => { root.remove-id = acc.id; root.remove-email = acc.email; } }
                     }
-                    ActionButton { modal: true; text: @tr("Add account"); framed: true; icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
+                    HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton { modal: true; text: @tr("Add account"); framed: true; icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
                 }
             }
-            ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
+            HorizontalLayout {
+                Rectangle { horizontal-stretch: 1; }
+                ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
         }
     }
     if root.remove-id != "": Rectangle {

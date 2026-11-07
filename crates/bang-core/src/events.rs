@@ -86,6 +86,52 @@ pub enum UiCommand {
         /// Local store ids of the messages.
         message_ids: Vec<i64>,
     },
+    /// Move messages to another folder of the same account.
+    Move {
+        /// Account the messages belong to.
+        account: AccountId,
+        /// Local store ids of the messages.
+        message_ids: Vec<i64>,
+        /// Local store id of the destination folder.
+        dest_folder_id: i64,
+    },
+    /// Mark all messages of a folder as read.
+    MarkFolderRead {
+        /// Account the folder belongs to.
+        account: AccountId,
+        /// Local store id of the folder.
+        folder_id: i64,
+    },
+    /// Permanently remove every message of a folder (Trash/Junk use only).
+    EmptyFolder {
+        /// Account the folder belongs to.
+        account: AccountId,
+        /// Local store id of the folder.
+        folder_id: i64,
+    },
+    /// Create a folder at the account's top level.
+    CreateFolder {
+        /// Account to create the folder in.
+        account: AccountId,
+        /// Name of the new folder.
+        name: String,
+    },
+    /// Rename a folder.
+    RenameFolder {
+        /// Account the folder belongs to.
+        account: AccountId,
+        /// Local store id of the folder.
+        folder_id: i64,
+        /// New folder name.
+        name: String,
+    },
+    /// Delete a folder and all its locally cached messages.
+    DeleteFolder {
+        /// Account the folder belongs to.
+        account: AccountId,
+        /// Local store id of the folder.
+        folder_id: i64,
+    },
     /// Snooze messages until the given Unix timestamp (seconds).
     ///
     /// Snoozed messages are hidden from folder listings until the time passes.

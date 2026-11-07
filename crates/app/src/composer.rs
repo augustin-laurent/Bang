@@ -35,6 +35,8 @@ pub struct Prefill {
     pub from: Option<String>,
     /// Recipients for the To field.
     pub to: Vec<String>,
+    /// Recipients for the Cc field.
+    pub cc: Vec<String>,
     /// Subject line.
     pub subject: String,
     /// Body as HTML (quoted original).
@@ -128,6 +130,7 @@ pub fn open(
                     &HostMessage::Prefill {
                         from: p.from,
                         to: p.to,
+                        cc: p.cc,
                         subject: p.subject,
                         body_html: p.body_html,
                         in_reply_to: p.in_reply_to,
@@ -203,6 +206,7 @@ pub fn open(
                         let prefill = HostMessage::Prefill {
                             from: p.from,
                             to: p.to,
+                            cc: p.cc,
                             subject: p.subject,
                             body_html: p.body_html,
                             in_reply_to: p.in_reply_to,
@@ -418,13 +422,24 @@ fn build_request(
     })
 }
 
+/// How the composer prefills an answer to an existing message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerMode {
+    /// Reply to the sender only.
+    Reply,
+    /// Reply to the sender and every other recipient except own addresses.
+    ReplyAll,
+    /// Forward with the original headers quoted above the content.
+    Forward,
+}
+
 /// Open the composer prefilled to reply to or forward a message.
 pub fn reply_or_forward(
     ui: &BangApp,
     store: Arc<bang_core::Store>,
     bridge: Bridge,
     message_id: i64,
-    forward: bool,
+    mode: ComposerMode,
 ) -> anyhow::Result<()> {
     let full = store
         .get_message_full(message_id)?
@@ -435,7 +450,7 @@ pub fn reply_or_forward(
         full.body_text.clone()
     };
     let mut body_html = quoted_body_html(&body);
-    if forward {
+    if mode == ComposerMode::Forward {
         // Prepend the original headers above the quote.
         let to = full
             .summary
@@ -457,7 +472,11 @@ pub fn reply_or_forward(
         );
     }
     let subject = full.summary.subject.clone();
-    let prefix = if forward { "Fwd: " } else { "Re: " };
+    let prefix = if mode == ComposerMode::Forward {
+        "Fwd: "
+    } else {
+        "Re: "
+    };
     let subject = if subject
         .to_ascii_lowercase()
         .starts_with(&prefix.to_ascii_lowercase())
@@ -466,11 +485,11 @@ pub fn reply_or_forward(
     } else {
         format!("{prefix}{subject}")
     };
-    let to = if forward {
-        Vec::new()
-    } else {
-        vec![full.summary.from.address.clone()]
-    };
+    let own_address = store
+        .get_account(&full.summary.account_id)?
+        .map(|account| account.email)
+        .unwrap_or_default();
+    let (to, cc) = reply_recipients(&full.summary, mode, &own_address);
     let in_reply_to = if full.summary.message_id.is_empty() {
         None
     } else {
@@ -484,6 +503,7 @@ pub fn reply_or_forward(
             // Reply from the account that received the message.
             from: Some(full.summary.account_id.clone()),
             to,
+            cc,
             subject,
             body_html,
             in_reply_to,
@@ -491,6 +511,50 @@ pub fn reply_or_forward(
         }),
         None,
     )
+}
+
+/// Recipients for a reply: the sender plus the original recipients, with the
+/// receiving account's own address (and duplicates) removed.
+fn reply_recipients(
+    summary: &bang_core::MessageSummary,
+    mode: ComposerMode,
+    own_address: &str,
+) -> (Vec<String>, Vec<String>) {
+    // Keep one copy of an address, skipping own addresses and duplicates.
+    fn push(
+        address: &str,
+        own: &str,
+        out: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        let key = address.to_ascii_lowercase();
+        if key.is_empty() || key == own || !seen.insert(key) {
+            return;
+        }
+        out.push(address.to_string());
+    }
+    match mode {
+        ComposerMode::Forward => (Vec::new(), Vec::new()),
+        ComposerMode::Reply => (vec![summary.from.address.clone()], Vec::new()),
+        ComposerMode::ReplyAll => {
+            let own = own_address.to_ascii_lowercase();
+            let mut seen = std::collections::HashSet::new();
+            let mut to: Vec<String> = Vec::new();
+            let mut cc: Vec<String> = Vec::new();
+            // The sender always lands in To, even when already a recipient.
+            if !summary.from.address.is_empty() {
+                to.push(summary.from.address.clone());
+                seen.insert(summary.from.address.to_ascii_lowercase());
+            }
+            for address in &summary.to {
+                push(&address.address, &own, &mut to, &mut seen);
+            }
+            for address in &summary.cc {
+                push(&address.address, &own, &mut cc, &mut seen);
+            }
+            (to, cc)
+        }
+    }
 }
 
 /// Display name of an address (name if set, else the address).
@@ -551,6 +615,39 @@ mod tests {
         assert_eq!(
             html,
             "<p></p><p>&gt; &lt;b&gt;bold&lt;/b&gt; &amp; more</p>"
+        );
+    }
+
+    #[test]
+    fn reply_all_deduplicates_recipients_and_excludes_own_address() {
+        let address = |address: &str| bang_core::EmailAddress {
+            name: String::new(),
+            address: address.into(),
+        };
+        let summary = bang_core::MessageSummary {
+            id: 1,
+            account_id: "account-id-not-email".into(),
+            folder_id: 1,
+            uid: 1,
+            message_id: String::new(),
+            from: address("sender@example.test"),
+            to: vec![address("ME@example.test"), address("team@example.test")],
+            cc: vec![address("TEAM@example.test"), address("copy@example.test")],
+            subject: String::new(),
+            date: 0,
+            flags: bang_core::MessageFlags::empty(),
+            preview: String::new(),
+            has_attachments: false,
+        };
+        assert_eq!(
+            reply_recipients(&summary, ComposerMode::ReplyAll, "me@example.test"),
+            (
+                vec![
+                    "sender@example.test".to_string(),
+                    "team@example.test".to_string()
+                ],
+                vec!["copy@example.test".to_string()]
+            )
         );
     }
 }

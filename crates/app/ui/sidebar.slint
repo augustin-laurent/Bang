@@ -8,8 +8,11 @@ export component Sidebar inherits Rectangle {
     in property <int> selected-folder: -1;
     in property <[LabelRow]> labels; in property <int> selected-label: -1;
     callback label-clicked(int); callback manage-labels;
+    callback label-context(int, length, length);
     callback add-account; callback settings; callback hide;
     callback folder-clicked(int); callback account-toggled(string);
+    callback folder-context(int, length, length);
+    callback folder-background-context(length, length);
     VerticalLayout {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         padding: 12px; spacing: 8px;
@@ -19,8 +22,19 @@ export component Sidebar inherits Rectangle {
             ActionButton { compact: true; icon: @image-url("icons/sidebar.svg"); text: @tr("Hide sidebar"); clicked => { root.hide(); } }
         }
         Text { text: @tr("Mailboxes"); color: Theme.text-secondary; font-size: 11px; height: 22px; vertical-alignment: bottom; }
-        ListView {
-            for folder in root.folders: Rectangle {
+        Rectangle {
+            vertical-stretch: 1; min-height: 60px;
+            TouchArea {
+                enabled: !Theme.blocked;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                        root.folder-background-context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
+                }
+            }
+            ListView {
+                width: parent.width; height: parent.height;
+                for folder in root.folders: Rectangle {
                 height: folder.is-header ? 44px : 32px;
                 border-radius: 7px;
                 background: !folder.is-header && root.selected-label < 0 && folder.id == root.selected-folder ? Theme.hover : transparent;
@@ -41,7 +55,16 @@ export component Sidebar inherits Rectangle {
                     if folder.is-header && folder.status != "": Text { text: folder.status; color: Theme.text-secondary; font-size: 10px; vertical-alignment: center; }
                     if folder.unread > 0 && !folder.is-header: Text { text: folder.unread; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; }
                 }
-                TouchArea { enabled: !Theme.blocked; clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } } }
+                TouchArea {
+                    enabled: !Theme.blocked;
+                    clicked => { if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } }
+                    pointer-event(event) => {
+                        if !folder.is-header && folder.id >= 0 && event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                            root.folder-context(folder.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+                }
             }
         }
         HorizontalLayout { height: 32px;
@@ -56,7 +79,15 @@ export component Sidebar inherits Rectangle {
                 }
                 accessible-role: button; accessible-label: label.name; accessible-enabled: !Theme.blocked;
                 accessible-action-default => { if !Theme.blocked { root.label-clicked(label.id); } }
-                TouchArea { enabled: !Theme.blocked; clicked => { root.label-clicked(label.id); } }
+                TouchArea {
+                    enabled: !Theme.blocked;
+                    clicked => { root.label-clicked(label.id); }
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                            root.label-context(label.id, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
             }
         }
         ActionButton { text: @tr("Add account"); icon: @image-url("icons/plus.svg"); clicked => { root.add-account(); } }

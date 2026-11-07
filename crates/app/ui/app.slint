@@ -3,6 +3,8 @@ import "../../../assets/fonts/NotoSans-Bold.ttf";
 import { Theme } from "theme.slint";
 export { Theme } from "theme.slint";
 export { Palette } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
 import { ActionButton, SearchField } from "controls.slint";
 import { FolderRow, MessageRow, AccountRow, AttachmentRow, DraftRow, TemplateRow, PendingSendRow, LabelRow, CategoryRow } from "models.slint";
 import { CategoryBar } from "categories.slint";
@@ -16,6 +18,7 @@ import { SettingsDialog } from "settingsdialog.slint";
 import { AttachmentPreview } from "attachmentpreview.slint";
 import { SaveDialog } from "savedialog.slint";
 import { DraftsDialog } from "draftsdialog.slint";
+import { ContextMenuItem } from "contextmenu.slint";
 
 export component BangApp inherits Window {
     title: "Bang"; preferred-width: 1440px; preferred-height: 900px;
@@ -33,6 +36,9 @@ export component BangApp inherits Window {
     in-out property <bool> managing-labels: false;
     in-out property <int> organization-message: -1;
     in-out property <int> organization-category: 0;
+    in-out property <int> organization-edit-id: -1;
+    in-out property <string> organization-edit-name: "";
+    in-out property <int> organization-edit-color: 0;
     in property <string> organization-effective;
     in property <bool> organization-message-override;
     in property <bool> organization-sender-override;
@@ -44,6 +50,9 @@ export component BangApp inherits Window {
     callback label-assigned(int, bool); callback label-saved(int, string, string); callback label-deleted(int);
     in property <int> account-count: 0;
     in property <int> selected-folder: -1; in property <int> selected-message: -1;
+    in-out property <int> selection-count: 0;
+    callback selection-clicked(int, bool, bool, int);
+    callback batch-action(string);
     in property <string> folder-name; in-out property <string> search-text;
     in property <bool> search-active: false;
     in property <string> status-message;
@@ -58,7 +67,7 @@ export component BangApp inherits Window {
     in property <bool> reader-failed: false;
     in-out property <bool> remote-images: false;
     out property <bool> html-active: root.native-reader-available && !root.reader-failed && !root.message-loading && root.message-html != "";
-    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay;
+    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open && !folder-menu.is-open && !label-menu.is-open;
     out property <float> reader-x-px: reader.body-x / 1px;
     out property <float> reader-y-px: reader.body-y / 1px;
     out property <float> reader-width-px: reader.body-width / 1px;
@@ -104,7 +113,40 @@ export component BangApp inherits Window {
     callback wizard-discover(); callback wizard-storage-choice(bool); callback wizard-app-password();
     callback wizard-email-edited(string);
     callback folder-selected(int); callback account-toggled(string);
+    callback folder-context(int, length, length);
+    callback folder-background-context(length, length);
+    callback label-context(int, length, length);
+    callback folder-action(int, string, string);
     callback message-selected(int); callback message-action(int, string);
+    // Right-click menus. Rust fills the menu state from the store, then the
+    // Slint side shows the popup at the requested window coordinates.
+    callback message-context(int, length, length);
+    callback show-menu();
+    show-menu => { message-menu.show(); }
+    callback show-move-menu();
+    show-move-menu => { move-menu.show(); }
+    callback show-folder-menu();
+    show-folder-menu => { folder-menu.show(); }
+    callback show-label-menu();
+    show-label-menu => { label-menu.show(); }
+    in-out property <int> menu-message: -1;
+    in-out property <bool> menu-msg-unread: false;
+    in-out property <bool> menu-msg-starred: false;
+    // True when the message sits in Trash/Junk: delete becomes permanent.
+    in-out property <bool> menu-msg-permanent: false;
+    in-out property <bool> menu-batch: false;
+    // Folders offered by the "Move to..." submenu (message's account only).
+    in property <[FolderRow]> move-folders;
+    callback move-selected(int);
+    in-out property <length> menu-x: 0px; in-out property <length> menu-y: 0px;
+    in-out property <int> menu-folder: -1;
+    in-out property <string> menu-folder-kind: "folder";
+    in-out property <string> menu-folder-name: "";
+    in-out property <bool> menu-folder-inbox: false;
+    in-out property <bool> menu-folder-empty: false;
+    in-out property <int> menu-label: -1;
+    in-out property <string> folder-dialog-mode: "";
+    in-out property <string> folder-dialog-name: "";
     callback reveal-message(int);
     reveal-message(index) => { message-list.reveal-row(index); }
     callback reset-message-scroll();
@@ -124,7 +166,7 @@ export component BangApp inherits Window {
     callback settings-account-reconnect(string);
     callback settings-account-unlock(string);
 
-    private property <bool> modal-open: root.welcome-open || root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open || root.organization-open;
+    private property <bool> modal-open: root.welcome-open || root.wizard-open || root.settings-open || root.drafts-open || root.templates-open || root.sends-open || root.organization-open || root.folder-dialog-mode != "";
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
@@ -183,6 +225,9 @@ export component BangApp inherits Window {
         add-account => { root.wizard-open = true; }
         settings => { root.settings-opened(); }
         folder-clicked(id) => { root.folder-selected(id); root.detail-open = false; }
+        folder-context(id, x, y) => { root.folder-context(id, x, y); }
+        folder-background-context(x, y) => { root.folder-background-context(x, y); }
+        label-context(id, x, y) => { root.label-context(id, x, y); }
         account-toggled(id) => { root.account-toggled(id); }
     }
     nav-splitter := Rectangle {
@@ -215,11 +260,27 @@ export component BangApp inherits Window {
             categories: root.categories; selected: root.selected-category;
             selected-category(key) => { root.category-selected(key); }
         }
+        Rectangle {
+            visible: root.selection-count > 0;
+            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px);
+            width: parent.width; height: 42px; background: Theme.toolbar-bg;
+            HorizontalLayout { padding-left: 10px; padding-right: 10px; spacing: 8px;
+                Text { text: @tr("Selected:") + " " + root.selection-count; color: Theme.text; font-size: 13px; horizontal-stretch: 1; vertical-alignment: center; }
+                ActionButton { compact: true; icon: @image-url("icons/mail.svg"); text: @tr("Mark read"); clicked => { root.batch-action("read"); } }
+                ActionButton { compact: true; icon: @image-url("icons/star.svg"); text: @tr("Star"); clicked => { root.batch-action("star"); } }
+                ActionButton { compact: true; icon: @image-url("icons/folder.svg"); text: @tr("Move to..."); clicked => { root.batch-action("move"); } }
+                ActionButton { compact: true; icon: @image-url("icons/trash.svg"); text: @tr("Delete"); clicked => { root.batch-action("delete"); } }
+            }
+        }
         message-list := MessageList {
-            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width;
+            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px) + (root.selection-count > 0 ? 42px : 0px); height: parent.height - self.y; width: parent.width;
             messages: root.messages; selected-message: root.selected-message;
-            message-clicked(id) => { root.message-selected(id); root.detail-open = true; }
+            message-clicked(id, control, shift, index) => {
+                root.selection-clicked(id, control, shift, index);
+                if !control && !shift { root.message-selected(id); root.detail-open = true; }
+            }
             message-action(id, action) => { root.message-action(id, action); }
+            message-context(id, x, y) => { root.message-context(id, x, y); }
         }
         if root.account-count == 0 || root.messages.length == 0: Rectangle {
             y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width; background: Theme.bg;
@@ -282,6 +343,9 @@ export component BangApp inherits Window {
             add-account => { root.sidebar-overlay = false; root.wizard-open = true; }
             settings => { root.sidebar-overlay = false; root.settings-opened(); }
             folder-clicked(id) => { root.folder-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
+            folder-context(id, x, y) => { root.folder-context(id, x, y); }
+            folder-background-context(x, y) => { root.folder-background-context(x, y); }
+            label-context(id, x, y) => { root.label-context(id, x, y); }
             account-toggled(id) => { root.account-toggled(id); }
         }
     }
@@ -321,6 +385,7 @@ export component BangApp inherits Window {
     OrganizationDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;
         open: root.organization-open; managing <=> root.managing-labels; labels: root.labels;
         category-index <=> root.organization-category; effective-category: root.organization-effective;
+        edit-id <=> root.organization-edit-id; edit-name <=> root.organization-edit-name; edit-color <=> root.organization-edit-color;
         message-override: root.organization-message-override; sender-override: root.organization-sender-override;
         error: root.organization-error;
         category-saved(index, sender) => { root.category-saved(index, sender); }
@@ -347,6 +412,188 @@ export component BangApp inherits Window {
         row-clicked(id) => { if root.templates-open { root.template-row-clicked(id); } else if !root.sends-open { root.draft-row-clicked(id); } }
         row-delete(id) => { if root.sends-open { root.send-row-delete(id); } else if root.templates-open { root.template-row-delete(id); } else { root.draft-row-delete(id); } }
         close => { root.drafts-dialog-close(); }
+    }
+    // Right-click menu for a message in the list. Rust resolves the target in
+    // the store and sets the menu state before showing the popup.
+    message-menu := PopupWindow {
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 262px;
+        // Inner content: 9 items + 2 separators. Include 5px outer inset.
+        height: root.menu-batch ? 163px : 358px;
+        Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg;
+            border-radius: 14px;
+            border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout {
+                padding: 8px; spacing: 3px;
+                if root.menu-batch: ContextMenuItem {
+                    text: @tr("Mark read"); icon: @image-url("icons/mail.svg");
+                    activated => { root.batch-action("read"); message-menu.close(); }
+                }
+                if root.menu-batch: ContextMenuItem {
+                    text: @tr("Star"); icon: @image-url("icons/star.svg");
+                    activated => { root.batch-action("star"); message-menu.close(); }
+                }
+                if root.menu-batch: ContextMenuItem {
+                    text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
+                    activated => { message-menu.close(); move-menu.show(); }
+                }
+                if root.menu-batch: ContextMenuItem {
+                    text: @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
+                    activated => { root.batch-action("delete"); message-menu.close(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: @tr("Open"); icon: @image-url("icons/eye.svg");
+                    activated => { root.message-selected(root.menu-message); root.detail-open = true; message-menu.close(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: @tr("Reply"); icon: @image-url("icons/back.svg");
+                    activated => { root.message-action(root.menu-message, "reply"); message-menu.close(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: @tr("Reply to all"); icon: @image-url("icons/person.svg");
+                    activated => { root.message-action(root.menu-message, "reply-all"); message-menu.close(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: @tr("Forward"); icon: @image-url("icons/forward.svg");
+                    activated => { root.message-action(root.menu-message, "forward"); message-menu.close(); }
+                }
+                if !root.menu-batch: Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
+                if !root.menu-batch: ContextMenuItem {
+                    text: root.menu-msg-unread ? @tr("Mark as read") : @tr("Mark as unread"); icon: @image-url("icons/mail.svg");
+                    activated => { root.message-action(root.menu-message, "read"); message-menu.close(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: root.menu-msg-starred ? @tr("Unstar") : @tr("Star"); icon: @image-url("icons/star.svg");
+                    activated => { root.message-action(root.menu-message, "star"); message-menu.close(); }
+                }
+                if !root.menu-batch: Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
+                if !root.menu-batch: ContextMenuItem {
+                    text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
+                    activated => { message-menu.close(); move-menu.show(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: @tr("Snooze"); icon: @image-url("icons/clock.svg");
+                    activated => { root.message-action(root.menu-message, "snooze"); message-menu.close(); }
+                }
+                if !root.menu-batch: ContextMenuItem {
+                    text: root.menu-msg-permanent ? @tr("Delete permanently") : @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
+                    activated => { root.message-action(root.menu-message, "delete"); message-menu.close(); }
+                }
+            }
+        }
+    }
+    // In-place replacement of the message menu: the folder list to move the
+    // message's account folders into (message's own folder excluded; filled
+    // by Rust when the context menu is opened).
+    move-menu := PopupWindow {
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 262px;
+        height: 302px;
+        Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg;
+            border-radius: 14px;
+            border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout {
+                padding: 8px; spacing: 3px;
+                Text {
+                    height: 24px;
+                    text: @tr("Move to...");
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                ListView {
+                    height: 252px;
+                    for folder in root.move-folders : ContextMenuItem {
+                        text: folder.name;
+                        icon: folder.kind == "trash" ? @image-url("icons/trash.svg") : folder.kind == "inbox" ? @image-url("icons/inbox.svg") : folder.kind == "sent" ? @image-url("icons/send.svg") : folder.kind == "draft" ? @image-url("icons/file.svg") : @image-url("icons/folder.svg");
+                        activated => { move-menu.close(); root.move-selected(folder.id); }
+                    }
+                }
+                if root.move-folders.length == 0 : Text {
+                    height: 24px;
+                    text: @tr("No other folder");
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+    folder-menu := PopupWindow {
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 246px;
+        height: root.menu-folder-empty ? 58px : root.menu-folder-inbox ? 100px : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 205px : 170px;
+        Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout { padding: 8px; spacing: 3px;
+                if !root.menu-folder-empty: ContextMenuItem { text: @tr("Mark all as read"); icon: @image-url("icons/mail.svg"); activated => { folder-menu.close(); root.folder-action(root.menu-folder, "read", ""); } }
+                if !root.menu-folder-empty && (root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk"): ContextMenuItem {
+                    text: @tr("Empty folder"); icon: @image-url("icons/trash.svg"); danger: true;
+                    activated => { folder-menu.close(); root.folder-action(root.menu-folder, "empty", ""); }
+                }
+                if !root.menu-folder-empty: Rectangle { height: 1px; background: Theme.border; }
+                ContextMenuItem { text: @tr("New folder"); icon: @image-url("icons/plus.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "create"; root.folder-dialog-name = ""; } }
+                if !root.menu-folder-empty && !root.menu-folder-inbox: ContextMenuItem { text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
+                if !root.menu-folder-empty && !root.menu-folder-inbox: ContextMenuItem { text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
+            }
+        }
+    }
+    label-menu := PopupWindow {
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 220px; height: 104px;
+        Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout { padding: 8px; spacing: 3px;
+                ContextMenuItem {
+                    text: @tr("Edit label"); icon: @image-url("icons/compose.svg");
+                    activated => {
+                        label-menu.close();
+                        root.managing-labels = true;
+                        root.organization-opened(true);
+                    }
+                }
+                ContextMenuItem {
+                    text: @tr("Delete label"); icon: @image-url("icons/trash.svg"); danger: true;
+                    activated => { label-menu.close(); root.label-deleted(root.menu-label); }
+                }
+            }
+        }
+    }
+    if root.folder-dialog-mode != "" : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height; background: #00000066;
+        TouchArea { clicked => { root.folder-dialog-mode = ""; } }
+        Rectangle {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            width: 420px; height: root.folder-dialog-mode == "delete" ? 140px : 176px;
+            background: Theme.bg; border-radius: 12px; border-width: 1px; border-color: Theme.border;
+            VerticalLayout { padding: 16px; spacing: 12px;
+                Text { text: root.folder-dialog-mode == "create" ? @tr("New folder") : root.folder-dialog-mode == "rename" ? @tr("Rename folder") : @tr("Delete folder?"); color: Theme.text; font-size: 15px; font-weight: 600; }
+                if root.folder-dialog-mode == "delete" : Text { text: @tr("This folder and its messages will be deleted."); color: Theme.text-secondary; font-size: 13px; }
+                if root.folder-dialog-mode != "delete" : LineEdit { text <=> root.folder-dialog-name; placeholder-text: @tr("Folder name"); }
+                HorizontalLayout { alignment: end; spacing: 8px;
+                    ActionButton { framed: true; text: @tr("Cancel"); clicked => { root.folder-dialog-mode = ""; } }
+                    ActionButton { primary: true; text: root.folder-dialog-mode == "delete" ? @tr("Delete") : @tr("Save"); clicked => {
+                        if root.folder-dialog-mode == "delete" { root.folder-action(root.menu-folder, "delete", ""); }
+                        else if root.folder-dialog-name != "" { root.folder-action(root.menu-folder, root.folder-dialog-mode, root.folder-dialog-name); }
+                        root.folder-dialog-mode = "";
+                    } }
+                }
+            }
+            TouchArea { }
+        }
     }
     }
 }

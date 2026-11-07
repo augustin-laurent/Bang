@@ -11,7 +11,7 @@ export struct FolderRow {
 export struct MessageRow {
     id: int, sender: string, subject: string, date: string,
     sender-address: string, initials: string, avatar: image, avatar-tint: color, has-avatar: bool,
-    preview: string, unread: bool, starred: bool, has-attachments: bool,
+    preview: string, unread: bool, starred: bool, has-attachments: bool, is-selected: bool,
 }
 export struct AccountRow { provider: string, id: string, email: string, reconnect: bool, storage-locked: bool, removing: bool, }
 export struct DraftRow { id: int, title: string, subtitle: string, }

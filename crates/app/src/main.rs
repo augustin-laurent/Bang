@@ -161,6 +161,7 @@ fn wire_selection(
     state: &Arc<state::UiState>,
     bridge: bridge::Bridge,
 ) {
+    use slint::Model;
     ui.on_account_toggled({
         let store = store.clone();
         let state = state.clone();
@@ -212,6 +213,11 @@ fn wire_selection(
                 return;
             };
             let id = i64::from(id);
+            state.selected_messages.lock().unwrap().clear();
+            state
+                .selection_anchor
+                .store(-1, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selection_count(0);
             state
                 .selected_folder
                 .store(id, std::sync::atomic::Ordering::SeqCst);
@@ -230,6 +236,182 @@ fn wire_selection(
         }
     });
 
+    ui.on_folder_context({
+        let store = store.clone();
+        let weak = ui.as_weak();
+        move |id: i32, x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let Ok(Some(folder)) = store.get_folder_by_id(i64::from(id)) else {
+                return;
+            };
+            // The virtual unified row and account headers are filtered in the
+            // sidebar. INBOX can be marked read / used to create a folder,
+            // while the UI hides its rename/delete actions.
+            ui.set_menu_folder(id);
+            ui.set_menu_folder_kind(bang_core::message::folder_kind(&folder.path).into());
+            ui.set_menu_folder_name(folder.name.into());
+            ui.set_menu_folder_inbox(folder.path.eq_ignore_ascii_case("INBOX"));
+            ui.set_menu_folder_empty(false);
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_folder_menu();
+        }
+    });
+    ui.on_folder_background_context({
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let folders = ui.get_folders();
+            let selected = state
+                .selected_folder
+                .load(std::sync::atomic::Ordering::SeqCst) as i32;
+            let target = (0..folders.row_count())
+                .filter_map(|i| folders.row_data(i))
+                .find(|folder| !folder.is_header && folder.id >= 0 && folder.id == selected)
+                .or_else(|| {
+                    (0..folders.row_count())
+                        .filter_map(|i| folders.row_data(i))
+                        .find(|folder| !folder.is_header && folder.id >= 0)
+                });
+            let Some(target) = target else {
+                return;
+            };
+            ui.set_menu_folder(target.id);
+            ui.set_menu_folder_kind(target.kind);
+            ui.set_menu_folder_name(target.name);
+            ui.set_menu_folder_inbox(false);
+            ui.set_menu_folder_empty(true);
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_folder_menu();
+        }
+    });
+    ui.on_selection_clicked({
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |id: i32, control: bool, shift: bool, index: i32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let id = i64::from(id);
+            let mut selection = state.selected_messages.lock().unwrap();
+            if shift {
+                let anchor = state
+                    .selection_anchor
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                let model = ui.get_messages();
+                let anchor_index = (0..model.row_count())
+                    .find(|&i| {
+                        model
+                            .row_data(i)
+                            .map(|r| i64::from(r.id) == anchor)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(index as usize);
+                let low = anchor_index.min(index.max(0) as usize);
+                let high = anchor_index
+                    .max(index.max(0) as usize)
+                    .min(model.row_count().saturating_sub(1));
+                for i in low..=high {
+                    if let Some(row) = model.row_data(i) {
+                        let row_id = i64::from(row.id);
+                        if !selection.contains(&row_id) {
+                            selection.push(row_id);
+                        }
+                    }
+                }
+            } else if control {
+                if let Some(position) = selection.iter().position(|&selected| selected == id) {
+                    selection.remove(position);
+                } else {
+                    selection.push(id);
+                }
+                state
+                    .selection_anchor
+                    .store(id, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                selection.clear();
+                state
+                    .selection_anchor
+                    .store(id, std::sync::atomic::Ordering::SeqCst);
+            }
+            ui.set_selection_count(if control || shift {
+                selection.len() as i32
+            } else {
+                0
+            });
+            let batch = selection.len() > 1 || control || shift;
+            drop(selection);
+            if batch {
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                ui.set_selected_message(-1);
+                reader::clear(&ui);
+                ui.set_message_body("".into());
+                ui.set_message_loading(false);
+            }
+            state::update_message_selection(&ui, &state);
+        }
+    });
+    ui.on_folder_action({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |id: i32, action: slint::SharedString, name: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let folder_id = i64::from(id);
+            let Ok(Some(folder)) = store.get_folder_by_id(folder_id) else {
+                return;
+            };
+            let account = bang_core::AccountId(folder.account_id.clone());
+            let command = match action.as_str() {
+                "read" => bang_core::UiCommand::MarkFolderRead { account, folder_id },
+                "empty" => bang_core::UiCommand::EmptyFolder { account, folder_id },
+                "create" => bang_core::UiCommand::CreateFolder {
+                    account,
+                    name: name.to_string(),
+                },
+                "rename" => bang_core::UiCommand::RenameFolder {
+                    account,
+                    folder_id,
+                    name: name.to_string(),
+                },
+                "delete" => bang_core::UiCommand::DeleteFolder { account, folder_id },
+                _ => return,
+            };
+            if action == "delete"
+                && state
+                    .selected_folder
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    == folder_id
+            {
+                state
+                    .selected_folder
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                ui.set_selected_folder(-1);
+                ui.set_selected_message(-1);
+                ui.set_message_body("".into());
+                reader::clear(&ui);
+                state.selected_messages.lock().unwrap().clear();
+                ui.set_selection_count(0);
+                load_folder_view(&ui, &store, bang_core::UNIFIED_INBOX_ID);
+            }
+            bridge.send(command);
+        }
+    });
+
     ui.on_search_edited({
         let store = store.clone();
         let state = state.clone();
@@ -238,6 +420,11 @@ fn wire_selection(
             let Some(ui) = weak.upgrade() else {
                 return;
             };
+            state.selected_messages.lock().unwrap().clear();
+            state
+                .selection_anchor
+                .store(-1, std::sync::atomic::Ordering::SeqCst);
+            ui.set_selection_count(0);
             let query = text.to_string();
             if query.trim().is_empty() {
                 // Leaving search mode: restore the folder view.
@@ -319,15 +506,16 @@ fn wire_selection(
         move |id: i32, action: slint::SharedString| {
             let id = i64::from(id);
             // Reply / forward open the composer prefilled with a quote.
-            if action == "reply" || action == "forward" {
+            if action == "reply" || action == "reply-all" || action == "forward" {
+                let mode = match action.as_str() {
+                    "forward" => composer::ComposerMode::Forward,
+                    "reply-all" => composer::ComposerMode::ReplyAll,
+                    _ => composer::ComposerMode::Reply,
+                };
                 if let Some(ui) = weak.upgrade() {
-                    if let Err(e) = composer::reply_or_forward(
-                        &ui,
-                        store.clone(),
-                        bridge.clone(),
-                        id,
-                        action == "forward",
-                    ) {
+                    if let Err(e) =
+                        composer::reply_or_forward(&ui, store.clone(), bridge.clone(), id, mode)
+                    {
                         ui.set_status_message(format!("{} {e}", tr("Reply unavailable:")).into());
                     }
                 }
@@ -375,6 +563,182 @@ fn wire_selection(
                 _ => return,
             };
             bridge.send(command);
+        }
+    });
+
+    // Right click on a row: resolve the message, prepare menu state, and show
+    // the popup at the cursor.
+    ui.on_message_context({
+        let store = store.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |id: i32, x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let Ok(Some(summary)) = store.get_message(i64::from(id)) else {
+                return;
+            };
+            ui.set_menu_message(id);
+            ui.set_menu_msg_unread(summary.flags.is_unread());
+            ui.set_menu_msg_starred(summary.flags.is_flagged());
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            let mut selected = state.selected_messages.lock().unwrap();
+            if !selected.contains(&i64::from(id)) {
+                selected.clear();
+                ui.set_selection_count(0);
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                ui.set_selected_message(-1);
+            }
+            ui.set_menu_batch(!selected.is_empty());
+            drop(selected);
+            // Deletion inside Trash/Junk is permanent; elsewhere it moves.
+            let kind = store
+                .get_folder_by_id(summary.folder_id)
+                .ok()
+                .flatten()
+                .map(|f| bang_core::message::folder_kind(&f.path))
+                .unwrap_or("folder");
+            ui.set_menu_msg_permanent(kind == "trash" || kind == "junk");
+            // "Move to..." lists the message's account folders except its own.
+            let mut rows: Vec<FolderRow> = Vec::new();
+            if let Ok(folders) = store.get_folders(&summary.account_id) {
+                for folder in folders {
+                    if folder.id == summary.folder_id {
+                        continue;
+                    }
+                    rows.push(FolderRow {
+                        id: folder.id as i32,
+                        name: folder.name.into(),
+                        kind: bang_core::message::folder_kind(&folder.path).into(),
+                        is_header: false,
+                        ..Default::default()
+                    });
+                }
+            }
+            ui.set_move_folders(slint::ModelRc::new(slint::VecModel::from(rows)));
+            ui.invoke_show_menu();
+        }
+    });
+
+    // Folder picked in the "Move to..." popup: move the menu's message.
+    ui.on_move_selected({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |folder_id: i32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let ids = {
+                let selected = state.selected_messages.lock().unwrap();
+                if selected.len() > 1 {
+                    selected.clone()
+                } else {
+                    vec![i64::from(ui.get_menu_message())]
+                }
+            };
+            let Ok(Some(destination)) = store.get_folder_by_id(i64::from(folder_id)) else {
+                return;
+            };
+            let mut message_ids = Vec::new();
+            for id in ids {
+                if let Ok(Some(summary)) = store.get_message(id) {
+                    if summary.account_id == destination.account_id {
+                        message_ids.push(id);
+                    }
+                }
+            }
+            if !message_ids.is_empty() {
+                bridge.send(bang_core::UiCommand::Move {
+                    account: bang_core::AccountId(destination.account_id),
+                    message_ids,
+                    dest_folder_id: i64::from(folder_id),
+                });
+            }
+            state.selected_messages.lock().unwrap().clear();
+            ui.set_selection_count(0);
+            state.reload_messages(&ui, &store);
+        }
+    });
+    ui.on_batch_action({
+        let store = store.clone();
+        let bridge = bridge.clone();
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |action: slint::SharedString| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let ids = state.selected_messages.lock().unwrap().clone();
+            if ids.is_empty() {
+                return;
+            }
+            if action == "move" {
+                let Some(first) = ids.first().copied() else {
+                    return;
+                };
+                let Ok(Some(summary)) = store.get_message(first) else {
+                    return;
+                };
+                let Ok(folders) = store.get_folders(&summary.account_id) else {
+                    return;
+                };
+                let rows = folders
+                    .into_iter()
+                    .filter(|f| f.id != summary.folder_id)
+                    .map(|f| FolderRow {
+                        id: f.id as i32,
+                        name: f.name.into(),
+                        kind: bang_core::message::folder_kind(&f.path).into(),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                ui.set_menu_message(first as i32);
+                ui.set_move_folders(slint::ModelRc::new(slint::VecModel::from(rows)));
+                ui.set_menu_x(220.0);
+                ui.set_menu_y(80.0);
+                ui.set_menu_batch(true);
+                ui.invoke_show_move_menu();
+                return;
+            }
+            let mut groups: std::collections::HashMap<String, Vec<i64>> =
+                std::collections::HashMap::new();
+            for id in ids {
+                if let Ok(Some(summary)) = store.get_message(id) {
+                    groups.entry(summary.account_id).or_default().push(id);
+                }
+            }
+            for (account_id, message_ids) in groups {
+                let account = bang_core::AccountId(account_id);
+                let command = match action.as_str() {
+                    "delete" => bang_core::UiCommand::Delete {
+                        account,
+                        message_ids,
+                    },
+                    "read" => bang_core::UiCommand::SetFlags {
+                        account,
+                        message_ids,
+                        flags: bang_core::MessageFlags::SEEN,
+                        add: true,
+                    },
+                    "star" => bang_core::UiCommand::SetFlags {
+                        account,
+                        message_ids,
+                        flags: bang_core::MessageFlags::FLAGGED,
+                        add: true,
+                    },
+                    _ => return,
+                };
+                bridge.send(command);
+            }
+            state.selected_messages.lock().unwrap().clear();
+            ui.set_selection_count(0);
+            state.reload_messages(&ui, &store);
         }
     });
 }
@@ -510,6 +874,8 @@ fn wire_settings(
     state: &Arc<state::UiState>,
     bridge: bridge::Bridge,
 ) {
+    wire_settings_close(ui);
+
     ui.on_settings_opened({
         let store = store.clone();
         let state = state.clone();
@@ -628,6 +994,17 @@ fn wire_settings(
             bridge.send(bang_core::UiCommand::RemoveAccount(bang_core::AccountId(
                 id.into(),
             )));
+        }
+    });
+}
+
+fn wire_settings_close(ui: &BangApp) {
+    ui.on_settings_close({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_settings_open(false);
+            }
         }
     });
 }
@@ -772,6 +1149,7 @@ fn resume_draft(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge::Br
     let prefill = composer::Prefill {
         from: Some(request.account.0.clone()),
         to: request.to.clone(),
+        cc: Vec::new(),
         subject: request.subject.clone(),
         body_html: request.body_html.clone().unwrap_or_default(),
         in_reply_to: request.in_reply_to.clone(),
@@ -790,6 +1168,7 @@ fn resume_template(ui: &BangApp, store: &Arc<bang_core::Store>, bridge: &bridge:
     let prefill = composer::Prefill {
         from: Some(request.account.0.clone()),
         to: request.to.clone(),
+        cc: Vec::new(),
         subject: request.subject.clone(),
         body_html: request.body_html.clone().unwrap_or_default(),
         in_reply_to: None,

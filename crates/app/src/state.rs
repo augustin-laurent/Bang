@@ -20,6 +20,10 @@ pub struct UiState {
     pub selected_folder: AtomicI64,
     /// Id of the currently selected message (-1 = none).
     pub selected_message: AtomicI64,
+    /// Messages selected for batch actions.
+    pub selected_messages: Mutex<Vec<i64>>,
+    /// Anchor row for shift-click range selection.
+    pub selection_anchor: AtomicI64,
     /// Whether the message list currently shows search results.
     pub search_active: AtomicBool,
     /// Account sections collapsed by the user.
@@ -40,6 +44,8 @@ impl UiState {
         Self {
             selected_folder: AtomicI64::new(-1),
             selected_message: AtomicI64::new(-1),
+            selected_messages: Mutex::new(Vec::new()),
+            selection_anchor: AtomicI64::new(-1),
             search_active: AtomicBool::new(false),
             collapsed_accounts: Mutex::new(HashSet::new()),
             account_status: Mutex::new(HashMap::new()),
@@ -67,7 +73,15 @@ impl UiState {
             } else if let Some(summary) = messages.iter().find(|m| m.id == selected) {
                 set_message_header(ui, summary);
             }
-            let rows: Vec<MessageRow> = messages.iter().map(to_row).collect();
+            let selected = self.selected_messages.lock().unwrap().clone();
+            let rows: Vec<MessageRow> = messages
+                .iter()
+                .map(|m| {
+                    let mut row = to_row(m);
+                    row.is_selected = selected.contains(&m.id);
+                    row
+                })
+                .collect();
             set_message_rows(ui, rows);
         }
     }
@@ -397,9 +411,6 @@ impl UiState {
                     })
                     .collect();
                 ui.set_message_attachments(slint::ModelRc::new(VecModel::from(atts)));
-                if !self.search_active.load(Ordering::SeqCst) {
-                    self.reload_messages(ui, store);
-                }
             }
             MailEvent::FollowUpDue { subject, .. } => {
                 notify(&tr("Follow-up due"), &subject);
@@ -449,6 +460,27 @@ pub(crate) fn set_message_rows(ui: &BangApp, mut rows: Vec<MessageRow>) {
     let model = reconcile_rows(&old, rows, |r| r.id);
     if model != old {
         ui.set_messages(model);
+    }
+}
+
+/// Update selection flags in-place without re-querying the message store.
+pub(crate) fn update_message_selection(ui: &BangApp, state: &UiState) {
+    let selected: HashSet<i64> = state
+        .selected_messages
+        .lock()
+        .unwrap()
+        .iter()
+        .copied()
+        .collect();
+    let model = ui.get_messages();
+    for index in 0..model.row_count() {
+        if let Some(mut row) = model.row_data(index) {
+            let is_selected = selected.contains(&i64::from(row.id));
+            if row.is_selected != is_selected {
+                row.is_selected = is_selected;
+                model.set_row_data(index, row);
+            }
+        }
     }
 }
 
@@ -515,6 +547,7 @@ pub(crate) fn to_row(m: &MessageSummary) -> MessageRow {
         unread: m.flags.is_unread(),
         starred: m.flags.is_flagged(),
         has_attachments: m.has_attachments,
+        is_selected: false,
     }
 }
 
@@ -655,18 +688,7 @@ pub(crate) fn load_sends(ui: &BangApp, store: &Store) {
 }
 
 fn folder_kind(path: &str) -> &'static str {
-    let last = path
-        .rsplit(['/', '.'])
-        .next()
-        .unwrap_or(path)
-        .to_ascii_lowercase();
-    match last.as_str() {
-        "inbox" => "inbox",
-        "sent" | "sent messages" => "sent",
-        "drafts" => "draft",
-        "trash" | "deleted messages" => "trash",
-        _ => "folder",
-    }
+    bang_core::message::folder_kind(path)
 }
 
 #[cfg(test)]
@@ -676,6 +698,7 @@ mod presentation_tests {
         assert_eq!(super::folder_kind("INBOX"), "inbox");
         assert_eq!(super::folder_kind("[Gmail]/Sent"), "sent");
         assert_eq!(super::folder_kind("My projects"), "folder");
+        assert_eq!(super::folder_kind("[Gmail]/Junk"), "junk");
     }
 }
 
