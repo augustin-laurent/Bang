@@ -422,9 +422,9 @@ export component BangApp inherits Window {
     message-menu := PopupWindow {
         x: root.menu-x; y: root.menu-y;
         width: 252px;
-        // 9 menu items × 32px + 2 separator rows × 7px + vertical padding 12px
-        // + spacing between the 11 rows 10 × 2px = 334px.
-        height: 334px;
+        // Sized to the visible content: 4 batch items or 9 single items and
+        // 2 separators, 32px rows, 2px spacing, 6px padding.
+        height: root.menu-batch ? 142px : 322px;
         Rectangle {
             background: Theme.bg;
             border-radius: 10px;
@@ -499,11 +499,6 @@ export component BangApp inherits Window {
                     text: root.menu-msg-permanent ? @tr("Delete permanently") : @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { root.message-action(root.menu-message, "delete"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
-                    text: @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
-                    activated => { root.batch-action("delete"); message-menu.close(); }
-                }
             }
         }
     }
@@ -513,7 +508,10 @@ export component BangApp inherits Window {
     move-menu := PopupWindow {
         x: root.menu-x; y: root.menu-y;
         width: 252px;
-        height: 292px;
+        // Grows with the folder count (32px rows), capped so long accounts
+        // scroll instead of reaching for the bottom of the screen.
+        height: 19px + min(root.move-folders.length * 32px, 252px)
+            + (root.move-folders.length == 0 ? 26px : 0px);
         Rectangle {
             background: Theme.bg;
             border-radius: 10px;
@@ -531,7 +529,7 @@ export component BangApp inherits Window {
                 }
                 Rectangle { height: 1px; background: Theme.border; }
                 ListView {
-                    height: 252px;
+                    height: min(root.move-folders.length * 32px, 252px);
                     for folder in root.move-folders : ContextMenuItem {
                         text: folder.name;
                         icon: folder.kind == "trash" ? @image-url("icons/trash.svg") : folder.kind == "inbox" ? @image-url("icons/inbox.svg") : folder.kind == "sent" ? @image-url("icons/send.svg") : folder.kind == "draft" ? @image-url("icons/file.svg") : @image-url("icons/folder.svg");
@@ -551,7 +549,11 @@ export component BangApp inherits Window {
     }
     folder-menu := PopupWindow {
         x: root.menu-x; y: root.menu-y;
-        width: 236px; height: root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 174px : 142px;
+        width: 236px;
+        // 32px items, a 1px separator, 2px spacing and 6px padding; the
+        // visible item count depends on folder kind and INBOX protections.
+        height: 13px + (root.menu-folder-inbox ? 2
+            : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 5 : 4) * 34px;
         Rectangle {
             background: Theme.bg; border-radius: 10px; border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
