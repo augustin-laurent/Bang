@@ -317,13 +317,9 @@ fn normalize(bytes: &[u8]) -> Option<Vec<u8>> {
     if w == 0 || h == 0 {
         return None;
     }
-    let mut image = decoded
-        .resize_to_fill(80, 80, image::imageops::FilterType::Lanczos3)
-        .to_rgba8();
-    for (x, y, pixel) in image.enumerate_pixels_mut() {
-        let distance = ((x as f32 + 0.5 - 40.).powi(2) + (y as f32 + 0.5 - 40.).powi(2)).sqrt();
-        pixel.0[3] = (pixel.0[3] as f32 * (40. - distance).clamp(0., 1.)) as u8;
-    }
+    // Crop square and let the UI circle-clip: a baked alpha ring would be
+    // resampled blurry at every scale Slint draws it.
+    let image = decoded.resize_to_fill(128, 128, image::imageops::FilterType::Lanczos3).to_rgba8();
     let mut png = Cursor::new(Vec::new());
     image.write_to(&mut png, ImageFormat::Png).ok()?;
     Some(png.into_inner())
@@ -408,10 +404,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let circular = normalize(&bytes).unwrap();
-        let img = image::load_from_memory(&circular).unwrap().to_rgba8();
-        assert_eq!(img.dimensions(), (80, 80));
-        assert_eq!(img.get_pixel(0, 0).0[3], 0);
+        let square = normalize(&bytes).unwrap();
+        let img = image::load_from_memory(&square).unwrap().to_rgba8();
+        // Square crop with full alpha; the UI circular-clips at draw time.
+        assert_eq!(img.dimensions(), (128, 128));
+        assert_eq!(img.get_pixel(0, 0).0[3], 255);
         assert!(response_bytes(
             client
                 .get(format!("http://{addr}/missing"))
