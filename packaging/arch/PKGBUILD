@@ -1,7 +1,7 @@
 # Release preparation replaces @SOURCE_SHA256@ and attaches this recipe next to
 # the exact source archive. Download the release recipe, not this template.
 pkgname=bang
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Experimental Linux desktop mail client'
 arch=('x86_64')
