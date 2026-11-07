@@ -253,6 +253,39 @@ fn wire_selection(
             ui.set_menu_folder_kind(bang_core::message::folder_kind(&folder.path).into());
             ui.set_menu_folder_name(folder.name.into());
             ui.set_menu_folder_inbox(folder.path.eq_ignore_ascii_case("INBOX"));
+            ui.set_menu_folder_empty(false);
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_folder_menu();
+        }
+    });
+    ui.on_folder_background_context({
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let folders = ui.get_folders();
+            let selected = state
+                .selected_folder
+                .load(std::sync::atomic::Ordering::SeqCst) as i32;
+            let target = (0..folders.row_count())
+                .filter_map(|i| folders.row_data(i))
+                .find(|folder| !folder.is_header && folder.id >= 0 && folder.id == selected)
+                .or_else(|| {
+                    (0..folders.row_count())
+                        .filter_map(|i| folders.row_data(i))
+                        .find(|folder| !folder.is_header && folder.id >= 0)
+                });
+            let Some(target) = target else {
+                return;
+            };
+            ui.set_menu_folder(target.id);
+            ui.set_menu_folder_kind(target.kind);
+            ui.set_menu_folder_name(target.name);
+            ui.set_menu_folder_inbox(false);
+            ui.set_menu_folder_empty(true);
             ui.set_menu_x(x);
             ui.set_menu_y(y);
             ui.invoke_show_folder_menu();

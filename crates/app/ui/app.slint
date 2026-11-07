@@ -36,6 +36,9 @@ export component BangApp inherits Window {
     in-out property <bool> managing-labels: false;
     in-out property <int> organization-message: -1;
     in-out property <int> organization-category: 0;
+    in-out property <int> organization-edit-id: -1;
+    in-out property <string> organization-edit-name: "";
+    in-out property <int> organization-edit-color: 0;
     in property <string> organization-effective;
     in property <bool> organization-message-override;
     in property <bool> organization-sender-override;
@@ -64,7 +67,7 @@ export component BangApp inherits Window {
     in property <bool> reader-failed: false;
     in-out property <bool> remote-images: false;
     out property <bool> html-active: root.native-reader-available && !root.reader-failed && !root.message-loading && root.message-html != "";
-    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open && !folder-menu.is-open;
+    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open && !folder-menu.is-open && !label-menu.is-open;
     out property <float> reader-x-px: reader.body-x / 1px;
     out property <float> reader-y-px: reader.body-y / 1px;
     out property <float> reader-width-px: reader.body-width / 1px;
@@ -111,6 +114,8 @@ export component BangApp inherits Window {
     callback wizard-email-edited(string);
     callback folder-selected(int); callback account-toggled(string);
     callback folder-context(int, length, length);
+    callback folder-background-context(length, length);
+    callback label-context(int, length, length);
     callback folder-action(int, string, string);
     callback message-selected(int); callback message-action(int, string);
     // Right-click menus. Rust fills the menu state from the store, then the
@@ -122,6 +127,8 @@ export component BangApp inherits Window {
     show-move-menu => { move-menu.show(); }
     callback show-folder-menu();
     show-folder-menu => { folder-menu.show(); }
+    callback show-label-menu();
+    show-label-menu => { label-menu.show(); }
     in-out property <int> menu-message: -1;
     in-out property <bool> menu-msg-unread: false;
     in-out property <bool> menu-msg-starred: false;
@@ -136,6 +143,8 @@ export component BangApp inherits Window {
     in-out property <string> menu-folder-kind: "folder";
     in-out property <string> menu-folder-name: "";
     in-out property <bool> menu-folder-inbox: false;
+    in-out property <bool> menu-folder-empty: false;
+    in-out property <int> menu-label: -1;
     in-out property <string> folder-dialog-mode: "";
     in-out property <string> folder-dialog-name: "";
     callback reveal-message(int);
@@ -217,6 +226,8 @@ export component BangApp inherits Window {
         settings => { root.settings-opened(); }
         folder-clicked(id) => { root.folder-selected(id); root.detail-open = false; }
         folder-context(id, x, y) => { root.folder-context(id, x, y); }
+        folder-background-context(x, y) => { root.folder-background-context(x, y); }
+        label-context(id, x, y) => { root.label-context(id, x, y); }
         account-toggled(id) => { root.account-toggled(id); }
     }
     nav-splitter := Rectangle {
@@ -333,6 +344,8 @@ export component BangApp inherits Window {
             settings => { root.sidebar-overlay = false; root.settings-opened(); }
             folder-clicked(id) => { root.folder-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
             folder-context(id, x, y) => { root.folder-context(id, x, y); }
+            folder-background-context(x, y) => { root.folder-background-context(x, y); }
+            label-context(id, x, y) => { root.label-context(id, x, y); }
             account-toggled(id) => { root.account-toggled(id); }
         }
     }
@@ -372,6 +385,7 @@ export component BangApp inherits Window {
     OrganizationDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;
         open: root.organization-open; managing <=> root.managing-labels; labels: root.labels;
         category-index <=> root.organization-category; effective-category: root.organization-effective;
+        edit-id <=> root.organization-edit-id; edit-name <=> root.organization-edit-name; edit-color <=> root.organization-edit-color;
         message-override: root.organization-message-override; sender-override: root.organization-sender-override;
         error: root.organization-error;
         category-saved(index, sender) => { root.category-saved(index, sender); }
@@ -517,21 +531,44 @@ export component BangApp inherits Window {
     folder-menu := PopupWindow {
         x: root.menu-x + 12px; y: root.menu-y + 8px;
         width: 246px;
-        height: root.menu-folder-inbox ? 100px : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 205px : 170px;
+        height: root.menu-folder-empty ? 58px : root.menu-folder-inbox ? 100px : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 205px : 170px;
         Rectangle {
             x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
             background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
             VerticalLayout { padding: 8px; spacing: 3px;
-                ContextMenuItem { text: @tr("Mark all as read"); icon: @image-url("icons/mail.svg"); activated => { folder-menu.close(); root.folder-action(root.menu-folder, "read", ""); } }
-                if root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk": ContextMenuItem {
+                if !root.menu-folder-empty: ContextMenuItem { text: @tr("Mark all as read"); icon: @image-url("icons/mail.svg"); activated => { folder-menu.close(); root.folder-action(root.menu-folder, "read", ""); } }
+                if !root.menu-folder-empty && (root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk"): ContextMenuItem {
                     text: @tr("Empty folder"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { folder-menu.close(); root.folder-action(root.menu-folder, "empty", ""); }
                 }
-                Rectangle { height: 1px; background: Theme.border; }
+                if !root.menu-folder-empty: Rectangle { height: 1px; background: Theme.border; }
                 ContextMenuItem { text: @tr("New folder"); icon: @image-url("icons/plus.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "create"; root.folder-dialog-name = ""; } }
-                if !root.menu-folder-inbox: ContextMenuItem { text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
-                if !root.menu-folder-inbox: ContextMenuItem { text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
+                if !root.menu-folder-empty && !root.menu-folder-inbox: ContextMenuItem { text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
+                if !root.menu-folder-empty && !root.menu-folder-inbox: ContextMenuItem { text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
+            }
+        }
+    }
+    label-menu := PopupWindow {
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 220px; height: 104px;
+        Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout { padding: 8px; spacing: 3px;
+                ContextMenuItem {
+                    text: @tr("Edit label"); icon: @image-url("icons/compose.svg");
+                    activated => {
+                        label-menu.close();
+                        root.managing-labels = true;
+                        root.organization-opened(true);
+                    }
+                }
+                ContextMenuItem {
+                    text: @tr("Delete label"); icon: @image-url("icons/trash.svg"); danger: true;
+                    activated => { label-menu.close(); root.label-deleted(root.menu-label); }
+                }
             }
         }
     }
