@@ -319,7 +319,9 @@ fn normalize(bytes: &[u8]) -> Option<Vec<u8>> {
     }
     // Crop square and let the UI circle-clip: a baked alpha ring would be
     // resampled blurry at every scale Slint draws it.
-    let image = decoded.resize_to_fill(128, 128, image::imageops::FilterType::Lanczos3).to_rgba8();
+    let image = decoded
+        .resize_to_fill(128, 128, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
     let mut png = Cursor::new(Vec::new());
     image.write_to(&mut png, ImageFormat::Png).ok()?;
     Some(png.into_inner())
