@@ -9,7 +9,7 @@ export component ContextMenuItem inherits Rectangle {
     in property <bool> enabled: true;
     callback activated;
     height: 32px;
-    border-radius: 6px;
+    border-radius: 8px;
     background: touch.has-hover && root.enabled ? Theme.hover : transparent;
     opacity: root.enabled ? 1 : 0.45;
     accessible-role: button;

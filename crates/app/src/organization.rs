@@ -1,7 +1,7 @@
 //! Organization controls and view queries. Local mutations go through the core.
 use crate::{bridge::Bridge, i18n::tr, state::UiState, BangApp, CategoryRow, LabelRow};
 use bang_core::{organization::MailCategory, MessageSummary, Store};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use std::sync::{atomic::Ordering, Arc};
 
 pub(crate) const COLORS: [&str; 6] = [
@@ -185,6 +185,28 @@ pub(crate) fn wire(ui: &BangApp, store: &Arc<Store>, state: &Arc<UiState>, bridg
                 state.reload_messages(&ui, &store);
                 ui.invoke_reset_message_scroll();
             }
+        }
+    });
+    ui.on_label_context({
+        let weak = ui.as_weak();
+        move |id, x, y| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let labels = ui.get_labels();
+            let Some(label) = (0..labels.row_count())
+                .filter_map(|index| labels.row_data(index))
+                .find(|label| label.id == id)
+            else {
+                return;
+            };
+            ui.set_menu_label(id);
+            ui.set_organization_edit_id(id);
+            ui.set_organization_edit_name(label.name);
+            ui.set_organization_edit_color(label.color_index);
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_label_menu();
         }
     });
     ui.on_organization_opened({

@@ -253,6 +253,39 @@ fn wire_selection(
             ui.set_menu_folder_kind(bang_core::message::folder_kind(&folder.path).into());
             ui.set_menu_folder_name(folder.name.into());
             ui.set_menu_folder_inbox(folder.path.eq_ignore_ascii_case("INBOX"));
+            ui.set_menu_folder_empty(false);
+            ui.set_menu_x(x);
+            ui.set_menu_y(y);
+            ui.invoke_show_folder_menu();
+        }
+    });
+    ui.on_folder_background_context({
+        let state = state.clone();
+        let weak = ui.as_weak();
+        move |x: f32, y: f32| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let folders = ui.get_folders();
+            let selected = state
+                .selected_folder
+                .load(std::sync::atomic::Ordering::SeqCst) as i32;
+            let target = (0..folders.row_count())
+                .filter_map(|i| folders.row_data(i))
+                .find(|folder| !folder.is_header && folder.id >= 0 && folder.id == selected)
+                .or_else(|| {
+                    (0..folders.row_count())
+                        .filter_map(|i| folders.row_data(i))
+                        .find(|folder| !folder.is_header && folder.id >= 0)
+                });
+            let Some(target) = target else {
+                return;
+            };
+            ui.set_menu_folder(target.id);
+            ui.set_menu_folder_kind(target.kind);
+            ui.set_menu_folder_name(target.name);
+            ui.set_menu_folder_inbox(false);
+            ui.set_menu_folder_empty(true);
             ui.set_menu_x(x);
             ui.set_menu_y(y);
             ui.invoke_show_folder_menu();
@@ -260,7 +293,6 @@ fn wire_selection(
     });
     ui.on_selection_clicked({
         let state = state.clone();
-        let store = store.clone();
         let weak = ui.as_weak();
         move |id: i32, control: bool, shift: bool, index: i32| {
             let Some(ui) = weak.upgrade() else {
@@ -324,7 +356,7 @@ fn wire_selection(
                 ui.set_message_body("".into());
                 ui.set_message_loading(false);
             }
-            state.reload_messages(&ui, &store);
+            state::update_message_selection(&ui, &state);
         }
     });
     ui.on_folder_action({
@@ -842,6 +874,8 @@ fn wire_settings(
     state: &Arc<state::UiState>,
     bridge: bridge::Bridge,
 ) {
+    wire_settings_close(ui);
+
     ui.on_settings_opened({
         let store = store.clone();
         let state = state.clone();
@@ -960,6 +994,17 @@ fn wire_settings(
             bridge.send(bang_core::UiCommand::RemoveAccount(bang_core::AccountId(
                 id.into(),
             )));
+        }
+    });
+}
+
+fn wire_settings_close(ui: &BangApp) {
+    ui.on_settings_close({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_settings_open(false);
+            }
         }
     });
 }

@@ -36,6 +36,9 @@ export component BangApp inherits Window {
     in-out property <bool> managing-labels: false;
     in-out property <int> organization-message: -1;
     in-out property <int> organization-category: 0;
+    in-out property <int> organization-edit-id: -1;
+    in-out property <string> organization-edit-name: "";
+    in-out property <int> organization-edit-color: 0;
     in property <string> organization-effective;
     in property <bool> organization-message-override;
     in property <bool> organization-sender-override;
@@ -64,7 +67,7 @@ export component BangApp inherits Window {
     in property <bool> reader-failed: false;
     in-out property <bool> remote-images: false;
     out property <bool> html-active: root.native-reader-available && !root.reader-failed && !root.message-loading && root.message-html != "";
-    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open && !folder-menu.is-open;
+    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open && !folder-menu.is-open && !label-menu.is-open;
     out property <float> reader-x-px: reader.body-x / 1px;
     out property <float> reader-y-px: reader.body-y / 1px;
     out property <float> reader-width-px: reader.body-width / 1px;
@@ -111,6 +114,8 @@ export component BangApp inherits Window {
     callback wizard-email-edited(string);
     callback folder-selected(int); callback account-toggled(string);
     callback folder-context(int, length, length);
+    callback folder-background-context(length, length);
+    callback label-context(int, length, length);
     callback folder-action(int, string, string);
     callback message-selected(int); callback message-action(int, string);
     // Right-click menus. Rust fills the menu state from the store, then the
@@ -122,6 +127,8 @@ export component BangApp inherits Window {
     show-move-menu => { move-menu.show(); }
     callback show-folder-menu();
     show-folder-menu => { folder-menu.show(); }
+    callback show-label-menu();
+    show-label-menu => { label-menu.show(); }
     in-out property <int> menu-message: -1;
     in-out property <bool> menu-msg-unread: false;
     in-out property <bool> menu-msg-starred: false;
@@ -136,6 +143,8 @@ export component BangApp inherits Window {
     in-out property <string> menu-folder-kind: "folder";
     in-out property <string> menu-folder-name: "";
     in-out property <bool> menu-folder-inbox: false;
+    in-out property <bool> menu-folder-empty: false;
+    in-out property <int> menu-label: -1;
     in-out property <string> folder-dialog-mode: "";
     in-out property <string> folder-dialog-name: "";
     callback reveal-message(int);
@@ -161,8 +170,6 @@ export component BangApp inherits Window {
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
-    // Floating islands breathe against the canvas instead of being welded
-    // together by full-width splitter strips.
     private property <length> island-gap: 8px;
     private property <bool> sidebar-hidden: false;
     private property <bool> sidebar-overlay: false;
@@ -170,8 +177,6 @@ export component BangApp inherits Window {
     private property <bool> narrow: root.width < 900px;
     private property <bool> show-nav: root.width >= 1120px && !sidebar-hidden;
     private property <length> nav-width: show-nav ? sidebar-size : 0px;
-    // Footprint from the sidebar edge to the reader edge; the island inset
-    // (island-gap) is carved out of it on both sides.
     private property <length> actual-list-width: narrow ? root.width : min(list-size, (root.width - nav-width) * 0.48);
     private property <length> reader-x: nav-width + actual-list-width;
     private property <bool> list-visible: !narrow || !detail-open;
@@ -222,28 +227,32 @@ export component BangApp inherits Window {
         settings => { root.settings-opened(); }
         folder-clicked(id) => { root.folder-selected(id); root.detail-open = false; }
         folder-context(id, x, y) => { root.folder-context(id, x, y); }
+        folder-background-context(x, y) => { root.folder-background-context(x, y); }
+        label-context(id, x, y) => { root.label-context(id, x, y); }
         account-toggled(id) => { root.account-toggled(id); }
     }
-    // Docked sidebar with a hairline edge; the strip remains the resize affordance.
-    nav-handle := Rectangle {
+    // Docked sidebar with a fine edge; the handle remains the resize affordance.
+    // Keep the historic element id for the resize regression test.
+    nav-splitter := Rectangle {
         visible: root.show-nav; x: root.nav-width - 2px; width: 6px; height: parent.height;
         Rectangle { x: 5px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
         TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.sidebar-size = clamp(root.sidebar-size + self.mouse-x, 180px, 300px); } } }
     }
-    // The message list is an island like the reading pane, not a full-bleed
-    // column soldered to the background. It stays instantiated when hidden so
-    // its scroll position is retained.
+    // List stays instantiated when hidden so its scroll position is retained.
     Rectangle {
         visible: root.list-visible;
         x: root.narrow ? root.island-gap : root.nav-width + root.island-gap;
         y: root.island-gap;
         width: root.actual-list-width - 2 * root.island-gap;
         height: parent.height - 2 * root.island-gap;
-        background: Theme.bg; clip: true;
-        border-radius: Theme.radius-md; border-width: 1px; border-color: Theme.border;
+        background: Theme.bg; clip: true; border-radius: Theme.radius-md;
+        border-width: 1px; border-color: Theme.border;
         drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
-            x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
+            x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg; border-radius: Theme.radius-md;
+            // Square only the lower corners: the rounded top silhouette must
+            // remain visible over the panel's rounded outer edge.
+            Rectangle { y: 16px; width: parent.width; height: 36px; background: Theme.toolbar-bg; }
             HorizontalLayout {
                 padding: 10px; spacing: 8px;
                 if !root.show-nav: ActionButton { text: @tr("Mailboxes"); icon: @image-url("icons/sidebar.svg"); compact: true; clicked => { if root.width >= 1120px { root.sidebar-hidden = false; } else { root.sidebar-overlay = true; } } }
@@ -257,7 +266,6 @@ export component BangApp inherits Window {
                 ActionButton { framed: true; text: @tr("Scheduled"); icon: @image-url("icons/clock.svg"); compact: true; clicked => { root.sends-opened(); } }
             }
         }
-        Rectangle { y: 52px; height: 1px; width: parent.width; background: Theme.border; }
         list-search := SearchField { visible: root.narrow; x: 10px; y: 56px; width: parent.width - 20px; height: 30px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
         CategoryBar { visible: root.categories-visible && !root.search-active;
             y: root.narrow ? 94px : 53px; height: 54px; width: parent.width;
@@ -284,9 +292,10 @@ export component BangApp inherits Window {
                 if !control && !shift { root.message-selected(id); root.detail-open = true; }
             }
             message-action(id, action) => { root.message-action(id, action); }
+            message-context(id, x, y) => { root.message-context(id, x, y); }
         }
         if root.account-count == 0 || root.messages.length == 0: Rectangle {
-            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width; background: Theme.bg;
+            y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width; background: transparent;
             VerticalLayout { padding: 24px; spacing: 16px; alignment: center;
                 Text { text: root.account-count == 0 ? @tr("Welcome to Bang") : root.search-active ? @tr("No results") : @tr("No messages"); font-size: 16px; font-weight: 600; color: Theme.text; horizontal-alignment: center; }
                 Text { text: root.account-count == 0 ? @tr("Add your first email account to get started.") : root.search-active ? @tr("Try another search.") : @tr("New messages will appear here."); font-size: 13px; color: Theme.text-secondary; wrap: word-wrap; horizontal-alignment: center; }
@@ -294,22 +303,22 @@ export component BangApp inherits Window {
             }
         }
     }
-    list-handle := Rectangle {
+    Rectangle {
         visible: !root.narrow; x: root.reader-x - root.island-gap; width: 2 * root.island-gap; height: parent.height;
         TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.list-size = clamp(root.list-size + self.mouse-x, 280px, 480px); } } }
     }
-    // Reading pane island: floats beside the list island on the canvas.
     Rectangle {
         visible: root.reader-visible;
         x: root.narrow ? root.island-gap : root.reader-x + root.island-gap;
         y: root.island-gap;
         width: root.narrow ? parent.width - 2 * root.island-gap : parent.width - root.reader-x - 2 * root.island-gap;
         height: parent.height - 2 * root.island-gap;
-        background: Theme.bg; clip: true;
-        border-radius: Theme.radius-md; border-width: 1px; border-color: Theme.border;
+        background: Theme.bg; clip: true; border-radius: Theme.radius-md;
+        border-width: 1px; border-color: Theme.border;
         drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
-            x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
+            x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg; border-radius: Theme.radius-md;
+            Rectangle { y: 16px; width: parent.width; height: 36px; background: Theme.toolbar-bg; }
             HorizontalLayout { padding: 10px; spacing: 2px;
                 if root.narrow: ActionButton { compact: true; text: @tr("Back"); icon: @image-url("icons/back.svg"); clicked => { root.detail-open = false; } }
                 ActionButton { compact: true; text: @tr("Classify message"); icon: @image-url("icons/tag.svg"); enabled: root.selected-message >= 0; clicked => { root.organization-opened(false); } }
@@ -324,7 +333,6 @@ export component BangApp inherits Window {
                 search := SearchField { max-width: 264px; min-width: 100px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
             }
         }
-        Rectangle { y: 52px; height: 1px; width: parent.width; background: Theme.border; }
         reader := ReadingPane { x: 0px; width: parent.width; y: 53px; height: parent.height - 53px - (root.status-message == "" ? 0px : 36px);
             sender: root.message-sender; subject: root.message-subject; date: root.message-date; body: root.message-body;
             sender-address: root.message-sender-address; recipients: root.message-recipients; initials: root.message-initials;
@@ -340,8 +348,7 @@ export component BangApp inherits Window {
         }
     }
     if root.sidebar-overlay: sidebar-dim := Rectangle {
-        background: #00000044;
-        // Overlay block is recreated on open, so entrance animates naturally.
+        background: Theme.scrim;
         private property <float> appear: 1;
         init => { if Theme.motion { self.appear = 0; sidebar-appear-timer.running = true; } }
         sidebar-appear-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; sidebar-dim.appear = 1; } }
@@ -357,6 +364,8 @@ export component BangApp inherits Window {
             settings => { root.sidebar-overlay = false; root.settings-opened(); }
             folder-clicked(id) => { root.folder-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
             folder-context(id, x, y) => { root.folder-context(id, x, y); }
+            folder-background-context(x, y) => { root.folder-background-context(x, y); }
+            label-context(id, x, y) => { root.label-context(id, x, y); }
             account-toggled(id) => { root.account-toggled(id); }
         }
     }
@@ -396,6 +405,7 @@ export component BangApp inherits Window {
     OrganizationDialog { x: 0px; y: 0px; width: parent.width; height: parent.height;
         open: root.organization-open; managing <=> root.managing-labels; labels: root.labels;
         category-index <=> root.organization-category; effective-category: root.organization-effective;
+        edit-id <=> root.organization-edit-id; edit-name <=> root.organization-edit-name; edit-color <=> root.organization-edit-color;
         message-override: root.organization-message-override; sender-override: root.organization-sender-override;
         error: root.organization-error;
         category-saved(index, sender) => { root.category-saved(index, sender); }
@@ -426,82 +436,69 @@ export component BangApp inherits Window {
     // Right-click menu for a message in the list. Rust resolves the target in
     // the store and sets the menu state before showing the popup.
     message-menu := PopupWindow {
-        x: root.menu-x; y: root.menu-y;
-        width: 252px;
-        // Sized to the visible content: 4 batch items or 9 single items and
-        // 2 separators, 32px rows, 2px spacing, 6px padding.
-        height: root.menu-batch ? 146px : 334px;
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 262px;
+        // Inner content: 9 items + 2 separators. Include 5px outer inset.
+        height: root.menu-batch ? 163px : 358px;
         Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
             background: Theme.bg;
-            border-radius: 10px;
+            border-radius: 14px;
             border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
             VerticalLayout {
-                padding: 6px; spacing: 2px;
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                padding: 8px; spacing: 3px;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Mark read"); icon: @image-url("icons/mail.svg");
                     activated => { root.batch-action("read"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Star"); icon: @image-url("icons/star.svg");
                     activated => { root.batch-action("star"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
                     activated => { message-menu.close(); move-menu.show(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { root.batch-action("delete"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Open"); icon: @image-url("icons/eye.svg");
                     activated => { root.message-selected(root.menu-message); root.detail-open = true; message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Reply"); icon: @image-url("icons/reply.svg");
                     activated => { root.message-action(root.menu-message, "reply"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Reply to all"); icon: @image-url("icons/person.svg");
                     activated => { root.message-action(root.menu-message, "reply-all"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Forward"); icon: @image-url("icons/forward.svg");
                     activated => { root.message-action(root.menu-message, "forward"); message-menu.close(); }
                 }
-                Rectangle { visible: !root.menu-batch; height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
+                if !root.menu-batch: ContextMenuItem {
                     text: root.menu-msg-unread ? @tr("Mark as read") : @tr("Mark as unread"); icon: @image-url("icons/mail.svg");
                     activated => { root.message-action(root.menu-message, "read"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: root.menu-msg-starred ? @tr("Unstar") : @tr("Star"); icon: @image-url("icons/star.svg");
                     activated => { root.message-action(root.menu-message, "star"); message-menu.close(); }
                 }
-                Rectangle { visible: !root.menu-batch; height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
                     activated => { message-menu.close(); move-menu.show(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Snooze"); icon: @image-url("icons/clock.svg");
                     activated => { root.message-action(root.menu-message, "snooze"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: root.menu-msg-permanent ? @tr("Delete permanently") : @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { root.message-action(root.menu-message, "delete"); message-menu.close(); }
                 }
@@ -512,19 +509,17 @@ export component BangApp inherits Window {
     // message's account folders into (message's own folder excluded; filled
     // by Rust when the context menu is opened).
     move-menu := PopupWindow {
-        x: root.menu-x; y: root.menu-y;
-        width: 252px;
-        // Grows with the folder count (32px rows), capped so long accounts
-        // scroll instead of reaching for the bottom of the screen.
-        height: root.move-folders.length == 0 ? 67px
-            : 41px + min(root.move-folders.length * 32px, 252px);
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 262px;
+        height: root.move-folders.length == 0 ? 84px : 57px + min(root.move-folders.length * 32px, 252px);
         Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
             background: Theme.bg;
-            border-radius: 10px;
+            border-radius: 14px;
             border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
             VerticalLayout {
-                padding: 6px; spacing: 2px;
+                padding: 8px; spacing: 3px;
                 Text {
                     height: 24px;
                     text: @tr("Move to...");
@@ -554,40 +549,54 @@ export component BangApp inherits Window {
         }
     }
     folder-menu := PopupWindow {
-        x: root.menu-x; y: root.menu-y;
-        width: 236px;
-        // 32px items, a 1px separator, 2px spacing and 6px padding; the
-        // visible item count depends on folder kind and INBOX protections.
-        height: 13px + (root.menu-folder-inbox ? 2
-            : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 5 : 4) * 34px;
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 246px;
+        height: root.menu-folder-empty ? 58px : root.menu-folder-inbox ? 100px : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 205px : 170px;
         Rectangle {
-            background: Theme.bg; border-radius: 10px; border-width: 1px; border-color: Theme.border;
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
-            VerticalLayout { padding: 6px; spacing: 2px;
-                ContextMenuItem { text: @tr("Mark all as read"); icon: @image-url("icons/mail.svg"); activated => { folder-menu.close(); root.folder-action(root.menu-folder, "read", ""); } }
-                if root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk": ContextMenuItem {
+            VerticalLayout { padding: 8px; spacing: 3px;
+                if !root.menu-folder-empty: ContextMenuItem { text: @tr("Mark all as read"); icon: @image-url("icons/mail.svg"); activated => { folder-menu.close(); root.folder-action(root.menu-folder, "read", ""); } }
+                if !root.menu-folder-empty && (root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk"): ContextMenuItem {
                     text: @tr("Empty folder"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { folder-menu.close(); root.folder-action(root.menu-folder, "empty", ""); }
                 }
-                Rectangle { height: 1px; background: Theme.border; }
+                if !root.menu-folder-empty: Rectangle { height: 1px; background: Theme.border; }
                 ContextMenuItem { text: @tr("New folder"); icon: @image-url("icons/plus.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "create"; root.folder-dialog-name = ""; } }
-                ContextMenuItem { visible: !root.menu-folder-inbox; text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
-                ContextMenuItem { visible: !root.menu-folder-inbox; text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
+                if !root.menu-folder-empty && !root.menu-folder-inbox: ContextMenuItem { text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
+                if !root.menu-folder-empty && !root.menu-folder-inbox: ContextMenuItem { text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
             }
         }
     }
-    if root.folder-dialog-mode != "" : folder-dim := Rectangle {
-        x: 0px; y: 0px; width: parent.width; height: parent.height; background: #00000066;
-        // Overlay block is recreated on open, so entrance animates naturally.
-        private property <float> appear: 1;
-        init => { if Theme.motion { self.appear = 0; folder-appear-timer.running = true; } }
-        folder-appear-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; folder-dim.appear = 1; } }
-        animate appear { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
-        opacity: self.appear;
+    label-menu := PopupWindow {
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 220px; height: 104px;
+        Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
+            VerticalLayout { padding: 8px; spacing: 3px;
+                ContextMenuItem {
+                    text: @tr("Edit label"); icon: @image-url("icons/compose.svg");
+                    activated => {
+                        label-menu.close();
+                        root.managing-labels = true;
+                        root.organization-opened(true);
+                    }
+                }
+                ContextMenuItem {
+                    text: @tr("Delete label"); icon: @image-url("icons/trash.svg"); danger: true;
+                    activated => { label-menu.close(); root.label-deleted(root.menu-label); }
+                }
+            }
+        }
+    }
+    if root.folder-dialog-mode != "" : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height; background: Theme.scrim;
         TouchArea { clicked => { root.folder-dialog-mode = ""; } }
         Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2 + 10px * (1.0 - folder-dim.appear);
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             width: 420px; height: root.folder-dialog-mode == "delete" ? 140px : 176px;
             background: Theme.bg; border-radius: 12px; border-width: 1px; border-color: Theme.border;
             VerticalLayout { padding: 16px; spacing: 12px;

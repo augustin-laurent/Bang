@@ -51,15 +51,23 @@ export component OrganizationDialog inherits Rectangle {
     in property <bool> sender-override;
     in property <string> error;
     private property <int> scope-index: 0;
-    private property <int> edit-id: -1;
-    private property <string> edit-name;
-    private property <int> edit-color: 0;
+    in-out property <int> edit-id: -1;
+    in-out property <string> edit-name;
+    in-out property <int> edit-color: 0;
     callback category-saved(int, bool);
     callback label-assigned(int, bool);
     callback label-saved(int, string, string);
     callback label-deleted(int);
     callback close;
-    changed open => { self.scope-index = 0; self.edit-id = -1; self.edit-name = ""; self.edit-color = 0; if self.open && Theme.motion { self.entrance = 0; entrance-timer.running = true; } }
+    changed open => {
+        self.scope-index = 0;
+        if self.open {
+            if self.edit-id < 0 { self.edit-name = ""; self.edit-color = 0; }
+            if Theme.motion { self.entrance = 0; entrance-timer.running = true; }
+        } else {
+            self.edit-id = -1; self.edit-name = ""; self.edit-color = 0;
+        }
+    }
     private property <float> entrance: 1;
     entrance-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
     animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }

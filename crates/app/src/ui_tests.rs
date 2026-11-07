@@ -3,10 +3,25 @@ use crate::{BangApp, FolderRow, MessageRow};
 use i_slint_backend_testing::ElementHandle;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Global, LogicalSize, Model, VecModel};
+
+#[test]
+fn settings_close_callback_hides_dialog() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
+    crate::wire_settings_close(&ui);
+    ui.set_settings_open(true);
+
+    ui.invoke_settings_close();
+
+    assert!(!ui.get_settings_open());
+}
+
 #[test]
 fn native_navigation_resize_and_grouping() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
     ui.window().set_size(LogicalSize::new(1440., 900.));
     ui.set_account_count(1);
     ui.set_folders(slint::ModelRc::new(VecModel::from(vec![FolderRow {
@@ -32,7 +47,7 @@ fn native_navigation_resize_and_grouping() {
             .expect("compose button")
     };
     let before = compose().absolute_position().x;
-    let splitter = ElementHandle::find_by_element_id(&ui, "BangApp::nav-handle")
+    let splitter = ElementHandle::find_by_element_id(&ui, "BangApp::nav-splitter")
         .next()
         .expect("sidebar separator");
     let pos = splitter.absolute_position();
@@ -567,6 +582,7 @@ fn categories_labels_dialog_and_late_avatars() {
         MessageRow {
             id: 1,
             sender: "Alice".into(),
+            subject: "First message".into(),
             sender_address: "alice@example.test".into(),
             initials: "A".into(),
             avatar_tint: crate::avatars::tint("alice@example.test"),
@@ -597,6 +613,14 @@ fn categories_labels_dialog_and_late_avatars() {
     });
     let weak = ui.as_weak();
     ui.on_organization_close(move || weak.upgrade().unwrap().set_organization_open(false));
+    let weak = ui.as_weak();
+    ui.on_message_context(move |id, x, y| {
+        let ui = weak.upgrade().unwrap();
+        ui.set_menu_message(id);
+        ui.set_menu_x(x);
+        ui.set_menu_y(y);
+        ui.invoke_show_menu();
+    });
     ui.show().unwrap();
     ElementHandle::find_by_accessible_label(&ui, "Transactions, 1")
         .next()
@@ -645,6 +669,26 @@ fn categories_labels_dialog_and_late_avatars() {
     assert!(
         !ui.get_message_avatar_loaded(),
         "a late Alice result must not replace Bob's avatar"
+    );
+    ui.set_selection_count(0);
+    ui.set_selected_message(-1);
+    let row = ElementHandle::find_by_accessible_label(&ui, "Alice, First message")
+        .next()
+        .expect("message row for right-click regression");
+    let position = row.absolute_position();
+    let position = slint::LogicalPosition::new(position.x + 40., position.y + 40.);
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Right,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Right,
+    });
+    assert_eq!(
+        ui.get_menu_message(),
+        1,
+        "right-click must reach the menu callback"
     );
     ui.set_online_avatars(false);
     crate::avatars::ready(&ui, "bob@example.test", path.to_str().unwrap());
@@ -844,6 +888,7 @@ fn account_wizard_provider_presets_theme_and_correlated_results() {
     )))
     .unwrap();
     let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
     let weak = ui.as_weak();
     ui.on_wizard_provider_selected(move |provider| {
         crate::accounts::select_provider(&weak.upgrade().unwrap(), &provider)
@@ -998,6 +1043,7 @@ fn account_discovery_storage_recovery_and_reconnect_preserve_metadata() {
     )))
     .unwrap();
     let ui = BangApp::new().unwrap();
+    crate::i18n::select("en");
     let store = bang_core::Store::open(std::path::Path::new(":memory:")).unwrap();
     let state = crate::state::UiState::new();
     ui.window().set_size(LogicalSize::new(720., 480.));

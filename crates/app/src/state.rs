@@ -411,9 +411,6 @@ impl UiState {
                     })
                     .collect();
                 ui.set_message_attachments(slint::ModelRc::new(VecModel::from(atts)));
-                if !self.search_active.load(Ordering::SeqCst) {
-                    self.reload_messages(ui, store);
-                }
             }
             MailEvent::FollowUpDue { subject, .. } => {
                 notify(&tr("Follow-up due"), &subject);
@@ -463,6 +460,27 @@ pub(crate) fn set_message_rows(ui: &BangApp, mut rows: Vec<MessageRow>) {
     let model = reconcile_rows(&old, rows, |r| r.id);
     if model != old {
         ui.set_messages(model);
+    }
+}
+
+/// Update selection flags in-place without re-querying the message store.
+pub(crate) fn update_message_selection(ui: &BangApp, state: &UiState) {
+    let selected: HashSet<i64> = state
+        .selected_messages
+        .lock()
+        .unwrap()
+        .iter()
+        .copied()
+        .collect();
+    let model = ui.get_messages();
+    for index in 0..model.row_count() {
+        if let Some(mut row) = model.row_data(index) {
+            let is_selected = selected.contains(&i64::from(row.id));
+            if row.is_selected != is_selected {
+                row.is_selected = is_selected;
+                model.set_row_data(index, row);
+            }
+        }
     }
 }
 
