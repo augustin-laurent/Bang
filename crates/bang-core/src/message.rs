@@ -218,3 +218,15 @@ pub fn folder_kind(path: &str) -> &'static str {
         _ => "folder",
     }
 }
+
+#[cfg(test)]
+mod folder_kind_tests {
+    #[test]
+    fn classifies_standard_and_provider_mailboxes_case_insensitively() {
+        assert_eq!(super::folder_kind("INBOX"), "inbox");
+        assert_eq!(super::folder_kind("[Gmail]/Trash"), "trash");
+        assert_eq!(super::folder_kind("INBOX.Junk E-Mail"), "junk");
+        assert_eq!(super::folder_kind("Spam Messages"), "junk");
+        assert_eq!(super::folder_kind("Projects"), "folder");
+    }
+}

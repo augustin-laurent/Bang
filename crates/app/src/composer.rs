@@ -485,7 +485,11 @@ pub fn reply_or_forward(
     } else {
         format!("{prefix}{subject}")
     };
-    let (to, cc) = reply_recipients(&full.summary, mode);
+    let own_address = store
+        .get_account(&full.summary.account_id)?
+        .map(|account| account.email)
+        .unwrap_or_default();
+    let (to, cc) = reply_recipients(&full.summary, mode, &own_address);
     let in_reply_to = if full.summary.message_id.is_empty() {
         None
     } else {
@@ -514,6 +518,7 @@ pub fn reply_or_forward(
 fn reply_recipients(
     summary: &bang_core::MessageSummary,
     mode: ComposerMode,
+    own_address: &str,
 ) -> (Vec<String>, Vec<String>) {
     // Keep one copy of an address, skipping own addresses and duplicates.
     fn push(
@@ -532,7 +537,7 @@ fn reply_recipients(
         ComposerMode::Forward => (Vec::new(), Vec::new()),
         ComposerMode::Reply => (vec![summary.from.address.clone()], Vec::new()),
         ComposerMode::ReplyAll => {
-            let own = summary.account_id.to_ascii_lowercase();
+            let own = own_address.to_ascii_lowercase();
             let mut seen = std::collections::HashSet::new();
             let mut to: Vec<String> = Vec::new();
             let mut cc: Vec<String> = Vec::new();
@@ -610,6 +615,39 @@ mod tests {
         assert_eq!(
             html,
             "<p></p><p>&gt; &lt;b&gt;bold&lt;/b&gt; &amp; more</p>"
+        );
+    }
+
+    #[test]
+    fn reply_all_deduplicates_recipients_and_excludes_own_address() {
+        let address = |address: &str| bang_core::EmailAddress {
+            name: String::new(),
+            address: address.into(),
+        };
+        let summary = bang_core::MessageSummary {
+            id: 1,
+            account_id: "account-id-not-email".into(),
+            folder_id: 1,
+            uid: 1,
+            message_id: String::new(),
+            from: address("sender@example.test"),
+            to: vec![address("ME@example.test"), address("team@example.test")],
+            cc: vec![address("TEAM@example.test"), address("copy@example.test")],
+            subject: String::new(),
+            date: 0,
+            flags: bang_core::MessageFlags::empty(),
+            preview: String::new(),
+            has_attachments: false,
+        };
+        assert_eq!(
+            reply_recipients(&summary, ComposerMode::ReplyAll, "me@example.test"),
+            (
+                vec![
+                    "sender@example.test".to_string(),
+                    "team@example.test".to_string()
+                ],
+                vec!["copy@example.test".to_string()]
+            )
         );
     }
 }

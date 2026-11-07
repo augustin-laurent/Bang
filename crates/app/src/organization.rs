@@ -160,6 +160,9 @@ pub(crate) fn wire(ui: &BangApp, store: &Arc<Store>, state: &Arc<UiState>, bridg
         let store = store.clone();
         move |key| {
             if let Some(ui) = weak.upgrade() {
+                state.selected_messages.lock().unwrap().clear();
+                state.selection_anchor.store(-1, Ordering::SeqCst);
+                ui.set_selection_count(0);
                 ui.set_selected_category(key);
                 state.reload_messages(&ui, &store);
                 ui.invoke_reset_message_scroll();
@@ -172,6 +175,9 @@ pub(crate) fn wire(ui: &BangApp, store: &Arc<Store>, state: &Arc<UiState>, bridg
         let store = store.clone();
         move |id| {
             if let Some(ui) = weak.upgrade() {
+                state.selected_messages.lock().unwrap().clear();
+                state.selection_anchor.store(-1, Ordering::SeqCst);
+                ui.set_selection_count(0);
                 ui.set_selected_label(id);
                 ui.set_search_text("".into());
                 ui.set_search_active(false);

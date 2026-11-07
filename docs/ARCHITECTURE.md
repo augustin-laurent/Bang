@@ -82,6 +82,11 @@ open for the process lifetime.
 | `SelectFolder { .. }` | (No-op: the UI reads the store directly) |
 | `OpenMessage { account, message_id }` | Load body from cache or fetch via syncer |
 | `SetFlags { .. }` | Add/remove IMAP flags |
+| `Move { .. }` | Move UIDs with `UID MOVE`, or `UID COPY` + `\\Deleted` + UID EXPUNGE fallback |
+| `Delete { .. }` | Move to the account's Trash; expunge in Trash/Junk or when Trash is absent |
+| `MarkFolderRead { .. }` | Set `\\Seen` across the selected mailbox |
+| `EmptyFolder { .. }` | Permanently expunge all UIDs in Trash/Junk |
+| `CreateFolder` / `RenameFolder` / `DeleteFolder` | Administer server mailboxes and reconcile the local folder cache |
 | `SendEmail(req)` | Send via SMTP (spawned task) |
 | `Search { account, query }` | FTS5 search |
 | `Quit` | Stop all syncers |
@@ -148,6 +153,14 @@ selection guard. The command connection is reused and a failed read reconnects
 once; mutations are not replayed automatically. Every command checks UIDVALIDITY
 when selecting a cached folder, before acting on its stored UIDs. Cached opens
 remain local and do not need a second connection.
+
+Message moves and folder-admin operations use the same interactive connection
+and UIDVALIDITY guard. `Delete` resolves Trash from the account's cached folder
+paths; Trash/Junk deletions and accounts without Trash are permanent. The MOVE
+capability is queried before each move; servers without it use COPY, mark the
+source UIDs `\\Deleted`, then UID EXPUNGE. Successful moves remove source cache
+rows and incrementally sync the destination. Folder changes re-LIST and reconcile
+the local folder table before emitting `FoldersUpdated`.
 
 A fresh folder has sync state `(0, None)`; the syncer treats `last_uid == 0`
 (or a changed UIDVALIDITY) as a full sync of the most recent `SYNC_WINDOW`
@@ -245,6 +258,16 @@ notifications for new mail (via `notify-send`) unless the user is already
 viewing the affected folder. `main.rs` wires the window callbacks (folder
 selection, message selection, search, the wizard, compose, settings) to the
 store and the `Bridge`.
+
+Right-clicking a message or a real sidebar folder opens a Slint `PopupWindow`;
+the cursor coordinates are captured by the row's `TouchArea`. Message actions
+are routed through `UiCommand`, with `Move to...` listing only folders for that
+message's account. Folder actions include mark-read, Trash/Junk empty, top-level
+create, rename and confirmed delete; INBOX rename/delete are blocked in both UI
+and core handlers. The virtual All Inboxes row and account headers do not expose
+folder menus. Ctrl-click toggles message selection and Shift-click extends from
+the anchor row; selection is held in `UiState` and reapplied when message rows
+are reconciled. The batch bar and context menu omit reply/forward actions.
 
 ### List rendering
 

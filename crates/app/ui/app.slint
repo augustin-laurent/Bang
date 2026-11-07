@@ -64,7 +64,7 @@ export component BangApp inherits Window {
     in property <bool> reader-failed: false;
     in-out property <bool> remote-images: false;
     out property <bool> html-active: root.native-reader-available && !root.reader-failed && !root.message-loading && root.message-html != "";
-    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open;
+    out property <bool> reader-shown: root.html-active && root.reader-visible && root.selected-message >= 0 && !root.modal-open && !root.preview-open && !root.save-open && !root.sidebar-overlay && !message-menu.is-open && !move-menu.is-open && !folder-menu.is-open;
     out property <float> reader-x-px: reader.body-x / 1px;
     out property <float> reader-y-px: reader.body-y / 1px;
     out property <float> reader-width-px: reader.body-width / 1px;
@@ -264,7 +264,10 @@ export component BangApp inherits Window {
         message-list := MessageList {
             y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px) + (root.selection-count > 0 ? 42px : 0px); height: parent.height - self.y; width: parent.width;
             messages: root.messages; selected-message: root.selected-message;
-            message-clicked(id, control, shift, index) => { root.selection-clicked(id, control, shift, index); if !control && !shift { root.detail-open = true; } }
+            message-clicked(id, control, shift, index) => {
+                root.selection-clicked(id, control, shift, index);
+                if !control && !shift { root.message-selected(id); root.detail-open = true; }
+            }
             message-action(id, action) => { root.message-action(id, action); }
         }
         if root.account-count == 0 || root.messages.length == 0: Rectangle {

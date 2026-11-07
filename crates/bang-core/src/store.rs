@@ -2599,4 +2599,46 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn folder_admin_mutations_update_cache_and_cascade_messages() {
+        let store = Store::open_in_memory().unwrap();
+        store.save_account(&test_account("admin")).unwrap();
+        store
+            .upsert_folder(&test_folder("admin", "Projects"))
+            .unwrap();
+        let folder = store.get_folders("admin").unwrap().remove(0);
+        let message = store
+            .upsert_message(&test_summary("admin", folder.id, 7, "Cached"))
+            .unwrap();
+
+        store.set_folder_unread(folder.id, 1).unwrap();
+        store.set_folder_all_read(folder.id).unwrap();
+        assert!(!store
+            .get_message(message)
+            .unwrap()
+            .unwrap()
+            .flags
+            .is_unread());
+        assert_eq!(
+            store.get_folder_by_id(folder.id).unwrap().unwrap().unread,
+            0
+        );
+
+        store
+            .rename_folder(folder.id, "Projects Renamed", "Projects Renamed")
+            .unwrap();
+        assert_eq!(
+            store.get_folder_by_id(folder.id).unwrap().unwrap().path,
+            "Projects Renamed"
+        );
+        store.clear_folder_messages(folder.id).unwrap();
+        assert!(store.get_message(message).unwrap().is_none());
+        store
+            .upsert_message(&test_summary("admin", folder.id, 8, "Will cascade"))
+            .unwrap();
+        store.delete_folder(folder.id).unwrap();
+        assert!(store.get_folder_by_id(folder.id).unwrap().is_none());
+        assert!(store.get_messages(folder.id, 10).unwrap().is_empty());
+    }
 }

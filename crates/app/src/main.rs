@@ -304,7 +304,6 @@ fn wire_selection(
                     .store(id, std::sync::atomic::Ordering::SeqCst);
             } else {
                 selection.clear();
-                selection.push(id);
                 state
                     .selection_anchor
                     .store(id, std::sync::atomic::Ordering::SeqCst);
@@ -317,10 +316,15 @@ fn wire_selection(
             let batch = selection.len() > 1 || control || shift;
             drop(selection);
             if batch {
-                state.reload_messages(&ui, &store);
-            } else {
-                ui.invoke_message_selected(id as i32);
+                state
+                    .selected_message
+                    .store(-1, std::sync::atomic::Ordering::SeqCst);
+                ui.set_selected_message(-1);
+                reader::clear(&ui);
+                ui.set_message_body("".into());
+                ui.set_message_loading(false);
             }
+            state.reload_messages(&ui, &store);
         }
     });
     ui.on_folder_action({
@@ -367,6 +371,10 @@ fn wire_selection(
                 ui.set_selected_folder(-1);
                 ui.set_selected_message(-1);
                 ui.set_message_body("".into());
+                reader::clear(&ui);
+                state.selected_messages.lock().unwrap().clear();
+                ui.set_selection_count(0);
+                load_folder_view(&ui, &store, bang_core::UNIFIED_INBOX_ID);
             }
             bridge.send(command);
         }
@@ -547,14 +555,13 @@ fn wire_selection(
             let mut selected = state.selected_messages.lock().unwrap();
             if !selected.contains(&i64::from(id)) {
                 selected.clear();
-                selected.push(i64::from(id));
                 ui.set_selection_count(0);
                 state
                     .selected_message
                     .store(-1, std::sync::atomic::Ordering::SeqCst);
                 ui.set_selected_message(-1);
             }
-            ui.set_menu_batch(selected.len() > 1);
+            ui.set_menu_batch(!selected.is_empty());
             drop(selected);
             // Deletion inside Trash/Junk is permanent; elsewhere it moves.
             let kind = store

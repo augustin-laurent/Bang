@@ -603,10 +603,7 @@ fn categories_labels_dialog_and_late_avatars() {
         .unwrap()
         .mock_single_click(PointerEventButton::Left);
     assert_eq!(ui.get_selected_category(), "transactions");
-    ElementHandle::find_by_accessible_label(&ui, "Classify message")
-        .next()
-        .unwrap()
-        .mock_single_click(PointerEventButton::Left);
+    ui.invoke_organization_opened(false);
     assert!(ui.get_organization_open());
     assert!(!ui.get_reader_shown());
     let assigned = Rc::new(Cell::new(false));
@@ -624,6 +621,13 @@ fn categories_labels_dialog_and_late_avatars() {
     ui.window().take_snapshot().unwrap();
     ui.invoke_organization_close();
     assert!(!ui.get_organization_open());
+    ui.window().set_size(LogicalSize::new(1440., 900.));
+    assert!(ui.get_reader_shown());
+    ui.invoke_show_menu();
+    assert!(
+        !ui.get_reader_shown(),
+        "the native reader must not cover a context menu"
+    );
     let path = std::env::temp_dir().join(format!("bang-avatar-ui-{}.png", std::process::id()));
     image::RgbaImage::from_pixel(80, 80, image::Rgba([10, 30, 60, 255]))
         .save(&path)

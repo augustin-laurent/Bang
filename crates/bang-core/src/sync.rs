@@ -875,11 +875,12 @@ fn handle_rename_folder(
     let display = crate::mime::decode_folder_name(&last_component(&new_path));
     store.rename_folder(folder.id, &new_path, &display)?;
     // Children keep living below the (possibly renamed) parent.
-    if let Some(prefix) = parent_prefix(conn, &folder.path) {
-        if let Some(new_prefix) = parent_prefix(conn, &new_path) {
-            store.rename_folder_children(folder.id, &prefix, &new_prefix)?;
-        }
-    }
+    let delimiter = if folder.path.contains('/') { "/" } else { "." };
+    store.rename_folder_children(
+        folder.id,
+        &format!("{}{delimiter}", folder.path),
+        &format!("{}{delimiter}", new_path),
+    )?;
     reconcile_folders(conn, config, store, events_tx)?;
     Ok(())
 }
