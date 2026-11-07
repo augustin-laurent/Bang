@@ -3,6 +3,31 @@ import { ActionButton } from "controls.slint";
 import { SenderAvatar } from "avatar.slint";
 import { Theme } from "theme.slint";
 import { AttachmentRow } from "models.slint";
+
+// Placeholder while a message loads: avatar circle, header bars and body
+// lines that breathe slowly instead of a bare "Loading…" label.
+component SkeletonPane inherits Rectangle {
+    background: transparent;
+    private property <bool> dim: false;
+    opacity: self.dim ? 0.6 : 1.0;
+    animate opacity { duration: 800ms; easing: ease-in-out; }
+    Timer { interval: 800ms; triggered => { root.dim = !root.dim; } }
+    VerticalLayout { padding: 24px; spacing: 16px;
+        HorizontalLayout { height: 74px; spacing: 12px;
+            Rectangle { width: 40px; height: 40px; border-radius: self.width / 2; background: Theme.hover; }
+            VerticalLayout { spacing: 8px; alignment: start; horizontal-stretch: 1;
+                Rectangle { height: 14px; width: 140px; border-radius: 7px; background: Theme.hover; }
+                Rectangle { height: 12px; width: 240px; border-radius: 6px; background: Theme.hover; }
+            }
+            Rectangle { width: 60px; height: 12px; border-radius: 6px; background: Theme.hover; }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        for line in [0.92, 0.85, 0.95, 0.78, 0.9, 0.6]: Rectangle {
+            height: 12px; width: parent.width * line; border-radius: 6px; background: Theme.hover;
+        }
+    }
+}
+
 export component ReadingPane inherits Rectangle {
     background: Theme.reading-bg;
     in property <string> sender; in property <string> sender-address;
@@ -20,8 +45,11 @@ export component ReadingPane inherits Rectangle {
     callback load-images();
     callback attachment-clicked(int);
     if !root.selected: Text { text: @tr("Select a message to read it"); color: Theme.text-secondary; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; }
+    if root.selected && root.loading: SkeletonPane {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+    }
     VerticalLayout {
-        visible: root.selected;
+        visible: root.selected && !root.loading;
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         padding: 24px; spacing: 16px;
         HorizontalLayout {
@@ -47,8 +75,8 @@ export component ReadingPane inherits Rectangle {
             if !root.html-active: ScrollView {
                 content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 Text { x: 0px; y: 0px; width: parent.width; height: self.preferred-height; vertical-alignment: top;
-                    text: root.loading ? @tr("Loading…") : root.body;
-                    color: root.loading ? Theme.text-secondary : Theme.text; font-size: 15px; wrap: word-wrap;
+                    text: root.body;
+                    color: Theme.text; font-size: 15px; wrap: word-wrap;
                 }
             }
         }
