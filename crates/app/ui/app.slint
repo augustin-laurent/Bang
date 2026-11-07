@@ -22,7 +22,7 @@ import { ContextMenuItem } from "contextmenu.slint";
 
 export component BangApp inherits Window {
     title: "Bang"; preferred-width: 1440px; preferred-height: 900px;
-    min-width: 720px; min-height: 480px; background: Theme.bg;
+    min-width: 720px; min-height: 480px; background: Theme.canvas;
     default-font-family: "Noto Sans"; default-font-size: 13px;
     in property <[FolderRow]> folders; in-out property <[MessageRow]> messages;
     in property <[LabelRow]> labels;
@@ -161,14 +161,19 @@ export component BangApp inherits Window {
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
+    // Floating islands breathe against the canvas instead of being welded
+    // together by full-width splitter strips.
+    private property <length> island-gap: 8px;
     private property <bool> sidebar-hidden: false;
     private property <bool> sidebar-overlay: false;
     private property <bool> detail-open: false;
     private property <bool> narrow: root.width < 900px;
     private property <bool> show-nav: root.width >= 1120px && !sidebar-hidden;
     private property <length> nav-width: show-nav ? sidebar-size : 0px;
+    // Footprint from the sidebar edge to the reader edge; the island inset
+    // (island-gap) is carved out of it on both sides.
     private property <length> actual-list-width: narrow ? root.width : min(list-size, (root.width - nav-width) * 0.48);
-    private property <length> reader-x: nav-width + actual-list-width + 1px;
+    private property <length> reader-x: nav-width + actual-list-width;
     private property <bool> list-visible: !narrow || !detail-open;
     private property <bool> reader-visible: !narrow || detail-open;
     forward-focus: keyboard;
@@ -219,15 +224,24 @@ export component BangApp inherits Window {
         folder-context(id, x, y) => { root.folder-context(id, x, y); }
         account-toggled(id) => { root.account-toggled(id); }
     }
-    nav-splitter := Rectangle {
-        visible: root.show-nav; x: root.nav-width - 2px; width: 4px; height: parent.height;
-        background: Theme.border;
+    // Docked sidebar with a hairline edge; the strip remains the resize affordance.
+    nav-handle := Rectangle {
+        visible: root.show-nav; x: root.nav-width - 2px; width: 6px; height: parent.height;
+        Rectangle { x: 5px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
         TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.sidebar-size = clamp(root.sidebar-size + self.mouse-x, 180px, 300px); } } }
     }
-    // List stays instantiated when hidden so its scroll position is retained.
+    // The message list is an island like the reading pane, not a full-bleed
+    // column soldered to the background. It stays instantiated when hidden so
+    // its scroll position is retained.
     Rectangle {
-        visible: root.list-visible; x: root.nav-width; width: root.actual-list-width; height: parent.height;
-        background: Theme.bg;
+        visible: root.list-visible;
+        x: root.narrow ? root.island-gap : root.nav-width + root.island-gap;
+        y: root.island-gap;
+        width: root.actual-list-width - 2 * root.island-gap;
+        height: parent.height - 2 * root.island-gap;
+        background: Theme.bg; clip: true;
+        border-radius: Theme.radius-md; border-width: 1px; border-color: Theme.border;
+        drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
             HorizontalLayout {
@@ -243,6 +257,7 @@ export component BangApp inherits Window {
                 ActionButton { framed: true; text: @tr("Scheduled"); icon: @image-url("icons/clock.svg"); compact: true; clicked => { root.sends-opened(); } }
             }
         }
+        Rectangle { y: 52px; height: 1px; width: parent.width; background: Theme.border; }
         list-search := SearchField { visible: root.narrow; x: 10px; y: 56px; width: parent.width - 20px; height: 30px; text <=> root.search-text; placeholder: @tr("Search"); edited(text) => { root.search-edited(text); } }
         CategoryBar { visible: root.categories-visible && !root.search-active;
             y: root.narrow ? 94px : 53px; height: 54px; width: parent.width;
@@ -279,13 +294,20 @@ export component BangApp inherits Window {
             }
         }
     }
-    Rectangle {
-        visible: !root.narrow; x: root.reader-x - 2px; width: 4px; height: parent.height; background: Theme.border;
+    list-handle := Rectangle {
+        visible: !root.narrow; x: root.reader-x - root.island-gap; width: 2 * root.island-gap; height: parent.height;
         TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.list-size = clamp(root.list-size + self.mouse-x, 280px, 480px); } } }
     }
+    // Reading pane island: floats beside the list island on the canvas.
     Rectangle {
-        visible: root.reader-visible; x: root.narrow ? 0px : root.reader-x;
-        width: root.narrow ? parent.width : parent.width - root.reader-x; height: parent.height;
+        visible: root.reader-visible;
+        x: root.narrow ? root.island-gap : root.reader-x + root.island-gap;
+        y: root.island-gap;
+        width: root.narrow ? parent.width - 2 * root.island-gap : parent.width - root.reader-x - 2 * root.island-gap;
+        height: parent.height - 2 * root.island-gap;
+        background: Theme.bg; clip: true;
+        border-radius: Theme.radius-md; border-width: 1px; border-color: Theme.border;
+        drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg;
             HorizontalLayout { padding: 10px; spacing: 4px;

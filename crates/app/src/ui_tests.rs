@@ -32,7 +32,7 @@ fn native_navigation_resize_and_grouping() {
             .expect("compose button")
     };
     let before = compose().absolute_position().x;
-    let splitter = ElementHandle::find_by_element_id(&ui, "BangApp::nav-splitter")
+    let splitter = ElementHandle::find_by_element_id(&ui, "BangApp::nav-handle")
         .next()
         .expect("sidebar separator");
     let pos = splitter.absolute_position();
