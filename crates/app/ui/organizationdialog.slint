@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { ActionButton } from "controls.slint";
-import { CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { CheckBox, ScrollView } from "std-widgets.slint";
 import { LabelRow } from "models.slint";
 
 // Category and scope choices are segmented pills and label colours are
@@ -76,7 +76,7 @@ export component OrganizationDialog inherits Rectangle {
     Rectangle {
         width: min(520px, parent.width - 40px);
         height: min(root.managing
-            ? max(360px, 330px + min(root.labels.length * 38px, 160px))
+            ? max(330px, 310px + min(root.labels.length * 34px, 140px))
             : 560px, parent.height - 32px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
@@ -116,11 +116,18 @@ export component OrganizationDialog inherits Rectangle {
                 if !root.managing: ActionButton { modal: true; framed: true; text: @tr("Manage labels"); clicked => { root.managing = true; } }
             }
             ScrollView {
-                height: min(160px, max(36px, root.labels.length * 38px));
+                height: min(160px, max(48px, root.labels.length * 38px));
                 vertical-stretch: 0;
                 content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 VerticalLayout { y: 0px; width: parent.width; height: self.preferred-height; spacing: 4px;
-                    if root.labels.length == 0: Text { text: @tr("No labels yet"); color: Theme.text-secondary; font-size: 13px; }
+                    if root.labels.length == 0: Rectangle {
+                        height: 44px;
+                        Text {
+                            x: 8px; width: parent.width - 16px; height: parent.height;
+                            text: @tr("No labels yet"); color: Theme.text-secondary;
+                            font-size: 13px; vertical-alignment: center;
+                        }
+                    }
                     for label in root.labels: Rectangle {
                         height: 34px; border-radius: 8px;
                         background: row-area.has-hover ? Theme.hover : transparent;
@@ -137,7 +144,26 @@ export component OrganizationDialog inherits Rectangle {
             }
             if root.managing: VerticalLayout { spacing: 10px; vertical-stretch: 0; alignment: start;
                 Text { text: root.edit-id < 0 ? @tr("New label") : @tr("Edit label"); color: Theme.text; font-size: 13px; font-weight: 600; }
-                LineEdit { accessible-label: @tr("Label name"); placeholder-text: @tr("Label name"); text <=> root.edit-name; min-height: 40px; max-height: 40px; }
+                Rectangle {
+                    min-height: 36px; max-height: 36px;
+                    background: Theme.bg; border-radius: 12px;
+                    border-width: name-input.has-focus ? 2px : 1px;
+                    border-color: name-input.has-focus ? Theme.accent : Theme.border;
+                    forward-focus: name-input;
+                    if root.edit-name == "": Text {
+                        x: 12px; width: parent.width - 24px; height: parent.height;
+                        text: @tr("Label name"); color: Theme.text-secondary;
+                        font-size: 13px; vertical-alignment: center;
+                    }
+                    name-input := TextInput {
+                        x: 12px; width: parent.width - 24px; height: parent.height;
+                        text <=> root.edit-name; color: Theme.text; font-size: 13px;
+                        single-line: true; vertical-alignment: center;
+                        selection-background-color: Theme.selection;
+                        selection-foreground-color: Theme.selected-text;
+                        accessible-label: @tr("Label name");
+                    }
+                }
                 HorizontalLayout { spacing: 8px;
                     ColorDot { tint: #3977b8; current: root.edit-color == 0; name: @tr("Blue"); chosen => { root.edit-color = 0; } }
                     ColorDot { tint: #30845b; current: root.edit-color == 1; name: @tr("Green"); chosen => { root.edit-color = 1; } }
@@ -147,8 +173,14 @@ export component OrganizationDialog inherits Rectangle {
                     ColorDot { tint: #6b7280; current: root.edit-color == 5; name: @tr("Gray"); chosen => { root.edit-color = 5; } }
                 }
                 HorizontalLayout { spacing: 8px;
-                    ActionButton { modal: true; framed: true; enabled: root.edit-name != ""; text: @tr("Save label"); clicked => { root.label-saved(root.edit-id, root.edit-name, root.edit-color == 1 ? "#30845b" : root.edit-color == 2 ? "#b96c17" : root.edit-color == 3 ? "#ba4655" : root.edit-color == 4 ? "#8555a6" : root.edit-color == 5 ? "#6b7280" : "#3977b8"); } }
-                    ActionButton { modal: true; framed: true; text: @tr("New label"); clicked => { root.edit-id = -1; root.edit-name = ""; root.edit-color = 0; } }
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton {
+                        modal: true; primary: true; enabled: root.edit-name != "";
+                        horizontal-stretch: 1;
+                        text: root.edit-id < 0 ? @tr("Create label") : @tr("Save changes");
+                        clicked => { root.label-saved(root.edit-id, root.edit-name, root.edit-color == 1 ? "#30845b" : root.edit-color == 2 ? "#b96c17" : root.edit-color == 3 ? "#ba4655" : root.edit-color == 4 ? "#8555a6" : root.edit-color == 5 ? "#6b7280" : "#3977b8"); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             if root.error != "": Text { text: root.error; color: Theme.danger; wrap: word-wrap; font-size: 12px; }
