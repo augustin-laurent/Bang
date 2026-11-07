@@ -1,7 +1,46 @@
 import { Theme } from "theme.slint";
 import { ActionButton } from "controls.slint";
-import { ComboBox, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+import { CheckBox, ScrollView } from "std-widgets.slint";
 import { LabelRow } from "models.slint";
+
+// Category and scope choices are segmented pills and label colours are
+// dots, matching the chips the labels render as elsewhere in the UI.
+component Pill inherits ActionButton {
+    in property <bool> selected: false;
+    min-width: 0px; max-width: 1000px;
+    horizontal-stretch: 1;
+    framed: true;
+    active: self.selected;
+}
+
+component ColorDot inherits Rectangle {
+    in property <color> tint;
+    in property <bool> current;
+    in property <string> name;
+    callback chosen();
+    width: 32px;
+    height: 32px;
+    border-radius: self.width / 2;
+    border-width: self.current ? 2px : 0px;
+    border-color: Theme.text;
+    accessible-role: button;
+    accessible-label: self.name;
+    Rectangle {
+        x: 4px; y: 4px;
+        width: parent.width - 8px;
+        height: parent.height - 8px;
+        border-radius: self.width / 2;
+        background: root.tint;
+    }
+    focus := FocusScope {
+        key-pressed(e) => {
+            if e.text == " " || e.text == "\n" { root.chosen(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.chosen(); } }
+}
+
 export component OrganizationDialog inherits Rectangle {
     in property <bool> open;
     in-out property <bool> managing: false;
@@ -21,54 +60,130 @@ export component OrganizationDialog inherits Rectangle {
     callback label-deleted(int);
     callback close;
     changed open => {
+        self.scope-index = 0;
         if self.open {
-            self.scope-index = 0;
             if self.edit-id < 0 { self.edit-name = ""; self.edit-color = 0; }
+            if Theme.motion { self.entrance = 0; entrance-timer.running = true; }
         } else {
             self.edit-id = -1; self.edit-name = ""; self.edit-color = 0;
         }
     }
-    visible: root.open; background: #00000044; TouchArea { }
+    private property <float> entrance: 1;
+    entrance-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
+    animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
+    visible: root.open; background: #00000066; TouchArea { }
+    // Hexes mirror organization.rs COLORS; the index maps through it in Rust.
     Rectangle {
-        width: min(520px, parent.width - 40px); height: min(620px, parent.height - 32px);
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-        background: Theme.bg; border-radius: 16px;
+        width: min(520px, parent.width - 40px);
+        height: min(root.managing
+            ? max(330px, 310px + min(root.labels.length * 34px, 140px))
+            : 560px, parent.height - 32px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
+        opacity: root.entrance;
+        background: Theme.bg; border-radius: Theme.radius-md;
         VerticalLayout { padding: 24px; spacing: 12px;
-            Text { text: root.managing ? @tr("Manage labels") : @tr("Classify message"); color: Theme.text; font-size: 20px; font-weight: 600; }
-            if !root.managing: VerticalLayout { spacing: 8px;
+            HorizontalLayout {
+                Text { text: root.managing ? @tr("Manage labels") : @tr("Classify message"); color: Theme.text; font-size: 20px; font-weight: 600; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                ActionButton { modal: true; compact: true; framed: true; text: @tr("Close"); icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+            }
+            if !root.managing: VerticalLayout { spacing: 10px;
                 Text { text: @tr("Category") + ": " + root.effective-category; color: Theme.text-secondary; font-size: 12px; }
+                HorizontalLayout { spacing: 8px;
+                    Pill { selected: root.category-index == 0; text: @tr("Automatic"); clicked => { root.category-index = 0; } }
+                    Pill { selected: root.category-index == 1; text: @tr("Primary"); clicked => { root.category-index = 1; } }
+                    Rectangle { width: 1px; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Pill { selected: root.category-index == 2; text: @tr("Transactions"); clicked => { root.category-index = 2; } }
+                    Pill { selected: root.category-index == 3; text: @tr("Updates"); clicked => { root.category-index = 3; } }
+                    Pill { selected: root.category-index == 4; text: @tr("Promotions"); clicked => { root.category-index = 4; } }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Pill { selected: root.scope-index == 0; text: @tr("This message"); clicked => { root.scope-index = 0; } }
+                    Pill { selected: root.scope-index == 1; text: @tr("All messages from this sender"); clicked => { root.scope-index = 1; } }
+                }
                 if root.message-override || root.sender-override: Text { text: root.message-override ? @tr("This message has its own category correction.") : @tr("A sender rule applies to this message."); color: Theme.text-secondary; font-size: 11px; wrap: word-wrap; }
-                ComboBox { model: [@tr("Automatic"), @tr("Primary"), @tr("Transactions"), @tr("Updates"), @tr("Promotions")]; current-index <=> root.category-index; }
-                ComboBox { model: [@tr("This message"), @tr("All messages from this sender")]; current-index <=> root.scope-index; }
-                ActionButton { modal: true; framed: true; text: @tr("Apply category"); clicked => { root.category-saved(root.category-index, root.scope-index == 1); } }
+                HorizontalLayout {
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton { modal: true; primary: true; text: @tr("Apply category"); clicked => { root.category-saved(root.category-index, root.scope-index == 1); } }
+                }
             }
             HorizontalLayout {
                 Text { text: @tr("Labels"); color: Theme.text; font-weight: 600; vertical-alignment: center; }
-                if !root.managing: ActionButton { modal: true; text: @tr("Manage labels"); clicked => { root.managing = true; } }
+                Rectangle { horizontal-stretch: 1; }
+                if !root.managing: ActionButton { modal: true; framed: true; text: @tr("Manage labels"); clicked => { root.managing = true; } }
             }
-            ScrollView { min-height: 60px; vertical-stretch: 1; content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                VerticalLayout { width: parent.width; height: self.preferred-height; spacing: 5px;
-                    if root.labels.length == 0: Text { text: @tr("No labels yet"); color: Theme.text-secondary; font-size: 13px; }
-                    for label in root.labels: HorizontalLayout { height: 34px; spacing: 8px;
-                        Rectangle { width: 10px; Rectangle { width: 10px; height: 10px; y: (parent.height - self.height) / 2; border-radius: 5px; background: label.tint; } }
-                        if !root.managing: CheckBox { text: label.name; checked: label.assigned; toggled => { root.label-assigned(label.id, self.checked); } }
-                        if root.managing: Text { text: label.name; color: Theme.text; overflow: elide; vertical-alignment: center; }
-                        if root.managing: ActionButton { modal: true; compact: true; text: @tr("Edit label"); icon: @image-url("icons/compose.svg"); clicked => { root.edit-id = label.id; root.edit-name = label.name; root.edit-color = label.color-index; } }
-                        if root.managing: ActionButton { modal: true; compact: true; text: @tr("Delete label"); icon: @image-url("icons/trash.svg"); clicked => { root.label-deleted(label.id); } }
+            ScrollView {
+                height: min(160px, max(48px, root.labels.length * 38px));
+                vertical-stretch: 0;
+                content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout { y: 0px; width: parent.width; height: self.preferred-height; spacing: 4px;
+                    if root.labels.length == 0: Rectangle {
+                        height: 44px;
+                        Text {
+                            x: 8px; width: parent.width - 16px; height: parent.height;
+                            text: @tr("No labels yet"); color: Theme.text-secondary;
+                            font-size: 13px; vertical-alignment: center;
+                        }
+                    }
+                    for label in root.labels: Rectangle {
+                        height: 34px; border-radius: 8px;
+                        background: row-area.has-hover ? Theme.hover : transparent;
+                        row-area := TouchArea { }
+                        HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 8px;
+                            Rectangle { width: 10px; Rectangle { width: 10px; height: 10px; y: (parent.height - self.height) / 2; border-radius: 5px; background: label.tint; } }
+                            if !root.managing: CheckBox { text: label.name; checked: label.assigned; toggled => { root.label-assigned(label.id, self.checked); } }
+                            if root.managing: Text { text: label.name; color: Theme.text; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                            if root.managing: ActionButton { modal: true; compact: true; text: @tr("Edit label"); icon: @image-url("icons/compose.svg"); clicked => { root.edit-id = label.id; root.edit-name = label.name; root.edit-color = label.color-index; } }
+                            if root.managing: ActionButton { modal: true; compact: true; text: @tr("Delete label"); icon: @image-url("icons/trash.svg"); clicked => { root.label-deleted(label.id); } }
+                        }
                     }
                 }
             }
-            if root.managing: VerticalLayout { spacing: 8px;
+            if root.managing: VerticalLayout { spacing: 10px; vertical-stretch: 0; alignment: start;
                 Text { text: root.edit-id < 0 ? @tr("New label") : @tr("Edit label"); color: Theme.text; font-size: 13px; font-weight: 600; }
-                LineEdit { accessible-label: @tr("Label name"); placeholder-text: @tr("Label name"); text <=> root.edit-name; }
-                ComboBox { model: [@tr("Blue"), @tr("Green"), @tr("Orange"), @tr("Red"), @tr("Purple"), @tr("Gray")]; current-index <=> root.edit-color; }
+                Rectangle {
+                    min-height: 36px; max-height: 36px;
+                    background: Theme.bg; border-radius: 12px;
+                    border-width: name-input.has-focus ? 2px : 1px;
+                    border-color: name-input.has-focus ? Theme.accent : Theme.border;
+                    forward-focus: name-input;
+                    if root.edit-name == "": Text {
+                        x: 12px; width: parent.width - 24px; height: parent.height;
+                        text: @tr("Label name"); color: Theme.text-secondary;
+                        font-size: 13px; vertical-alignment: center;
+                    }
+                    name-input := TextInput {
+                        x: 12px; width: parent.width - 24px; height: parent.height;
+                        text <=> root.edit-name; color: Theme.text; font-size: 13px;
+                        single-line: true; vertical-alignment: center;
+                        selection-background-color: Theme.selection;
+                        selection-foreground-color: Theme.selected-text;
+                        accessible-label: @tr("Label name");
+                    }
+                }
                 HorizontalLayout { spacing: 8px;
-                    ActionButton { modal: true; framed: true; enabled: root.edit-name != ""; text: @tr("Save label"); clicked => { root.label-saved(root.edit-id, root.edit-name, root.edit-color == 1 ? "#30845b" : root.edit-color == 2 ? "#b96c17" : root.edit-color == 3 ? "#ba4655" : root.edit-color == 4 ? "#8555a6" : root.edit-color == 5 ? "#6b7280" : "#3977b8"); } }
-                    ActionButton { modal: true; text: @tr("New label"); clicked => { root.edit-id = -1; root.edit-name = ""; root.edit-color = 0; } }
+                    ColorDot { tint: #3977b8; current: root.edit-color == 0; name: @tr("Blue"); chosen => { root.edit-color = 0; } }
+                    ColorDot { tint: #30845b; current: root.edit-color == 1; name: @tr("Green"); chosen => { root.edit-color = 1; } }
+                    ColorDot { tint: #b96c17; current: root.edit-color == 2; name: @tr("Orange"); chosen => { root.edit-color = 2; } }
+                    ColorDot { tint: #ba4655; current: root.edit-color == 3; name: @tr("Red"); chosen => { root.edit-color = 3; } }
+                    ColorDot { tint: #8555a6; current: root.edit-color == 4; name: @tr("Purple"); chosen => { root.edit-color = 4; } }
+                    ColorDot { tint: #6b7280; current: root.edit-color == 5; name: @tr("Gray"); chosen => { root.edit-color = 5; } }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Rectangle { horizontal-stretch: 1; }
+                    ActionButton {
+                        modal: true; primary: true; enabled: root.edit-name != "";
+                        horizontal-stretch: 1;
+                        text: root.edit-id < 0 ? @tr("Create label") : @tr("Save changes");
+                        clicked => { root.label-saved(root.edit-id, root.edit-name, root.edit-color == 1 ? "#30845b" : root.edit-color == 2 ? "#b96c17" : root.edit-color == 3 ? "#ba4655" : root.edit-color == 4 ? "#8555a6" : root.edit-color == 5 ? "#6b7280" : "#3977b8"); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
             if root.error != "": Text { text: root.error; color: Theme.danger; wrap: word-wrap; font-size: 12px; }
-            ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
         }
     }
 }

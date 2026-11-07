@@ -10,6 +10,7 @@ export component CategoryBar inherits Rectangle {
         for category in root.categories: Rectangle {
             min-width: 42px; border-radius: 8px;
             background: category.key == root.selected ? Theme.hover : transparent;
+            animate background { duration: Theme.motion ? Theme.dur-fast : 0ms; }
             forward-focus: category-focus;
             border-width: category-focus.has-focus ? 2px : 0px; border-color: Theme.accent;
             category-focus := FocusScope { enabled: !Theme.blocked; key-pressed(e) => { if e.text == " " || e.text == "\n" { root.selected-category(category.key); return accept; } return reject; } }

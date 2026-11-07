@@ -3,9 +3,13 @@ import { Palette } from "std-widgets.slint";
 export global Theme {
     in property <bool> dark: false;
     in property <bool> blocked: false;
+    // Animations honour reduced-motion by using 0ms durations everywhere.
+    in property <bool> motion: true;
     changed dark => { self.sync-palette(); }
     callback sync-palette();
     sync-palette => { Palette.color-scheme = self.dark ? ColorScheme.dark : ColorScheme.light; }
+    // Canvas sits behind the floating panel islands; surfaces sit on it.
+    out property <color> canvas: dark ? #161618 : #eff1f3;
     out property <color> bg: dark ? #1c1c1e : #ffffff;
     out property <color> sidebar-bg: dark ? #242426 : #f5f6f7;
     out property <color> reading-bg: bg;
@@ -36,5 +40,9 @@ export global Theme {
     out property <length> space-lg: 16px;
     out property <length> space-xl: 24px;
     out property <length> radius-sm: 6px;
-    out property <length> radius-md: 16px;
+    out property <length> radius-md: 12px;
+    // One scrim everywhere; low-effort entrance animation durations.
+    out property <color> scrim: #00000066;
+    out property <duration> dur-fast: 120ms;
+    out property <duration> dur-med: 180ms;
 }

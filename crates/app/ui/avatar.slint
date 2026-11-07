@@ -8,10 +8,11 @@ export component SenderAvatar inherits Rectangle {
     clip: true;
     border-radius: self.width / 2;
     background: !root.has-photo ? root.tint : transparent;
-    // Image otherwise uses its intrinsic size, overflowing the avatar frame.
+    // Cover keeps squares square: sources are pre-cropped, but contain
+    // would letterbox non-square fallbacks.
     if root.has-photo: photo-image := Image {
         x: 0px; y: 0px; width: root.width; height: root.height;
-        source: root.photo; image-fit: contain;
+        source: root.photo; image-fit: cover;
     }
     if !root.has-photo: Text {
         text: root.initials; color: white; font-size: parent.width * 0.34; font-weight: 600;

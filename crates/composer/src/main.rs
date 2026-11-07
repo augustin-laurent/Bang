@@ -1,7 +1,8 @@
 //! Native GTK/WebKit host. Standard output is reserved for JSON IPC.
 use bang_composer::{EditorMessage, HostMessage};
+use gtk::prelude::*;
 use std::io::{BufRead, Write};
-use tao::platform::unix::WindowExtUnix;
+use tao::platform::unix::{EventLoopBuilderExtUnix, WindowExtUnix};
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
@@ -23,12 +24,17 @@ fn emit(msg: &EditorMessage) {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let event_loop = EventLoopBuilder::<Message>::with_user_event().build();
+    let mut event_loop_builder = EventLoopBuilder::<Message>::with_user_event();
+    event_loop_builder.with_app_id("io.github.augustin_laurent.Bang");
+    let event_loop = event_loop_builder.build();
     let window = WindowBuilder::new()
         .with_title("Bang — New message")
         .with_inner_size(tao::dpi::LogicalSize::new(900., 720.))
         .with_min_inner_size(tao::dpi::LogicalSize::new(640., 480.))
         .build(&event_loop)?;
+    window
+        .gtk_window()
+        .set_icon_name(Some("io.github.augustin_laurent.Bang"));
     let proxy = event_loop.create_proxy();
     let ipc = proxy.clone();
     let builder=WebViewBuilder::new().with_custom_protocol("bang".into(),move |_,request| {

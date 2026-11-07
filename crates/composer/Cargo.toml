@@ -7,7 +7,7 @@ description = "Isolated local rich-text composer and IPC protocol for Bang."
 
 [features]
 default = ["native"]
-native = ["dep:wry", "dep:tao", "dep:rfd"]
+native = ["dep:wry", "dep:tao", "dep:rfd", "dep:gtk"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -15,6 +15,7 @@ serde_json = "1.0"
 wry = { version = "0.57", optional = true }
 tao = { version = "0.37", optional = true }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"], optional = true }
+gtk = { version = "0.18", optional = true }
 
 [[bin]]
 name = "bang-compose"

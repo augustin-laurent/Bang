@@ -47,11 +47,16 @@ export component AccountWizard inherits Rectangle {
     callback discover(); callback storage-choice(bool); callback app-password();
     callback email-edited(string);
     callback provider-selected(string); callback oauth-clicked(string); callback add-generic(); callback cancel();
-    visible: open; background: #00000044; TouchArea { }
+    private property <float> entrance: 1;
+    changed open => { if self.open && Theme.motion { self.entrance = 0; entrance-timer.running = true; } }
+    entrance-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
+    animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
+    visible: open; background: Theme.scrim; TouchArea { }
     Rectangle {
         width: min(552px, parent.width - 32px);
         height: min(root.manual && root.advanced ? 760px : root.manual ? 560px : root.provider != "" ? 480px : 552px, parent.height - 32px);
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
+        opacity: root.entrance;
         background: Theme.bg; border-radius: 16px;
         VerticalLayout { padding: 24px; spacing: 16px;
             HorizontalLayout {
