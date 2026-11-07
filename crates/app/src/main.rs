@@ -841,6 +841,15 @@ fn wire_settings(
     state: &Arc<state::UiState>,
     bridge: bridge::Bridge,
 ) {
+    ui.on_settings_close({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_settings_open(false);
+            }
+        }
+    });
+
     ui.on_settings_opened({
         let store = store.clone();
         let state = state.clone();
