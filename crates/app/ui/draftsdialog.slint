@@ -14,11 +14,18 @@ export component DraftsDialog inherits Rectangle {
     callback row-clicked(int);
     callback row-delete(int);
     callback close();
+    // Cards ease in from slightly below instead of popping in.
+    private property <float> entrance: 1;
+    changed open => { if self.open && Theme.motion { self.entrance = 0; entrance-timer.running = true; } }
+    entrance-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
+    animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
     visible: root.open;
-    background: #00000044;
+    background: #00000066;
     TouchArea { clicked => { root.close(); } }
     Rectangle {
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
+        opacity: root.entrance;
         width: min(560px, parent.width - 80px); height: min(480px, parent.height - 80px);
         background: Theme.bg; border-radius: 12px;
         VerticalLayout { padding: 16px; spacing: 12px;

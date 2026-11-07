@@ -58,12 +58,17 @@ export component OrganizationDialog inherits Rectangle {
     callback label-saved(int, string, string);
     callback label-deleted(int);
     callback close;
-    changed open => { if self.open { self.scope-index = 0; self.edit-id = -1; self.edit-name = ""; self.edit-color = 0; } }
+    changed open => { self.scope-index = 0; self.edit-id = -1; self.edit-name = ""; self.edit-color = 0; if self.open && Theme.motion { self.entrance = 0; entrance-timer.running = true; } }
+    private property <float> entrance: 1;
+    entrance-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
+    animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
     visible: root.open; background: #00000066; TouchArea { }
     // Hexes mirror organization.rs COLORS; the index maps through it in Rust.
     Rectangle {
         width: min(520px, parent.width - 40px); height: min(620px, parent.height - 32px);
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
+        opacity: root.entrance;
         background: Theme.bg; border-radius: Theme.radius-md;
         VerticalLayout { padding: 24px; spacing: 14px;
             Text { text: root.managing ? @tr("Manage labels") : @tr("Classify message"); color: Theme.text; font-size: 20px; font-weight: 600; }

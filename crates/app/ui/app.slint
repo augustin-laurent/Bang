@@ -339,10 +339,16 @@ export component BangApp inherits Window {
             Text { x: 12px; width: parent.width - 24px; text: root.status-message; color: Theme.text-secondary; font-size: 12px; vertical-alignment: center; overflow: elide; }
         }
     }
-    if root.sidebar-overlay: Rectangle {
+    if root.sidebar-overlay: sidebar-dim := Rectangle {
         background: #00000044;
+        // Overlay block is recreated on open, so entrance animates naturally.
+        private property <float> appear: 1;
+        init => { if Theme.motion { self.appear = 0; sidebar-appear-timer.running = true; } }
+        sidebar-appear-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; sidebar-dim.appear = 1; } }
+        animate appear { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
+        opacity: self.appear;
         TouchArea { clicked => { root.sidebar-overlay = false; } }
-        Sidebar { width: 260px; folders: root.folders; selected-folder: root.selected-folder;
+        Sidebar { x: 0px - self.width * (1.0 - sidebar-dim.appear); width: 260px; folders: root.folders; selected-folder: root.selected-folder;
         labels: root.labels; selected-label: root.selected-label;
         label-clicked(id) => { root.label-selected(id); root.sidebar-overlay = false; root.detail-open = false; }
         manage-labels => { root.sidebar-overlay = false; root.organization-opened(true); }
@@ -570,11 +576,18 @@ export component BangApp inherits Window {
             }
         }
     }
-    if root.folder-dialog-mode != "" : Rectangle {
+    if root.folder-dialog-mode != "" : folder-dim := Rectangle {
         x: 0px; y: 0px; width: parent.width; height: parent.height; background: #00000066;
+        // Overlay block is recreated on open, so entrance animates naturally.
+        private property <float> appear: 1;
+        init => { if Theme.motion { self.appear = 0; folder-appear-timer.running = true; } }
+        folder-appear-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; folder-dim.appear = 1; } }
+        animate appear { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
+        opacity: self.appear;
         TouchArea { clicked => { root.folder-dialog-mode = ""; } }
         Rectangle {
-            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + 10px * (1.0 - folder-dim.appear);
             width: 420px; height: root.folder-dialog-mode == "delete" ? 140px : 176px;
             background: Theme.bg; border-radius: 12px; border-width: 1px; border-color: Theme.border;
             VerticalLayout { padding: 16px; spacing: 12px;

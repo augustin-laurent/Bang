@@ -21,6 +21,8 @@ export component ActionButton inherits Rectangle {
     min-height: 32px; max-height: 32px; preferred-height: 32px;
     border-radius: 9px;
     background: primary ? Theme.selection : active || touch.has-hover ? Theme.hover : framed ? Theme.bg : transparent;
+    // Hover and active states transition instead of snapping.
+    animate background { duration: Theme.motion ? Theme.dur-fast : 0ms; }
     border-width: focus.has-focus ? 2px : framed ? 1px : 0px;
     border-color: focus.has-focus ? Theme.accent : root.active ? Theme.control-border : Theme.border;
     opacity: can-activate ? 1 : 0.5;

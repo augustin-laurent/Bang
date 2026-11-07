@@ -25,6 +25,7 @@ export component Sidebar inherits Rectangle {
                 height: folder.is-header ? 44px : 32px;
                 border-radius: 7px;
                 background: !folder.is-header && root.selected-label < 0 && folder.id == root.selected-folder ? Theme.hover : transparent;
+                animate background { duration: Theme.motion ? Theme.dur-fast : 0ms; }
                 accessible-role: button; accessible-label: folder.name; accessible-enabled: !Theme.blocked;
                 accessible-action-default => { if Theme.blocked { return; } if folder.is-header { root.account-toggled(folder.account-id); } else { root.folder-clicked(folder.id); } }
                 HorizontalLayout {
@@ -59,6 +60,7 @@ export component Sidebar inherits Rectangle {
         }
         if root.labels.length > 0: ListView { height: min(160px, root.labels.length * 32px + 8px); vertical-stretch: 0; content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
             for label in root.labels: Rectangle { height: 32px; border-radius: 7px; background: label.id == root.selected-label ? Theme.hover : transparent;
+                animate background { duration: Theme.motion ? Theme.dur-fast : 0ms; }
                 HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 8px;
                     Rectangle { width: 10px; Rectangle { width: 10px; height: 10px; y: (parent.height - self.height) / 2; border-radius: 5px; background: label.tint; } }
                     Text { text: label.name; color: Theme.text; font-size: 13px; overflow: elide; vertical-alignment: center; }

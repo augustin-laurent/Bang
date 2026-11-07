@@ -41,6 +41,7 @@ export component MessageList inherits Rectangle {
                 background: msg.id == root.selected-message ? (Theme.dark ? #4094ff26 : #0864d61f)
                     : msg.is-selected ? (Theme.dark ? #4094ff26 : #0864d61f)
                     : area.has-hover ? Theme.toolbar-bg : transparent;
+                animate background { duration: Theme.motion ? Theme.dur-fast : 0ms; }
                 Rectangle { visible: msg.unread && !area.has-hover && !msg.is-selected; x: 7px; y: 15px; width: 7px; height: 7px; border-radius: 4px; background: Theme.accent; }
                 Rectangle {
                     visible: area.has-hover || msg.is-selected;

@@ -40,11 +40,20 @@ export component SettingsDialog inherits Rectangle {
     callback account-remove(string); callback add-account; callback close;
     callback account-reconnect(string);
     callback account-unlock(string);
-    changed open => { if !self.open { self.remove-id = ""; } }
-    visible: open; background: #00000044; TouchArea { }
+    // Cards ease in from slightly below instead of popping in.
+    private property <float> entrance: 1;
+    changed open => {
+        if self.open && Theme.motion { self.entrance = 0; entrance-timer.running = true; }
+        if !self.open { self.remove-id = ""; }
+    }
+    entrance-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; root.entrance = 1; } }
+    animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
+    visible: open; background: #00000066; TouchArea { }
     Rectangle {
         width: min(600px, parent.width - 40px); height: min(720px, parent.height - 32px);
-        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
+        opacity: root.entrance;
         border-radius: 16px; background: Theme.bg;
         VerticalLayout { padding: 24px; spacing: 20px;
             Text { text: @tr("Settings"); color: Theme.text; font-size: 20px; font-weight: 600; }
@@ -78,9 +87,17 @@ export component SettingsDialog inherits Rectangle {
             ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
         }
     }
-    if root.remove-id != "": Rectangle {
+    if root.remove-id != "": remove-dim := Rectangle {
         background: #00000066; TouchArea { }
-        Rectangle { width: min(400px, parent.width - 32px); height: 210px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        // Overlay block is recreated on open, so entrance animates naturally.
+        private property <float> appear: 1;
+        init => { if Theme.motion { self.appear = 0; remove-appear-timer.running = true; } }
+        remove-appear-timer := Timer { interval: 1ms; running: false; triggered => { self.running = false; remove-dim.appear = 1; } }
+        animate appear { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
+        opacity: self.appear;
+        Rectangle { width: min(400px, parent.width - 32px); height: 210px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + 10px * (1.0 - remove-dim.appear);
             background: Theme.bg; border-radius: 16px;
             VerticalLayout { padding: 24px; spacing: 16px;
                 Text { text: @tr("Remove this account?"); color: Theme.text; font-size: 16px; font-weight: 600; }
