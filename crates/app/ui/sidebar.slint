@@ -3,7 +3,7 @@ import { Theme } from "theme.slint";
 import { ActionButton } from "controls.slint";
 import { FolderRow, LabelRow } from "models.slint";
 export component Sidebar inherits Rectangle {
-    background: Theme.sidebar-bg;
+    background: Theme.canvas;
     in property <[FolderRow]> folders;
     in property <int> selected-folder: -1;
     in property <[LabelRow]> labels; in property <int> selected-label: -1;

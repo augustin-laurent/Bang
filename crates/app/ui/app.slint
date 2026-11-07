@@ -170,7 +170,7 @@ export component BangApp inherits Window {
     changed modal-open => { Theme.blocked = self.modal-open; }
     private property <length> sidebar-size: 260px;
     private property <length> list-size: 384px;
-    private property <length> island-gap: 8px;
+    private property <length> island-gap: 4px;
     private property <bool> sidebar-hidden: false;
     private property <bool> sidebar-overlay: false;
     private property <bool> detail-open: false;
@@ -234,8 +234,9 @@ export component BangApp inherits Window {
     // Docked sidebar with a fine edge; the handle remains the resize affordance.
     // Keep the historic element id for the resize regression test.
     nav-splitter := Rectangle {
-        visible: root.show-nav; x: root.nav-width - 2px; width: 6px; height: parent.height;
-        Rectangle { x: 5px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+        // Invisible resize hit-area: no separator line between the sidebar
+        // and the first island.
+        visible: root.show-nav; x: root.nav-width - 3px; width: 8px; height: parent.height;
         TouchArea { mouse-cursor: ew-resize; moved => { if self.pressed { root.sidebar-size = clamp(root.sidebar-size + self.mouse-x, 180px, 300px); } } }
     }
     // List stays instantiated when hidden so its scroll position is retained.
@@ -246,7 +247,6 @@ export component BangApp inherits Window {
         width: root.actual-list-width - 2 * root.island-gap;
         height: parent.height - 2 * root.island-gap;
         background: Theme.bg; clip: true; border-radius: Theme.radius-md;
-        border-width: 1px; border-color: Theme.border;
         drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg; border-radius: Theme.radius-md;
@@ -314,7 +314,6 @@ export component BangApp inherits Window {
         width: root.narrow ? parent.width - 2 * root.island-gap : parent.width - root.reader-x - 2 * root.island-gap;
         height: parent.height - 2 * root.island-gap;
         background: Theme.bg; clip: true; border-radius: Theme.radius-md;
-        border-width: 1px; border-color: Theme.border;
         drop-shadow-blur: 18px; drop-shadow-color: Theme.dark ? #00000066 : #0000001a; drop-shadow-offset-y: 3px;
         Rectangle {
             x: 0px; y: 0px; width: parent.width; height: 52px; background: Theme.toolbar-bg; border-radius: Theme.radius-md;
