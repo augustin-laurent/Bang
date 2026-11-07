@@ -29,7 +29,9 @@ component SkeletonPane inherits Rectangle {
 }
 
 export component ReadingPane inherits Rectangle {
-    background: Theme.reading-bg;
+    // The containing reader island owns the rounded background. Keeping this
+    // pane transparent lets that surface remain visible at its lower corners.
+    background: transparent;
     in property <string> sender; in property <string> sender-address;
     in property <bool> avatar-loaded; in property <image> avatar; in property <color> avatar-tint;
     in property <string> recipients; in property <string> initials;
