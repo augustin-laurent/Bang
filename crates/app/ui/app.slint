@@ -269,6 +269,7 @@ export component BangApp inherits Window {
                 if !control && !shift { root.message-selected(id); root.detail-open = true; }
             }
             message-action(id, action) => { root.message-action(id, action); }
+            message-context(id, x, y) => { root.message-context(id, x, y); }
         }
         if root.account-count == 0 || root.messages.length == 0: Rectangle {
             y: (root.narrow ? 94px : 53px) + (root.categories-visible && !root.search-active ? 54px : 0px); height: parent.height - self.y; width: parent.width; background: Theme.bg;
@@ -401,89 +402,71 @@ export component BangApp inherits Window {
     // Right-click menu for a message in the list. Rust resolves the target in
     // the store and sets the menu state before showing the popup.
     message-menu := PopupWindow {
-        x: root.menu-x; y: root.menu-y;
-        width: 252px;
-        // 9 menu items × 32px + 2 separator rows × 7px + vertical padding 12px
-        // + spacing between the 11 rows 10 × 2px = 334px.
-        height: 334px;
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 262px;
+        // Inner content: 9 items + 2 separators. Include 5px outer inset.
+        height: root.menu-batch ? 163px : 358px;
         Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
             background: Theme.bg;
-            border-radius: 10px;
+            border-radius: 14px;
             border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
             VerticalLayout {
-                padding: 6px; spacing: 2px;
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                padding: 8px; spacing: 3px;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Mark read"); icon: @image-url("icons/mail.svg");
                     activated => { root.batch-action("read"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Star"); icon: @image-url("icons/star.svg");
                     activated => { root.batch-action("star"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
                     activated => { message-menu.close(); move-menu.show(); }
                 }
-                ContextMenuItem {
-                    visible: root.menu-batch;
+                if root.menu-batch: ContextMenuItem {
                     text: @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { root.batch-action("delete"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Open"); icon: @image-url("icons/eye.svg");
                     activated => { root.message-selected(root.menu-message); root.detail-open = true; message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Reply"); icon: @image-url("icons/back.svg");
                     activated => { root.message-action(root.menu-message, "reply"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Reply to all"); icon: @image-url("icons/person.svg");
                     activated => { root.message-action(root.menu-message, "reply-all"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Forward"); icon: @image-url("icons/forward.svg");
                     activated => { root.message-action(root.menu-message, "forward"); message-menu.close(); }
                 }
-                Rectangle { visible: !root.menu-batch; height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
+                if !root.menu-batch: ContextMenuItem {
                     text: root.menu-msg-unread ? @tr("Mark as read") : @tr("Mark as unread"); icon: @image-url("icons/mail.svg");
                     activated => { root.message-action(root.menu-message, "read"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: root.menu-msg-starred ? @tr("Unstar") : @tr("Star"); icon: @image-url("icons/star.svg");
                     activated => { root.message-action(root.menu-message, "star"); message-menu.close(); }
                 }
-                Rectangle { visible: !root.menu-batch; height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: Rectangle { height: 7px; Rectangle { y: 3px; width: parent.width; height: 1px; background: Theme.border; } }
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Move to..."); icon: @image-url("icons/folder.svg");
                     activated => { message-menu.close(); move-menu.show(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: @tr("Snooze"); icon: @image-url("icons/clock.svg");
                     activated => { root.message-action(root.menu-message, "snooze"); message-menu.close(); }
                 }
-                ContextMenuItem {
-                    visible: !root.menu-batch;
+                if !root.menu-batch: ContextMenuItem {
                     text: root.menu-msg-permanent ? @tr("Delete permanently") : @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
                     activated => { root.message-action(root.menu-message, "delete"); message-menu.close(); }
-                }
-                ContextMenuItem {
-                    visible: root.menu-batch;
-                    text: @tr("Delete"); icon: @image-url("icons/trash.svg"); danger: true;
-                    activated => { root.batch-action("delete"); message-menu.close(); }
                 }
             }
         }
@@ -492,16 +475,17 @@ export component BangApp inherits Window {
     // message's account folders into (message's own folder excluded; filled
     // by Rust when the context menu is opened).
     move-menu := PopupWindow {
-        x: root.menu-x; y: root.menu-y;
-        width: 252px;
-        height: 292px;
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 262px;
+        height: 302px;
         Rectangle {
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
             background: Theme.bg;
-            border-radius: 10px;
+            border-radius: 14px;
             border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
             VerticalLayout {
-                padding: 6px; spacing: 2px;
+                padding: 8px; spacing: 3px;
                 Text {
                     height: 24px;
                     text: @tr("Move to...");
@@ -531,12 +515,14 @@ export component BangApp inherits Window {
         }
     }
     folder-menu := PopupWindow {
-        x: root.menu-x; y: root.menu-y;
-        width: 236px; height: root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 174px : 142px;
+        x: root.menu-x + 12px; y: root.menu-y + 8px;
+        width: 246px;
+        height: root.menu-folder-inbox ? 100px : root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk" ? 205px : 170px;
         Rectangle {
-            background: Theme.bg; border-radius: 10px; border-width: 1px; border-color: Theme.border;
+            x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+            background: Theme.bg; border-radius: 14px; border-width: 1px; border-color: Theme.border;
             drop-shadow-blur: 16px; drop-shadow-color: #00000030; drop-shadow-offset-y: 3px;
-            VerticalLayout { padding: 6px; spacing: 2px;
+            VerticalLayout { padding: 8px; spacing: 3px;
                 ContextMenuItem { text: @tr("Mark all as read"); icon: @image-url("icons/mail.svg"); activated => { folder-menu.close(); root.folder-action(root.menu-folder, "read", ""); } }
                 if root.menu-folder-kind == "trash" || root.menu-folder-kind == "junk": ContextMenuItem {
                     text: @tr("Empty folder"); icon: @image-url("icons/trash.svg"); danger: true;
@@ -544,8 +530,8 @@ export component BangApp inherits Window {
                 }
                 Rectangle { height: 1px; background: Theme.border; }
                 ContextMenuItem { text: @tr("New folder"); icon: @image-url("icons/plus.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "create"; root.folder-dialog-name = ""; } }
-                ContextMenuItem { visible: !root.menu-folder-inbox; text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
-                ContextMenuItem { visible: !root.menu-folder-inbox; text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
+                if !root.menu-folder-inbox: ContextMenuItem { text: @tr("Rename"); icon: @image-url("icons/folder.svg"); activated => { folder-menu.close(); root.folder-dialog-mode = "rename"; root.folder-dialog-name = root.menu-folder-name; } }
+                if !root.menu-folder-inbox: ContextMenuItem { text: @tr("Delete folder"); icon: @image-url("icons/trash.svg"); danger: true; activated => { folder-menu.close(); root.folder-dialog-mode = "delete"; } }
             }
         }
     }

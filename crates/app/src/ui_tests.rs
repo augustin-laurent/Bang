@@ -567,6 +567,7 @@ fn categories_labels_dialog_and_late_avatars() {
         MessageRow {
             id: 1,
             sender: "Alice".into(),
+            subject: "First message".into(),
             sender_address: "alice@example.test".into(),
             initials: "A".into(),
             avatar_tint: crate::avatars::tint("alice@example.test"),
@@ -597,6 +598,14 @@ fn categories_labels_dialog_and_late_avatars() {
     });
     let weak = ui.as_weak();
     ui.on_organization_close(move || weak.upgrade().unwrap().set_organization_open(false));
+    let weak = ui.as_weak();
+    ui.on_message_context(move |id, x, y| {
+        let ui = weak.upgrade().unwrap();
+        ui.set_menu_message(id);
+        ui.set_menu_x(x);
+        ui.set_menu_y(y);
+        ui.invoke_show_menu();
+    });
     ui.show().unwrap();
     ElementHandle::find_by_accessible_label(&ui, "Transactions, 1")
         .next()
@@ -645,6 +654,26 @@ fn categories_labels_dialog_and_late_avatars() {
     assert!(
         !ui.get_message_avatar_loaded(),
         "a late Alice result must not replace Bob's avatar"
+    );
+    ui.set_selection_count(0);
+    ui.set_selected_message(-1);
+    let row = ElementHandle::find_by_accessible_label(&ui, "Alice, First message")
+        .next()
+        .expect("message row for right-click regression");
+    let position = row.absolute_position();
+    let position = slint::LogicalPosition::new(position.x + 40., position.y + 40.);
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Right,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Right,
+    });
+    assert_eq!(
+        ui.get_menu_message(),
+        1,
+        "right-click must reach the menu callback"
     );
     ui.set_online_avatars(false);
     crate::avatars::ready(&ui, "bob@example.test", path.to_str().unwrap());
