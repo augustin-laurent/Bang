@@ -260,7 +260,6 @@ fn wire_selection(
     });
     ui.on_selection_clicked({
         let state = state.clone();
-        let store = store.clone();
         let weak = ui.as_weak();
         move |id: i32, control: bool, shift: bool, index: i32| {
             let Some(ui) = weak.upgrade() else {
@@ -324,7 +323,7 @@ fn wire_selection(
                 ui.set_message_body("".into());
                 ui.set_message_loading(false);
             }
-            state.reload_messages(&ui, &store);
+            state::update_message_selection(&ui, &state);
         }
     });
     ui.on_folder_action({
