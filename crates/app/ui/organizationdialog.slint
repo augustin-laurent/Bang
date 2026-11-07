@@ -74,13 +74,20 @@ export component OrganizationDialog inherits Rectangle {
     visible: root.open; background: #00000066; TouchArea { }
     // Hexes mirror organization.rs COLORS; the index maps through it in Rust.
     Rectangle {
-        width: min(520px, parent.width - 40px); height: min(620px, parent.height - 32px);
+        width: min(520px, parent.width - 40px);
+        height: min(root.managing
+            ? max(360px, 330px + min(root.labels.length * 38px, 160px))
+            : 560px, parent.height - 32px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
         opacity: root.entrance;
         background: Theme.bg; border-radius: Theme.radius-md;
-        VerticalLayout { padding: 24px; spacing: 14px;
-            Text { text: root.managing ? @tr("Manage labels") : @tr("Classify message"); color: Theme.text; font-size: 20px; font-weight: 600; }
+        VerticalLayout { padding: 24px; spacing: 12px;
+            HorizontalLayout {
+                Text { text: root.managing ? @tr("Manage labels") : @tr("Classify message"); color: Theme.text; font-size: 20px; font-weight: 600; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                ActionButton { modal: true; compact: true; framed: true; text: @tr("Close"); icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+            }
             if !root.managing: VerticalLayout { spacing: 10px;
                 Text { text: @tr("Category") + ": " + root.effective-category; color: Theme.text-secondary; font-size: 12px; }
                 HorizontalLayout { spacing: 8px;
@@ -108,7 +115,10 @@ export component OrganizationDialog inherits Rectangle {
                 Rectangle { horizontal-stretch: 1; }
                 if !root.managing: ActionButton { modal: true; framed: true; text: @tr("Manage labels"); clicked => { root.managing = true; } }
             }
-            ScrollView { min-height: 60px; vertical-stretch: 1; content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            ScrollView {
+                height: min(160px, max(36px, root.labels.length * 38px));
+                vertical-stretch: 0;
+                content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 VerticalLayout { y: 0px; width: parent.width; height: self.preferred-height; spacing: 4px;
                     if root.labels.length == 0: Text { text: @tr("No labels yet"); color: Theme.text-secondary; font-size: 13px; }
                     for label in root.labels: Rectangle {
@@ -142,10 +152,6 @@ export component OrganizationDialog inherits Rectangle {
                 }
             }
             if root.error != "": Text { text: root.error; color: Theme.danger; wrap: word-wrap; font-size: 12px; }
-            HorizontalLayout {
-                Rectangle { horizontal-stretch: 1; }
-                ActionButton { modal: true; framed: true; text: @tr("Close"); clicked => { root.close(); } }
-            }
         }
     }
 }

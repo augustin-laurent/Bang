@@ -1,4 +1,4 @@
-import { ComboBox, ScrollView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ActionButton, CheckControl } from "controls.slint";
 import { AccountRow } from "models.slint";
@@ -49,13 +49,21 @@ export component SettingsDialog inherits Rectangle {
     animate entrance { duration: Theme.motion ? Theme.dur-med : 0ms; easing: ease-out; }
     visible: open; background: Theme.scrim; TouchArea { }
     Rectangle {
-        width: min(600px, parent.width - 40px); height: min(720px, parent.height - 32px);
+        width: min(600px, parent.width - 40px);
+        height: min(580px + min(root.accounts.length * 40px, 160px), parent.height - 32px);
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2 + 10px * (1.0 - root.entrance);
         opacity: root.entrance;
         border-radius: 16px; background: Theme.bg;
         VerticalLayout { padding: 24px; spacing: 20px;
-            Text { text: @tr("Settings"); color: Theme.text; font-size: 20px; font-weight: 600; }
-            ScrollView { content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            HorizontalLayout {
+                Text { text: @tr("Settings"); color: Theme.text; font-size: 20px; font-weight: 600; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                ActionButton { modal: true; compact: true; framed: true; text: @tr("Close"); icon: @image-url("icons/close.svg"); clicked => { root.close(); } }
+            }
+            ScrollView {
+                content-width: self.visible-width;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
                 VerticalLayout { spacing: 20px; padding: 4px; alignment: start;
                     Text { text: @tr("Appearance"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     HorizontalLayout { spacing: 12px;
@@ -66,16 +74,9 @@ export component SettingsDialog inherits Rectangle {
                     CheckControl { text: @tr("Online avatars"); checked: root.online-avatars; toggled => { root.avatars-toggled(self.checked); } }
                     Text { text: @tr("Language"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     HorizontalLayout { spacing: 8px;
-                        Rectangle { horizontal-stretch: 1; }
-                        ComboBox {
-                            width: 320px;
-                            model: [@tr("System"), "Français", "English"];
-                            current-index: root.language == "fr" ? 1 : root.language == "en" ? 2 : 0;
-                            selected(value) => {
-                                root.language-selected(value == @tr("System") ? "system" : value == "Français" ? "fr" : "en");
-                            }
-                        }
-                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton { modal: true; framed: true; active: root.language == "system"; text: @tr("System"); clicked => { root.language-selected("system"); } }
+                        ActionButton { modal: true; framed: true; active: root.language == "fr"; text: "Français"; clicked => { root.language-selected("fr"); } }
+                        ActionButton { modal: true; framed: true; active: root.language == "en"; text: "English"; clicked => { root.language-selected("en"); } }
                     }
                     Text { text: @tr("Accounts"); color: Theme.text; font-size: 14px; font-weight: 600; }
                     if root.accounts.length == 0: Text { text: @tr("No accounts"); color: Theme.text-secondary; font-size: 13px; }
@@ -93,11 +94,6 @@ export component SettingsDialog inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                     }
                 }
-            }
-            HorizontalLayout {
-                Rectangle { horizontal-stretch: 1; }
-                ActionButton { modal: true; text: @tr("Close"); clicked => { root.close(); } }
-                Rectangle { horizontal-stretch: 1; }
             }
         }
     }
