@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
     (root / 'scripts').mkdir()
     shutil.copy(repo / 'scripts/package.sh', root / 'scripts')
     shutil.copytree(repo / 'packaging', root / 'packaging')
-    for name in ['LICENSE', 'README.md', 'assets/fonts/OFL.txt']:
+    for name in ['LICENSE', 'README.md', 'assets/fonts/OFL.txt', 'assets/icons/LICENSE.md']:
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(repo / name, target)
@@ -71,6 +71,7 @@ with tempfile.TemporaryDirectory(prefix='bang-package-test-') as directory:
         launcher = package.extractfile('./usr/bin/bang').read().decode()
         assert 'exec /usr/lib/bang/app "$@"' in launcher
         assert package.getmember('./usr/share/licenses/bang/OFL.txt').size > 0
+        assert package.getmember('./usr/share/licenses/bang/HUGEICONS-LICENSE.md').size > 0
     subprocess.run(['bash', str(root / 'scripts/package.sh'), 'rpm'], env=env, check=True)
     check_dependencies((root / 'rpm.spec').read_text(), ['Requires: ca-certificates'])
     subprocess.run(['bash', str(root / 'scripts/package.sh'), 'arch'], env=env, check=True)

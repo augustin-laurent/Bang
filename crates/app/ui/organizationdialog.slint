@@ -9,6 +9,7 @@ component Pill inherits ActionButton {
     in property <bool> selected: false;
     min-width: 0px; max-width: 1000px;
     horizontal-stretch: 1;
+    framed: true;
     active: self.selected;
 }
 
@@ -100,7 +101,7 @@ export component OrganizationDialog inherits Rectangle {
                 if !root.managing: ActionButton { modal: true; framed: true; text: @tr("Manage labels"); clicked => { root.managing = true; } }
             }
             ScrollView { min-height: 60px; vertical-stretch: 1; content-width: self.visible-width; horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                VerticalLayout { width: parent.width; height: self.preferred-height; spacing: 4px;
+                VerticalLayout { y: 0px; width: parent.width; height: self.preferred-height; spacing: 4px;
                     if root.labels.length == 0: Text { text: @tr("No labels yet"); color: Theme.text-secondary; font-size: 13px; }
                     for label in root.labels: Rectangle {
                         height: 34px; border-radius: 8px;
@@ -116,9 +117,9 @@ export component OrganizationDialog inherits Rectangle {
                     }
                 }
             }
-            if root.managing: VerticalLayout { spacing: 10px;
+            if root.managing: VerticalLayout { spacing: 10px; vertical-stretch: 0; alignment: start;
                 Text { text: root.edit-id < 0 ? @tr("New label") : @tr("Edit label"); color: Theme.text; font-size: 13px; font-weight: 600; }
-                LineEdit { accessible-label: @tr("Label name"); placeholder-text: @tr("Label name"); text <=> root.edit-name; }
+                LineEdit { accessible-label: @tr("Label name"); placeholder-text: @tr("Label name"); text <=> root.edit-name; min-height: 40px; max-height: 40px; }
                 HorizontalLayout { spacing: 8px;
                     ColorDot { tint: #3977b8; current: root.edit-color == 0; name: @tr("Blue"); chosen => { root.edit-color = 0; } }
                     ColorDot { tint: #30845b; current: root.edit-color == 1; name: @tr("Green"); chosen => { root.edit-color = 1; } }

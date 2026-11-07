@@ -430,7 +430,7 @@ export component BangApp inherits Window {
         width: 252px;
         // Sized to the visible content: 4 batch items or 9 single items and
         // 2 separators, 32px rows, 2px spacing, 6px padding.
-        height: root.menu-batch ? 142px : 322px;
+        height: root.menu-batch ? 146px : 334px;
         Rectangle {
             background: Theme.bg;
             border-radius: 10px;
@@ -516,8 +516,8 @@ export component BangApp inherits Window {
         width: 252px;
         // Grows with the folder count (32px rows), capped so long accounts
         // scroll instead of reaching for the bottom of the screen.
-        height: 19px + min(root.move-folders.length * 32px, 252px)
-            + (root.move-folders.length == 0 ? 26px : 0px);
+        height: root.move-folders.length == 0 ? 67px
+            : 41px + min(root.move-folders.length * 32px, 252px);
         Rectangle {
             background: Theme.bg;
             border-radius: 10px;

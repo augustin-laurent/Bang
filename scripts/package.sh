@@ -23,6 +23,7 @@ install -Dm644 packaging/bang.desktop "$root/usr/share/applications/bang.desktop
 install -Dm644 packaging/io.github.augustin_laurent.Bang.svg "$root/usr/share/icons/hicolor/scalable/apps/io.github.augustin_laurent.Bang.svg"
 install -Dm644 LICENSE "$root/usr/share/licenses/bang/LICENSE"
 install -Dm644 assets/fonts/OFL.txt "$root/usr/share/licenses/bang/OFL.txt"
+install -Dm644 assets/icons/LICENSE.md "$root/usr/share/licenses/bang/HUGEICONS-LICENSE.md"
 install -Dm644 README.md "$root/usr/share/doc/bang/README.md"
 case "$format" in
   deb)
